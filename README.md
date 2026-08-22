@@ -197,4 +197,4 @@ can be represented in the icon picker.
 
 ## License
 
-GPL-3.0, following the code it was built on.
+GPL-3.0, as the code it took over requires.
