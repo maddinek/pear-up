@@ -13,6 +13,7 @@ const PANEL_TWEAK_KEYS = [
     'group-spotlight-with-quick-settings',
     'gap-before-quick-settings',
     'gap-before-clock',
+    'status-icon-padding',
 ];
 
 // Which panel item each spacing setting sits in front of. Applied as a margin
@@ -76,6 +77,7 @@ export default class GlobalMenuExtension extends Extension {
         this._resyncId = 0;
         this._hiddenSpacers = [];
         this._gapped = new Set();
+        this._padded = new Set();
         this._spotlightMoved = null;
         this._minimizedWindow = null;
         this._minimizedId = 0;
@@ -188,6 +190,7 @@ export default class GlobalMenuExtension extends Extension {
             this._guard('restoring Spotlight', () => this._restoreSpotlightPosition());
 
         this._guard('spacing the status area', () => this._applyPanelGaps());
+        this._guard('padding the status area', () => this._applyIconPadding());
 
         // A rebuild also re-shows the Activities button.
         this._guard('syncing the Activities button', () => this._syncOverviewButton());
@@ -212,6 +215,7 @@ export default class GlobalMenuExtension extends Extension {
         this._releasePowerButton();
         this._hiddenSpacers = [];
         this._gapped.clear();
+        this._padded.clear();
         this._spotlightMoved = null;
     }
 
@@ -250,6 +254,79 @@ export default class GlobalMenuExtension extends Extension {
             }
         }
         this._gapped.clear();
+    }
+
+    // Each status item reserves horizontal padding on both sides, which
+    // PanelMenu.ButtonBox reads off its own theme node when it reports a
+    // preferred width — so this goes on the button, not on the container the
+    // gaps use, and the two never overwrite each other's inline style.
+    //
+    // The minimum goes along for the ride: it is the floor the panel falls back
+    // to when space runs short, and leaving it above the natural value makes
+    // Clutter complain about a minimum wider than the natural width.
+    _applyIconPadding() {
+        const padding = this._settings.get_int('status-icon-padding');
+        const style = `-natural-hpadding: ${padding}px; -minimum-hpadding: 0px;`;
+
+        for (const button of this._statusAreaButtons()) {
+            this._restyle(button, style);
+            this._padded.add(button);
+
+            // Quick Settings puts several icons in a single button, so the room
+            // between those comes from the box holding them, not from the
+            // padding above — without this they stay glued together whatever the
+            // setting says. Doubled, because the gap between two buttons is the
+            // padding each of them contributes.
+            const box = this._indicatorsBox(button);
+            if (box) {
+                this._restyle(box, `spacing: ${padding * 2}px;`);
+                this._padded.add(box);
+            }
+        }
+    }
+
+    _indicatorsBox(button) {
+        for (const child of [button, ...button.get_children()]) {
+            const box = child.get_children?.().find(actor =>
+                actor.has_style_class_name?.('panel-status-indicators-box'));
+            if (box)
+                return box;
+        }
+        return null;
+    }
+
+    _clearIconPadding() {
+        for (const button of this._padded) {
+            try {
+                this._restyle(button, null);
+            } catch (e) {
+                // Went away with a panel rebuild.
+            }
+        }
+        this._padded.clear();
+    }
+
+    // ButtonBox caches the two padding lengths in a style-changed handler and
+    // adds them in vfunc_get_preferred_width, so Clutter has no idea the width
+    // it already cached depends on them: restyling alone updates the numbers and
+    // changes nothing on screen. Asking for the relayout is what applies it.
+    _restyle(button, style) {
+        button.set_style(style);
+        button.queue_relayout();
+        button.get_parent()?.queue_relayout();
+    }
+
+    // The buttons in the right-hand cluster. Read from the panel box rather than
+    // a list of roles, so an indicator belonging to another extension is spaced
+    // like the rest instead of standing out. The box holds each button inside a
+    // container, but not every child is one — hence the check rather than a cast.
+    _statusAreaButtons() {
+        const children = Main.panel._rightBox?.get_children() ?? [];
+        const isButton = actor => !!actor?.has_style_class_name?.('panel-button');
+
+        return children
+            .map(child => (isButton(child) ? child : child.get_first_child()))
+            .filter(isButton);
     }
 
     _hideSpacers() {
@@ -664,6 +741,7 @@ export default class GlobalMenuExtension extends Extension {
         // the cleanup and leave the panel rearranged.
         this._guard('restoring Spotlight', () => this._restoreSpotlightPosition());
         this._guard('removing status area spacing', () => this._clearPanelGaps());
+        this._guard('removing status area padding', () => this._clearIconPadding());
         this._guard('showing panel indicators', () => this._showSpacers());
         this._guard('showing the Activities button', () => this._showOverviewButton());
         this._guard('restoring the clock', () => this._restoreClock());

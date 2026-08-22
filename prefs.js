@@ -646,7 +646,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         const spacingGroup = new Adw.PreferencesGroup({
             title: 'Status Area Spacing',
-            description: 'Room between the groups on the right of the bar',
+            description: 'Room between the groups on the right of the bar, and around each item in them',
         });
         page.add(spacingGroup);
 
@@ -665,6 +665,15 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             settings.connect(`changed::${key}`,
                 () => row.setValue(settings.get_int(key)));
         }
+
+        const paddingRow = this._addScaleRow(spacingGroup, 'Padding Around Each Item', {
+            lower: 0, upper: 12, marks: [0, 3, 6, 9, 12], unit: 'px',
+            value: settings.get_int('status-icon-padding'),
+            onChange: value => settings.set_int('status-icon-padding', value),
+        });
+        paddingRow.row.set_subtitle('Lower to pack the icons and clock closer together; zero leaves them touching');
+        settings.connect('changed::status-icon-padding',
+            () => paddingRow.setValue(settings.get_int('status-icon-padding')));
 
         const logoGroup = new Adw.PreferencesGroup({
             title: 'System Menu',

@@ -81,6 +81,21 @@
       <summary>Space between the Quick Settings icons and the clock, in pixels</summary>
     </key>
 
+    <!-- The other direction: each status item reserves this much room on both
+         sides, so lowering it is the only way to bring them closer together.
+         The stylesheet strips the padding GNOME builds into these items, which
+         makes this the only source of horizontal space between them — so zero
+         really is zero, and the items end up touching. The default is not that
+         floor: it reproduces the spacing this extension had before the setting
+         existed, so nobody's top bar changes by upgrading. GNOME's own value
+         is 12. -->
+    <key name="status-icon-padding" type="i">
+      <default>3</default>
+      <range min="0" max="12"/>
+      <summary>Padding on each side of a status area item, in pixels</summary>
+      <description>Lower values pack the icons and clock more tightly. Zero leaves no space at all between them.</description>
+    </key>
+
     <key name="show-system-settings" type="b"><default>true</default><summary>Show System Settings item in System Menu</summary></key>
     <key name="show-app-grid" type="b"><default>true</default><summary>Show App Grid item in System Menu</summary></key>
     <key name="show-software-center" type="b"><default>true</default><summary>Show Software Center item</summary></key>

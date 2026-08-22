@@ -28,12 +28,17 @@
   icon-size: 14px;
 }
 
-/* Clock is reparented to the far right in extension.js.
-   Status icons sit immediately to its left — keep this tight. */
+/* The clock is reparented to the far right in extension.js, with the status
+   icons immediately to its left.
+
+   Everything below strips the horizontal space GNOME builds into these items,
+   so the status-icon-padding setting is the only thing that adds any. That is
+   what lets zero mean zero: leave any of it in place and the slider bottoms out
+   against padding it does not control. */
 #panel.pearup-panel .panel-button.clock-display {
   margin-left: 0;
-  padding-left: 2px;
-  padding-right: 6px;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 #panel.pearup-panel .clock-display {
@@ -42,7 +47,7 @@
 }
 
 #panel.pearup-panel .clock-display .clock {
-  padding: 0 2px;
+  padding: 0;
 }
 
 #panel.pearup-panel .clock-display-box {
@@ -54,16 +59,20 @@
 }
 
 #panel.pearup-panel .system-status-icon {
-  padding: 0 3px;
+  padding: 0;
   margin: 0;
 }
 
-/* Slightly tighter default panel buttons */
+/* The menu buttons on the left are not touched by that setting, so they keep a
+   fixed value of their own. */
 #panel.pearup-panel .panel-button {
   -natural-hpadding: 3px;
   -minimum-hpadding: 0px;
 }
 
+/* Keeps the clock off the edge of the screen at any padding, which is a
+   different question from how far the items sit from each other. */
 #panel.pearup-panel #panelRight {
   spacing: 0;
+  padding-right: 6px;
 }

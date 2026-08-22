@@ -29,7 +29,8 @@ Apple-style glyph, or your own image.
 power glyph is hidden, GNOME's usually-inactive indicators stop reserving space, and a
 [Search Light](https://extensions.gnome.org/extension/5489/search-light/) icon can be grouped with
 Quick Settings as a Spotlight stand-in. The gaps between the search icon, the control centre icons
-and the clock are adjustable, since GNOME packs them tighter than macOS does.
+and the clock are adjustable, as is the padding each item reserves around itself — the first spreads
+the groups out, the second packs them closer than GNOME's own spacing allows.
 
 **Window buttons on the left.** Close, minimize and maximize in macOS order.
 
