@@ -39,15 +39,12 @@ const SYSTEM_MONITOR_FALLBACKS = ['missioncenter-helper', 'gnome-system-monitor'
 
 export const SystemMenuButton = GObject.registerClass(
   class SystemMenuButton extends PanelMenu.Button {
-    // `extension` supplies the display name and a way to open this extension's
-    // own preferences, so the menu does not have to know how either works.
-    _init(settings, extensionPath, extension = null) {
+    _init(settings, extensionPath) {
         super._init(0.5, 'System Menu');
 
         this.add_style_class_name('pearup-system-menu');
         this._settings = settings;
         this._extensionPath = extensionPath;
-        this._extension = extension;
         this._systemActions = SystemActions.getDefault();
 
         this._icon = new St.Icon({
@@ -62,8 +59,7 @@ export const SystemMenuButton = GObject.registerClass(
             if (['logo-icon-name', 'logo-custom-icon-path', 'logo-distro-icon',
                  'logo-distro-icon-symbolic', 'logo-icon-size'].includes(key)) {
                 this._syncIcon();
-            } else if (['hide-overview-button', 'show-system-settings',
-                        'show-extension-settings', 'show-app-grid',
+            } else if (['hide-overview-button', 'show-system-settings', 'show-app-grid',
                         'show-software-center', 'show-system-monitor', 'show-terminal',
                         'show-extensions-app', 'show-force-quit', 'show-power-options',
                         'show-lock-screen', 'show-log-out', 'system-menu-custom-items'].includes(key)) {
@@ -114,7 +110,6 @@ export const SystemMenuButton = GObject.registerClass(
 
         const hideOverview = this._settings.get_boolean('hide-overview-button');
         const showSystemSettings = this._settings.get_boolean('show-system-settings');
-        const showExtensionSettings = this._settings.get_boolean('show-extension-settings');
         const showAppGrid = this._settings.get_boolean('show-app-grid');
         const showSoftwareCenter = this._settings.get_boolean('show-software-center');
         const showSystemMonitor = this._settings.get_boolean('show-system-monitor');
@@ -128,16 +123,16 @@ export const SystemMenuButton = GObject.registerClass(
         this._addItem('About This System', () => this._aboutThisSystem());
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // Settings sits directly below About, where macOS keeps it, with this
-        // extension's own preferences alongside — otherwise the only way to
-        // reach them is to know which extension this menu belongs to.
+        // Settings sits directly below About, where macOS keeps it.
+        //
+        // This extension's own preferences are deliberately not listed here.
+        // They belong in GNOME Settings beside Appearance, but nothing can put
+        // them there: gnome-control-center compiles every panel in and has no
+        // plugin interface. Rather than invent a second settings entry in this
+        // menu, use the Extensions item below, which is where GNOME expects
+        // extension preferences to be reached.
         if (showSystemSettings)
             this._addItem('System Settings', () => this._openSystemSettings());
-
-        if (showExtensionSettings && this._extension) {
-            let name = this._extension.metadata?.name ?? 'Extension';
-            this._addItem(`${name} Settings...`, () => this._openExtensionSettings());
-        }
 
         // Only offer an "Activities" menu entry when the real panel button
         // is hidden, so overview access is never lost entirely.
@@ -147,7 +142,7 @@ export const SystemMenuButton = GObject.registerClass(
         if (showAppGrid)
             this._addItem('App Grid', () => this._showAppGrid());
 
-        if (showSystemSettings || showExtensionSettings || hideOverview || showAppGrid)
+        if (showSystemSettings || hideOverview || showAppGrid)
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         if (showSoftwareCenter)
@@ -243,15 +238,6 @@ export const SystemMenuButton = GObject.registerClass(
         spawnCommandLine('gnome-control-center system about');
     }
 
-    _openExtensionSettings() {
-        try {
-            this._extension.openPreferences();
-        } catch (e) {
-            Main.notify('Pear Up', 'Could not open the preferences window.');
-            console.warn(`[pear-up] openPreferences failed: ${e}`);
-        }
-    }
-
     _openSystemSettings() {
         let appSys = Shell.AppSystem.get_default();
         let app = appSys.lookup_app('org.gnome.Settings.desktop') ||
@@ -313,7 +299,6 @@ export const SystemMenuButton = GObject.registerClass(
         this._settings = null;
         this._systemActions = null;
         this._extensionPath = null;
-        this._extension = null;
         this._icon = null;
     }
   }

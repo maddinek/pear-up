@@ -492,7 +492,7 @@ export default class GlobalMenuExtension extends Extension {
             let existing = Main.panel.statusArea['pearup-logo'];
             if (existing)
                 existing.destroy();
-            this._logoButton = new SystemMenuButton(this._settings, this.path, this);
+            this._logoButton = new SystemMenuButton(this._settings, this.path);
             Main.panel.addToStatusArea('pearup-logo', this._logoButton, 0, 'left');
         } else if (!shouldShow && this._logoButton) {
             this._logoButton.destroy();
