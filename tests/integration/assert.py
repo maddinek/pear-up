@@ -11,6 +11,8 @@ Looking Glass, and Eval refuses to run without the unsafe mode that only Looking
 Glass can enable, so there is no other way in.
 """
 import json
+import os
+import subprocess
 import sys
 
 import gi
@@ -86,6 +88,66 @@ if state:
               f"visible={state['powerIconVisible']}")
     else:
         print("  note: this session has no power indicator to hide")
+
+# ------------------------------------------------------------ screenshot
+# Recorded rather than screenshotted. A headless mutter only composites while
+# something consumes its output, and the shell's screenshot API returns an empty
+# buffer here even once frames are flowing — but a screencast gets real ones, so
+# take a still out of the recording.
+#
+# On unless PEAR_UP_SCREENSHOT=0.
+def record_and_extract(video_stem, shot):
+    # The picture is of an empty desktop, which is what a shell with no windows
+    # shows: the menu bar is bare by design until something is in front. Opening
+    # an app first would make it more informative, but PipeWire then fails to
+    # negotiate a format with the encoder — "no more input formats" — and no
+    # recording is produced at all. Left as it is deliberately; the panel-state
+    # assertions are what carry the weight.
+    try:
+        call("org.gnome.Shell.Screencast", "/org/gnome/Shell/Screencast",
+             "org.gnome.Shell.Screencast", "Screencast",
+             (video_stem, {}), "(sa{sv})")
+    except GLib.Error as exc:
+        print(f"  note: screencast refused ({exc.message.splitlines()[0]})")
+        return 0
+
+    GLib.usleep(3 * 1000 * 1000)
+
+    try:
+        call("org.gnome.Shell.Screencast", "/org/gnome/Shell/Screencast",
+             "org.gnome.Shell.Screencast", "StopScreencast")
+    except GLib.Error:
+        pass
+
+    # The file is finalised a moment after the recording stops.
+    video = f"{video_stem}.webm"
+    for _ in range(20):
+        GLib.usleep(250 * 1000)
+        if os.path.exists(video) and os.path.getsize(video) > 0:
+            break
+
+    if not os.path.exists(video):
+        print("  note: no recording produced")
+        return 0
+
+    subprocess.run(
+        ["gst-launch-1.0", "-q",
+         "filesrc", f"location={video}", "!", "decodebin", "!",
+         "videoconvert", "!", "pngenc", "snapshot=true", "!",
+         "filesink", f"location={shot}"],
+        capture_output=True, timeout=60, check=False)
+
+    return os.path.getsize(shot) if os.path.exists(shot) else 0
+
+
+if state and os.environ.get("PEAR_UP_SCREENSHOT", "1") != "0":
+    shot = f"{ARTIFACTS}/panel.png"
+    size = record_and_extract(f"{ARTIFACTS}/session", shot)
+    # Reported, not asserted. Whether a recording can be made depends on the
+    # release and the container's media stack — GNOME 45 manages none — and that
+    # says nothing about the extension. The assertions above are the evidence.
+    print(f"  note: screenshot {size // 1024} KiB" if size else
+          "  note: no screenshot on this release")
 
 # ------------------------------------------------------------ clean teardown
 call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",

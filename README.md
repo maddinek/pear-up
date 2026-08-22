@@ -83,8 +83,8 @@ no extension can add one. Installing puts a **Pear Up Settings** application ent
 
 ## Requirements
 
-- GNOME Shell 50, under Wayland. Earlier releases are not claimed until they are verified —
-  see [Testing](#testing).
+- GNOME Shell 45 – 50, under Wayland. Every release in that range is checked by the
+  [test suite](#testing) rather than assumed; 50 is also what it is used on daily.
 - Optional: [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) for the Dock page
 - Optional: [Search Light](https://extensions.gnome.org/extension/5489/search-light/) for Spotlight-style search
 
@@ -125,6 +125,16 @@ tests/integration/run.sh 48     # GNOME 48
 This is the suite worth trusting, because the interesting failures are about timing rather than
 missing functions. The power icon survived two fixes precisely because every API involved existed —
 it was being hidden before the thing that draws it had been built.
+
+All six releases pass it, which is why `shell-version` claims them:
+
+| GNOME | 45 | 46 | 47 | 48 | 49 | 50 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Behaviour | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Screenshot artifact | — | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+The screenshot is a convenience, not evidence: whether a recording can be made depends on the
+release and the container's media stack, and 45 manages none. The assertions are what matter.
 
 **Do the APIs still exist?** Resolves every GNOME API the extension touches against a given version:
 introspected symbols, and the private shell internals that no typelib describes, which are the ones

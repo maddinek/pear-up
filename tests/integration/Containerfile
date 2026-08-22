@@ -27,6 +27,12 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         python3 \
         python3-gobject-base \
         procps-ng \
+        pipewire \
+        pipewire-pulseaudio \
+        wireplumber \
+        gstreamer1-plugins-base \
+        gstreamer1-plugins-good \
+        pipewire-gstreamer \
     && dnf clean all
 
 # Nothing here needs networking, printing, or a boot splash. Masking these keeps
@@ -42,6 +48,15 @@ RUN systemctl mask \
     && systemctl enable systemd-logind.service
 
 # Software rendering: there is no GPU in here.
+#
+# PipeWire matters for more than sound: a headless mutter only composites while
+# something is consuming its output, so with no screencast running there are no
+# frames and a screenshot comes back empty. PipeWire is what carries them.
+#
+# Deliberately no wallpapers or applications installed. Adding either changes
+# what the compositor has to encode, and PipeWire then fails to agree a format
+# with the encoder, leaving no recording at all — so the picture stays a bare
+# desktop.
 ENV LIBGL_ALWAYS_SOFTWARE=1 \
     GALLIUM_DRIVER=llvmpipe \
     NO_AT_BRIDGE=1
