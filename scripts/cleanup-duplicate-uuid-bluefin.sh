@@ -74,8 +74,8 @@ for dir in "$EXT_DIR"/globalmenu* "$EXT_DIR"/macos*; do
     echo "Removed $dir"
 done
 
-echo "Installed copies now:"
-ls -1d "$EXT_DIR"/globalmenu* "$EXT_DIR"/macos* 2>/dev/null || echo "  (none)"
+echo "Extensions still installed here:"
+ls -1 "$EXT_DIR"
 REMOTE
 
 echo
