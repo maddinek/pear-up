@@ -22,6 +22,32 @@ function logError(message) {
 // Spawn a command safely using an argv array so no shell parsing/injection
 // can occur, and so arguments with spaces or special characters are passed
 // through intact.
+// Menu entries that work by sending the shortcut the focused application
+// already listens for. Written as accelerators rather than scan codes so they
+// follow the user's keyboard layout.
+const SYNTHESISED_SHORTCUTS = {
+    'copy': '<Control>c',
+    'paste': '<Control>v',
+    'cut': '<Control>x',
+    'undo': '<Control>z',
+    'redo': '<Control>y',
+    'select-all': '<Control>a',
+    'new-tab': '<Control>t',
+    'print': '<Control>p',
+    'emoji-picker': '<Control>period',
+    'toggle-fullscreen': 'F11',
+    'go-back': '<Alt>Left',
+    'go-forward': '<Alt>Right',
+    'delete-item': 'Delete',
+    'virtual-open': 'Return',
+    'properties': '<Alt>Return',
+    'native-open-with': '<Shift>F10',
+};
+
+// Chosen from the context menu opened by Shift+F10 above. This assumes an
+// English menu, so it will miss in other languages.
+const OPEN_WITH_MNEMONIC = 'h';
+
 function spawnCommand(argv) {
     try {
         GLib.spawn_async(
@@ -42,6 +68,7 @@ const TopLevelMenuButton = GObject.registerClass(
       super._init(0.5, label);
       this._appInstance = appInstance;
       this._timeoutIds = [];
+      this._virtualDevice = null;
 
       this.add_style_class_name('pearup-menu-button');
       if (isAppMenu)
@@ -71,6 +98,17 @@ const TopLevelMenuButton = GObject.registerClass(
               this._alignMenuToLeft();
           }, this);
       }
+
+      // Cleanup has to hang off the signal, not an overridden destroy():
+      // actors are also destroyed from the C side, when a parent goes away or
+      // the shell shuts down, and that path never calls the JS method. A timer
+      // outliving the button would type into whatever has focus by then.
+      this.connect('destroy', () => {
+          for (const id of this._timeoutIds)
+              GLib.source_remove(id);
+          this._timeoutIds = [];
+          this._virtualDevice = null;
+      });
     }
 
     _alignMenuToLeft() {
@@ -80,6 +118,8 @@ const TopLevelMenuButton = GObject.registerClass(
             let menuWidth = Math.round(this.menu.actor.get_width() || 0);
             if (buttonWidth <= 0 || menuWidth <= 0) return;
 
+            // GNOME centres the menu under the button; macOS aligns its left
+            // edge with the button's, which this offset undoes.
             let offset = Math.round((menuWidth - buttonWidth) / 2);
 
             // Clamp so the menu never gets pushed off-screen near a
@@ -88,7 +128,10 @@ const TopLevelMenuButton = GObject.registerClass(
             let monitor = Main.layoutManager.findMonitorForActor(this) ||
                           Main.layoutManager.primaryMonitor;
             if (monitor) {
-                let menuLeft = buttonX - offset;
+                // Measure from where the menu will actually sit once the offset
+                // is applied, which for a left-aligned menu is the button's own
+                // left edge.
+                let menuLeft = buttonX;
                 let menuRight = menuLeft + menuWidth;
                 if (menuLeft < monitor.x)
                     offset -= (monitor.x - menuLeft);
@@ -113,10 +156,7 @@ const TopLevelMenuButton = GObject.registerClass(
             if (window) window.minimize();
             return true;
         } else if (action === "maximize") {
-            if (window) {
-                if (window.is_maximized()) window.unmaximize();
-                else window.maximize();
-            }
+            if (window) this._toggleMaximized(window);
             return true;
         }
 
@@ -202,133 +242,157 @@ const TopLevelMenuButton = GObject.registerClass(
             logError(`[pear-up] Process execution error: ${e}`);
         }
 
-        try {
-            let seat = Clutter.get_default_backend().get_default_seat();
-            let virtualDevice = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
-            
-            if (virtualDevice) {
-                if (action === "native-open-with") {
-                    let timeUs = GLib.get_monotonic_time();
-                    let shiftScanCode = 42; // Shift key
-                    let f10ScanCode = 68;   // F10 key
-                    let hScanCode = 35;     // 'h' key for mnemonic shortcut
+        // Everything below is "press the shortcut the focused app already
+        // has", since there is no portable way to invoke an app's menu item
+        // directly. Accelerators are given as text and sent as keyvals, so
+        // they land on the right key whatever the keyboard layout — sending
+        // raw scan codes would trigger whatever sits in that physical position
+        // on AZERTY or Dvorak.
+        const accel = SYNTHESISED_SHORTCUTS[action];
+        if (!accel)
+            return false;
 
-                    // 1. Open context right-click popup menu on selection
-                    virtualDevice.notify_key(timeUs, shiftScanCode, Clutter.KeyState.PRESSED);
-                    virtualDevice.notify_key(timeUs + 10, f10ScanCode, Clutter.KeyState.PRESSED);
-                    virtualDevice.notify_key(timeUs + 20, f10ScanCode, Clutter.KeyState.RELEASED);
-                    virtualDevice.notify_key(timeUs + 30, shiftScanCode, Clutter.KeyState.RELEASED);
-
-                    // 2. This button owns the timeout it creates and is responsible for
-                    // clearing it in destroy().
-                    let timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
-                        let timeNow = GLib.get_monotonic_time();
-                        virtualDevice.notify_key(timeNow, hScanCode, Clutter.KeyState.PRESSED);
-                        virtualDevice.notify_key(timeNow + 10, hScanCode, Clutter.KeyState.RELEASED);
-
-                        this._timeoutIds = this._timeoutIds.filter(id => id !== timeoutId);
-                        return GLib.SOURCE_REMOVE;
-                    });
-
-                    this._timeoutIds.push(timeoutId);
-
-                    return true;
-                }
-
-                let modifierScanCode = 29; // Ctrl
-                let actionScanCode = 0;
-                let useModifier = true;
-                
-                if (action === "copy") actionScanCode = 46;       
-                else if (action === "paste") actionScanCode = 47;  
-                else if (action === "cut") actionScanCode = 45;    
-                else if (action === "undo") actionScanCode = 44;   
-                else if (action === "redo") actionScanCode = 21;   
-                else if (action === "select-all") actionScanCode = 30; 
-                else if (action === "new-tab") actionScanCode = 28;    
-                else if (action === "print") actionScanCode = 25; // Ctrl + P
-                else if (action === "emoji-picker") actionScanCode = 52; // Ctrl + . (Period)
-                else if (action === "toggle-fullscreen") {
-                    useModifier = false;
-                    actionScanCode = 87; // F11 key
-                }
-                else if (action === "go-back") {
-                    modifierScanCode = 56; 
-                    actionScanCode = 105;  
-                }
-                else if (action === "go-forward") {
-                    modifierScanCode = 56; 
-                    actionScanCode = 106;  
-                }
-                else if (action === "delete-item") {
-                    useModifier = false;
-                    actionScanCode = 111; // Delete key
-                }
-                else if (action === "virtual-open") {
-                    useModifier = false;
-                    actionScanCode = 28;   
-                }
-                else if (action === "properties") {
-                    modifierScanCode = 56; // Alt + Enter (Get Info)
-                    actionScanCode = 28;   
-                }
-
-                if (actionScanCode !== 0) {
-                    let timeUs = GLib.get_monotonic_time();
-                    if (useModifier) {
-                        virtualDevice.notify_key(timeUs, modifierScanCode, Clutter.KeyState.PRESSED);
-                        virtualDevice.notify_key(timeUs + 10, actionScanCode, Clutter.KeyState.PRESSED);
-                        virtualDevice.notify_key(timeUs + 20, actionScanCode, Clutter.KeyState.RELEASED);
-                        virtualDevice.notify_key(timeUs + 30, modifierScanCode, Clutter.KeyState.RELEASED);
-                    } else {
-                        virtualDevice.notify_key(timeUs, actionScanCode, Clutter.KeyState.PRESSED);
-                        virtualDevice.notify_key(timeUs + 10, actionScanCode, Clutter.KeyState.RELEASED);
-                    }
-                    return true;
-                }
-            }
-        } catch (e) {
-            logError(`[pear-up] Virtual Keyboard error: ${e}`);
+        if (action === 'native-open-with') {
+            // Open the context menu, then pick its "Open With" entry once it
+            // has had a moment to appear.
+            this._sendAccelerator(accel);
+            let timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                this._timeoutIds = this._timeoutIds.filter(id => id !== timeoutId);
+                this._sendAccelerator(OPEN_WITH_MNEMONIC);
+                return GLib.SOURCE_REMOVE;
+            });
+            this._timeoutIds.push(timeoutId);
+            return true;
         }
 
-        return false;
+        this._sendAccelerator(accel);
+        return true;
     }
 
-    // Sends an arbitrary GTK-style accelerator string (e.g. "<Control><Alt>t")
-    // as a real key event, for user-defined custom shortcuts.
-    _sendAccelerator(accel) {
+    // is_maximized() and the argument-less maximize()/unmaximize() arrived in
+    // mutter 49. On older shells the state is a flags getter and the calls take
+    // a direction, so pick whichever this one provides.
+    _toggleMaximized(window) {
+        const maximized = typeof window.is_maximized === 'function'
+            ? window.is_maximized()
+            : window.get_maximized() !== 0;
+
+        if (maximized) {
+            if (window.unmaximize.length > 0)
+                window.unmaximize(Meta.MaximizeFlags.BOTH);
+            else
+                window.unmaximize();
+        } else if (window.maximize.length > 0) {
+            window.maximize(Meta.MaximizeFlags.BOTH);
+        } else {
+            window.maximize();
+        }
+    }
+
+    // One device per button, created on first use and released with it.
+    _virtualKeyboard() {
+        if (this._virtualDevice)
+            return this._virtualDevice;
+
         try {
-            let [success, keyval, mods] = Clutter.accelerator_parse(accel);
-            if (!success) {
-                logError(`[pear-up] Could not parse shortcut '${accel}'`);
-                return;
-            }
-
             let seat = Clutter.get_default_backend().get_default_seat();
-            let virtualDevice = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
-            if (!virtualDevice) return;
+            this._virtualDevice = seat.create_virtual_device(
+                Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        } catch (e) {
+            logError(`[pear-up] Could not create a virtual keyboard: ${e}`);
+            this._virtualDevice = null;
+        }
 
-            let modKeyvals = [];
-            if (mods & Clutter.ModifierType.CONTROL_MASK) modKeyvals.push(Clutter.KEY_Control_L);
-            if (mods & Clutter.ModifierType.SHIFT_MASK) modKeyvals.push(Clutter.KEY_Shift_L);
-            if (mods & Clutter.ModifierType.MOD1_MASK) modKeyvals.push(Clutter.KEY_Alt_L);
-            if (mods & Clutter.ModifierType.SUPER_MASK) modKeyvals.push(Clutter.KEY_Super_L);
+        return this._virtualDevice;
+    }
 
-            let t = GLib.get_monotonic_time();
-            modKeyvals.forEach(k => {
-                virtualDevice.notify_keyval(t, k, Clutter.KeyState.PRESSED);
-                t += 5;
-            });
-            virtualDevice.notify_keyval(t, keyval, Clutter.KeyState.PRESSED);
-            t += 5;
-            virtualDevice.notify_keyval(t, keyval, Clutter.KeyState.RELEASED);
-            t += 5;
-            modKeyvals.slice().reverse().forEach(k => {
-                virtualDevice.notify_keyval(t, k, Clutter.KeyState.RELEASED);
-                t += 5;
-            });
+    // Turns a GTK-style accelerator ("<Control><Alt>t") into a keyval and a
+    // list of modifier keyvals. Clutter has no accelerator parser — only
+    // keyval_name in the opposite direction — and Gdk is not available inside
+    // the shell, so do it here. Returns null when the key cannot be resolved.
+    _parseAccelerator(accel) {
+        const modifiers = {
+            control: Clutter.KEY_Control_L,
+            primary: Clutter.KEY_Control_L,
+            ctrl: Clutter.KEY_Control_L,
+            shift: Clutter.KEY_Shift_L,
+            alt: Clutter.KEY_Alt_L,
+            mod1: Clutter.KEY_Alt_L,
+            super: Clutter.KEY_Super_L,
+            meta: Clutter.KEY_Super_L,
+        };
+
+        let rest = accel.trim();
+        let modKeyvals = [];
+        let match;
+        while ((match = /^<([A-Za-z0-9]+)>/.exec(rest)) !== null) {
+            const keyval = modifiers[match[1].toLowerCase()];
+            if (keyval === undefined) {
+                logError(`[pear-up] Unknown modifier '<${match[1]}>' in '${accel}'`);
+                return null;
+            }
+            if (!modKeyvals.includes(keyval))
+                modKeyvals.push(keyval);
+            rest = rest.slice(match[0].length);
+        }
+
+        if (rest.length === 0)
+            return null;
+
+        // Single printable characters are their own keyval; anything longer is
+        // a key name as spelled in Clutter's KEY_ constants.
+        let keyval = rest.length === 1
+            ? rest.toLowerCase().charCodeAt(0)
+            : Clutter[`KEY_${rest}`];
+
+        if (typeof keyval !== 'number') {
+            logError(`[pear-up] Unknown key '${rest}' in '${accel}'`);
+            return null;
+        }
+
+        return { keyval, modKeyvals };
+    }
+
+    // Sends an arbitrary GTK-style accelerator as a real key event, for
+    // user-defined custom shortcuts.
+    _sendAccelerator(accel) {
+        const parsed = this._parseAccelerator(accel);
+        if (!parsed) {
+            Main.notify('Pear Up', `Could not understand the shortcut “${accel}”.`);
+            return;
+        }
+
+        const { keyval, modKeyvals } = parsed;
+        const device = this._virtualKeyboard();
+        if (!device)
+            return;
+
+        let time = GLib.get_monotonic_time();
+        const press = k => {
+            device.notify_keyval(time, k, Clutter.KeyState.PRESSED);
+            time += 5;
+        };
+        const release = k => {
+            device.notify_keyval(time, k, Clutter.KeyState.RELEASED);
+            time += 5;
+        };
+
+        try {
+            modKeyvals.forEach(press);
+            press(keyval);
+            release(keyval);
         } catch (e) {
             logError(`[pear-up] Failed to send accelerator '${accel}': ${e}`);
+        } finally {
+            // Always let the modifiers go: leaving one pressed would wedge the
+            // keyboard for the rest of the session.
+            for (const k of modKeyvals.slice().reverse()) {
+                try {
+                    release(k);
+                } catch (e) {
+                    // Nothing more can be done for this one.
+                }
+            }
         }
     }
 
@@ -381,13 +445,6 @@ const TopLevelMenuButton = GObject.registerClass(
       }
     }
 
-    destroy() {
-        if (this._timeoutIds && this._timeoutIds.length > 0) {
-            this._timeoutIds.forEach(id => GLib.source_remove(id));
-            this._timeoutIds = [];
-        }
-        super.destroy();
-    }
   }
 );
 
@@ -660,9 +717,14 @@ export class MenuManager {
                 continue;
 
             try {
+                // The panel's own destroy handler frees the role name, so only
+                // clear it by hand if the actor refused to go — otherwise an
+                // undestroyed button would be left parented with nothing
+                // tracking it.
                 indicator.destroy();
             } catch (e) {
                 logError(`Failed to destroy orphaned menu button ${role}: ${e}`);
+                continue;
             }
             delete Main.panel.statusArea[role];
         }

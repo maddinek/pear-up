@@ -163,23 +163,48 @@ export const SystemMenuButton = GObject.registerClass(
         if (showPowerOptions || showLockScreen || showLogOut)
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+        // These throw outright when the action is unavailable — restricted by
+        // lockdown, or no suspend support — so check first and grey the item
+        // out rather than offering something that fails on click.
         if (showPowerOptions) {
-            this._addItem('Sleep', () => this._systemActions.activateSuspend());
-            this._addItem('Restart...', () => this._systemActions.activateRestart());
-            this._addItem('Shut Down...', () => this._systemActions.activatePowerOff());
+            this._addSystemAction('Sleep', 'canSuspend', 'activateSuspend');
+            this._addSystemAction('Restart...', 'canRestart', 'activateRestart');
+            this._addSystemAction('Shut Down...', 'canPowerOff', 'activatePowerOff');
         }
 
         if (showLockScreen)
-            this._addItem('Lock Screen', () => this._systemActions.activateLockScreen());
+            this._addSystemAction('Lock Screen', 'canLockScreen', 'activateLockScreen');
 
         if (showLogOut)
-            this._addItem('Log Out...', () => this._systemActions.activateLogout());
+            this._addSystemAction('Log Out...', 'canLogout', 'activateLogout');
     }
 
     _addItem(label, activateFunction) {
         let item = new PopupMenu.PopupMenuItem(label);
         item.connect('activate', activateFunction);
         this.menu.addMenuItem(item);
+        return item;
+    }
+
+    // `available` is the SystemActions property that says whether the action can
+    // run; when it cannot, show the item disabled instead of letting the call
+    // throw out of the click handler.
+    _addSystemAction(label, available, method) {
+        let actions = this._systemActions;
+        let usable = actions?.[available] !== false;
+
+        let item = this._addItem(label, () => {
+            try {
+                actions[method]();
+            } catch (e) {
+                Main.notify('Pear Up', `${label.replace(/\.\.\.$/, '')} is not available.`);
+                console.warn(`[pear-up] ${method} failed: ${e}`);
+            }
+        });
+
+        if (!usable)
+            item.setSensitive(false);
+
         return item;
     }
 
@@ -221,9 +246,16 @@ export const SystemMenuButton = GObject.registerClass(
         spawnCommandLine('gnome-control-center');
     }
 
+    // The dash and its button are private-ish and a dock replacement may not
+    // expose them, so fall back to simply opening the overview.
     _showAppGrid() {
-        Main.overview.dash.showAppsButton.checked = true;
-        Main.overview.show();
+        let showAppsButton = Main.overview?.dash?.showAppsButton;
+        if (showAppsButton) {
+            showAppsButton.checked = true;
+            Main.overview.show();
+            return;
+        }
+        Main.overview?.toggle();
     }
 
     _openExtensionsApp() {

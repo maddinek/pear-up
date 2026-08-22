@@ -1,6 +1,4 @@
-import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import St from 'gi://St';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { MenuManager } from './menuManager.js';
@@ -36,9 +34,9 @@ export default class GlobalMenuExtension extends Extension {
         this._settingsChangedId = null;
         this._logoButton = null;
         this._overviewHidden = false;
-        this._stylesheet = null;
         this._clockMoved = false;
         this._clockSessionBackup = null;
+        this._clockLayout = null;
         this._powerHidden = null;
         this._powerVisibleId = 0;
         this._powerDestroyId = 0;
@@ -66,10 +64,25 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     enable() {
+        // GNOME does not call disable() when enable() throws: it just logs and
+        // marks the extension broken, leaving whatever was already applied in
+        // place until the next logout. Undo it here instead.
+        try {
+            this._enable();
+        } catch (e) {
+            this.disable();
+            throw e;
+        }
+    }
+
+    _enable() {
         console.log(`[${this.metadata.uuid}] Enabling extension.`);
 
         this._settings = this.getSettings();
         this._powerRetries = 0;
+        this._hiddenSpacers = [];
+        this._spotlightMoved = null;
+        this._overviewHidden = false;
 
         this._menuManager = new MenuManager(this.metadata.uuid, this._settings);
 
@@ -108,7 +121,9 @@ export default class GlobalMenuExtension extends Extension {
         this._sessionModeId = Main.sessionMode.connect('updated',
             () => this._queuePanelResync());
 
-        this._loadStylesheet();
+        // stylesheet.css is loaded by the shell itself for every enabled
+        // extension, so there is nothing to do here but claim the class it
+        // keys off.
         Main.panel.add_style_class_name('pearup-panel');
         this._syncPanelTweaks();
 
@@ -147,6 +162,9 @@ export default class GlobalMenuExtension extends Extension {
             this._guard('grouping Spotlight', () => this._groupSpotlightWithQuickSettings());
         else
             this._guard('restoring Spotlight', () => this._restoreSpotlightPosition());
+
+        // A rebuild also re-shows the Activities button.
+        this._guard('syncing the Activities button', () => this._syncOverviewButton());
 
         // Rebuilding the panel drops buttons this extension added, so put the
         // System Menu and the app menus back.
@@ -256,21 +274,24 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     // Search Light adds a bare St.Button rather than registering a status area
-    // role, so it is the one child of the right box we cannot name.
+    // role, so it cannot be looked up by name. Match on its own styling, and
+    // give up rather than grab whatever else is unaccounted for — moving
+    // another extension's actor would be worse than doing nothing.
     _findSpotlightIndicator(rightBox) {
         if (!rightBox?.get_children)
             return null;
 
-        const claimed = new Set();
-        const statusArea = Main.panel.statusArea ?? {};
-        for (const role of Object.keys(statusArea)) {
-            const container = statusArea[role]?.container;
-            if (container)
-                claimed.add(container);
-        }
+        const looksLikeSearch = actor => {
+            const names = [actor.name, actor.style_class, ...(actor.get_style_class_name?.() ?? '').split(' ')];
+            return names.some(name => typeof name === 'string' && name.toLowerCase().includes('search'));
+        };
 
         for (const child of rightBox.get_children()) {
-            if (!claimed.has(child))
+            if (looksLikeSearch(child))
+                return child;
+            // Search Light's button is wrapped, so check one level in too.
+            const inner = child.get_first_child?.();
+            if (inner && looksLikeSearch(inner))
                 return child;
         }
         return null;
@@ -287,8 +308,14 @@ export default class GlobalMenuExtension extends Extension {
             return;
         }
 
+        // Keep the object we edit, not just its contents. Session modes are
+        // separate objects, and locking the screen switches to a mode this
+        // extension does not run in — so by the time disable() arrives,
+        // sessionMode.panel is the lock screen's layout. Writing our backup
+        // into that one would give the lock screen an Activities button and a
+        // clock, and leave the real layout still modified.
+        this._clockLayout = layout;
         this._clockSessionBackup = {
-            left: layout.left.slice(),
             center: layout.center.slice(),
             right: layout.right.slice(),
         };
@@ -417,12 +444,18 @@ export default class GlobalMenuExtension extends Extension {
         if (!this._clockMoved)
             return;
 
-        let layout = Main.sessionMode?.panel;
+        let layout = this._clockLayout;
         if (layout && this._clockSessionBackup) {
-            layout.left = this._clockSessionBackup.left.slice();
+            // Only the two lists that were edited, so a layout change made by
+            // something else meanwhile is left alone.
             layout.center = this._clockSessionBackup.center.slice();
             layout.right = this._clockSessionBackup.right.slice();
-            this._rebuildPanel();
+
+            // Rebuilding only makes sense while that layout is the live one.
+            if (layout === Main.sessionMode?.panel)
+                this._rebuildPanel();
+            else
+                this._forgetPanelActors();
         } else {
             let container = Main.panel.statusArea.dateMenu?.container;
             let target = Main.panel._centerBox;
@@ -436,31 +469,7 @@ export default class GlobalMenuExtension extends Extension {
 
         this._clockMoved = false;
         this._clockSessionBackup = null;
-    }
-
-    _loadStylesheet() {
-        let cssFile = Gio.File.new_for_path(`${this.path}/stylesheet.css`);
-        if (!cssFile.query_exists(null))
-            return;
-
-        // A stylesheet the current shell cannot parse must not stop the rest of
-        // the extension from starting.
-        this._guard('loading the stylesheet', () => {
-            let themeContext = St.ThemeContext.get_for_stage(global.stage);
-            themeContext.get_theme().load_stylesheet(cssFile);
-            this._stylesheet = cssFile;
-        });
-    }
-
-    _unloadStylesheet() {
-        if (!this._stylesheet)
-            return;
-
-        this._guard('unloading the stylesheet', () => {
-            let themeContext = St.ThemeContext.get_for_stage(global.stage);
-            themeContext.get_theme().unload_stylesheet(this._stylesheet);
-        });
-        this._stylesheet = null;
+        this._clockLayout = null;
     }
 
     _syncLogoButton() {
@@ -482,18 +491,35 @@ export default class GlobalMenuExtension extends Extension {
         }
     }
 
+    // Driven by what is actually on screen rather than by a remembered flag,
+    // because a panel rebuild shows every indicator again and a flag-based
+    // check would decide there was nothing to do.
     _syncOverviewButton() {
-        let activities = Main.panel.statusArea['activities'];
-        if (!activities || !this._settings) return;
+        if (!this._settings)
+            return;
 
-        let shouldHide = this._settings.get_boolean('hide-overview-button');
-        if (shouldHide && !this._overviewHidden) {
-            activities.hide();
+        let activities = Main.panel.statusArea['activities'];
+        let actor = activities?.container ?? activities;
+        if (!actor)
+            return;
+
+        if (this._settings.get_boolean('hide-overview-button')) {
+            actor.hide();
             this._overviewHidden = true;
-        } else if (!shouldHide && this._overviewHidden) {
-            activities.show();
+        } else if (this._overviewHidden) {
+            actor.show();
             this._overviewHidden = false;
         }
+    }
+
+    _showOverviewButton() {
+        if (!this._overviewHidden)
+            return;
+
+        let activities = Main.panel.statusArea['activities'];
+        let actor = activities?.container ?? activities;
+        actor?.show();
+        this._overviewHidden = false;
     }
 
     _syncMenuVisibility() {
@@ -578,18 +604,17 @@ export default class GlobalMenuExtension extends Extension {
             this._logoButton = null;
         }
 
-        if (this._overviewHidden) {
-            let activities = Main.panel.statusArea['activities'];
-            if (activities) activities.show();
-            this._overviewHidden = false;
-        }
-
-        this._restoreSpotlightPosition();
-        this._showSpacers();
-        this._restoreClock();
-        this._showPowerButton();
-        Main.panel.remove_style_class_name('pearup-panel');
-        this._unloadStylesheet();
+        // Each step is guarded separately: these touch actors this extension
+        // does not own, and extensions are torn down in reverse order, so one
+        // of them may already be gone. A throw here would abandon the rest of
+        // the cleanup and leave the panel rearranged.
+        this._guard('restoring Spotlight', () => this._restoreSpotlightPosition());
+        this._guard('showing panel indicators', () => this._showSpacers());
+        this._guard('showing the Activities button', () => this._showOverviewButton());
+        this._guard('restoring the clock', () => this._restoreClock());
+        this._guard('showing the power icon', () => this._showPowerButton());
+        this._guard('dropping the panel style', () =>
+            Main.panel.remove_style_class_name('pearup-panel'));
 
         this._settings = null;
     }

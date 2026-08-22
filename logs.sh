@@ -1,12 +1,19 @@
 #!/bin/bash
+# Follow this extension's messages in the shell's log.
+#
+# Turn on "Verbose Error Logging" on the General preferences page first: the
+# handled-error messages are gated behind it so the journal is not spammed in
+# normal use.
+set -euo pipefail
 
-SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
-EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SOURCE_DIR/metadata.json")"
-LOG_FILE="testing.log"
+LOG_FILE="${1:-testing.log}"
 
 echo "--------------------------------------------------"
-echo "📋 Starting live logging for Global manu for gnome"
-echo "📝 Logs will be piped to: $LOG_FILE"
+echo "📋 Following Pear Up messages, also writing to: $LOG_FILE"
 echo "--------------------------------------------------"
 
-journalctl /usr/bin/gnome-shell -f | grep "$EXTENSION_UUID" --line-buffered | tee -a "$LOG_FILE"
+# Messages are tagged "[pear-up]" or with the full UUID, so match the stem that
+# appears in both rather than one exact string.
+journalctl /usr/bin/gnome-shell -f -o cat \
+    | grep --line-buffered -E "pear-up" \
+    | tee -a "$LOG_FILE"
