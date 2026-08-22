@@ -1,4 +1,3 @@
-import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
@@ -19,23 +18,9 @@ const PANEL_TWEAK_KEYS = [
 // Roughly ten seconds of waiting for Quick Settings to finish building.
 const POWER_RETRY_LIMIT = 20;
 
-// Reports what the extension has actually done to the panel. Off unless asked
-// for, because it is a way into the shell's internals.
-//
-// Tests need this: a headless shell cannot use Looking Glass, and Eval refuses
-// to run without the unsafe mode that only Looking Glass can switch on — so
-// there is no other way to ask a running shell whether the clock really moved.
-// It doubles as a way to see what state a user's panel is in.
-const DEBUG_INTERFACE = `
-<node>
-  <interface name="io.github.maddinek.PearUp.Debug">
-    <method name="GetState">
-      <arg type="s" direction="out" name="state"/>
-    </method>
-  </interface>
-</node>`;
-
-const DEBUG_PATH = '/io/github/maddinek/PearUp/Debug';
+// Nothing here reports state for tests. The suite loads a separate extension
+// that inspects the panel from outside, so this one carries no test surface and
+// no way in for anything else.
 
 // Only these change what the menu bar contains. Anything else — an icon, a
 // command string, a System Menu item — is handled where it is used, so the bar
@@ -79,7 +64,6 @@ export default class GlobalMenuExtension extends Extension {
         this._powerRetries = 0;
         this._sessionModeId = 0;
         this._resyncId = 0;
-        this._debugExport = null;
         this._hiddenSpacers = [];
         this._spotlightMoved = null;
         this._minimizedWindow = null;
@@ -129,8 +113,6 @@ export default class GlobalMenuExtension extends Extension {
                 this._syncLogoButton();
             else if (PANEL_TWEAK_KEYS.includes(key))
                 this._syncPanelTweaks();
-            else if (key === 'debug-interface')
-                this._syncDebugInterface();
             else if (MENU_CONTENT_KEYS.includes(key))
                 this._syncMenuVisibility();
         });
@@ -152,8 +134,6 @@ export default class GlobalMenuExtension extends Extension {
         this._sessionModeId = Main.sessionMode.connect('updated',
             () => this._queuePanelResync());
 
-        this._syncDebugInterface();
-
         // stylesheet.css is loaded by the shell itself for every enabled
         // extension, so there is nothing to do here but claim the class it
         // keys off.
@@ -163,46 +143,6 @@ export default class GlobalMenuExtension extends Extension {
         this._syncLogoButton();
         this._syncOverviewButton();
         this._syncMenuVisibility();
-    }
-
-    _syncDebugInterface() {
-        const wanted = this._settings?.get_boolean('debug-interface') ?? false;
-
-        if (wanted && !this._debugExport) {
-            this._guard('exporting the debug interface', () => {
-                this._debugExport = Gio.DBusExportedObject.wrapJSObject(
-                    DEBUG_INTERFACE, this);
-                this._debugExport.export(Gio.DBus.session, DEBUG_PATH);
-            });
-        } else if (!wanted && this._debugExport) {
-            this._guard('withdrawing the debug interface', () => {
-                this._debugExport.unexport();
-            });
-            this._debugExport = null;
-        }
-    }
-
-    // Named for the D-Bus method, so it must stay in this shape.
-    GetState() {
-        const roles = Object.keys(Main.panel.statusArea);
-        const layout = Main.sessionMode?.panel ?? {};
-        const system = Main.panel.statusArea.quickSettings?._system;
-        const powerIcon = system?._indicator ?? system;
-
-        return JSON.stringify({
-            uuid: this.metadata.uuid,
-            panelRoles: roles,
-            hasSystemMenu: roles.includes('pearup-logo'),
-            menuButtons: roles.filter(role => role.startsWith(`${this.metadata.uuid}-`)).length,
-            panelStyled: Main.panel.has_style_class_name('pearup-panel'),
-            clockInRight: (layout.right ?? []).includes('dateMenu'),
-            clockInCentre: (layout.center ?? []).includes('dateMenu'),
-            powerIconFound: !!powerIcon,
-            powerIconVisible: powerIcon ? powerIcon.visible : null,
-            spacersHidden: this._hiddenSpacers.length,
-            activitiesHidden: this._overviewHidden,
-            spotlightGrouped: this._spotlightMoved !== null,
-        });
     }
 
     // Apply or undo each panel tweak to match its setting. Safe to call again
@@ -688,11 +628,6 @@ export default class GlobalMenuExtension extends Extension {
         this._guard('showing the power icon', () => this._showPowerButton());
         this._guard('dropping the panel style', () =>
             Main.panel.remove_style_class_name('pearup-panel'));
-
-        if (this._debugExport) {
-            this._guard('withdrawing the debug interface', () => this._debugExport.unexport());
-            this._debugExport = null;
-        }
 
         this._settings = null;
     }

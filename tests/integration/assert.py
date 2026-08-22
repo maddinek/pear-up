@@ -23,9 +23,9 @@ from gi.repository import Gio, GLib
 UUID = sys.argv[1]
 ARTIFACTS = sys.argv[2] if len(sys.argv) > 2 else "/artifacts"
 
-DEBUG_NAME = "org.gnome.Shell"
-DEBUG_PATH = "/io/github/maddinek/PearUp/Debug"
-DEBUG_IFACE = "io.github.maddinek.PearUp.Debug"
+HOOK_NAME = "org.gnome.Shell"
+HOOK_PATH = "/io/github/maddinek/PearUpTestHook"
+HOOK_IFACE = "io.github.maddinek.PearUpTestHook"
 
 bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
 results = []
@@ -51,7 +51,12 @@ def extension_info():
 
 
 def panel_state():
-    raw = call(DEBUG_NAME, DEBUG_PATH, DEBUG_IFACE, "GetState").unpack()[0]
+    raw = call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "GetPanelState").unpack()[0]
+    return json.loads(raw)
+
+
+def menu_tree():
+    raw = call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "GetMenuTree").unpack()[0]
     return json.loads(raw)
 
 
@@ -78,9 +83,8 @@ if state:
     check("clock moved out of the centre and to the right",
           state["clockInRight"] and not state["clockInCentre"],
           f"right={state['clockInRight']} centre={state['clockInCentre']}")
-    check("Activities button is hidden", state["activitiesHidden"])
-    check("inactive indicators are hidden", state["spacersHidden"] > 0,
-          f"{state['spacersHidden']} hidden")
+    check("Activities button is hidden", state["activitiesVisible"] is False,
+          f"visible={state['activitiesVisible']}")
 
     # The regression that shipped twice: the icon existed, and was visible.
     if state["powerIconFound"]:
@@ -88,6 +92,94 @@ if state:
               f"visible={state['powerIconVisible']}")
     else:
         print("  note: this session has no power indicator to hide")
+
+# ------------------------------------------------- the bar with nothing in front
+# An empty desktop should carry the System Menu and nothing else. This is the
+# regression that had "Nautilus File Edit View" sitting there after everything
+# was minimized.
+try:
+    empty = menu_tree()
+    app_menus = [m["label"] for m in empty if m["label"]]
+    check("no application menus while nothing is in front",
+          len(app_menus) == 0, f"found {app_menus}")
+except GLib.Error as exc:
+    check("menu structure could be read", False, exc.message.splitlines()[0])
+
+# --------------------------------------------------------- what the menus hold
+# Asserting the built menus rather than clicking them: this exercises the real
+# structure without depending on pixel coordinates or animation timing, and it
+# is where the missing System Settings entry and the description that rendered
+# blank would both have shown up.
+try:
+    subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+except FileNotFoundError:
+    print("  note: gjs missing, cannot open a window")
+
+# Wait for the window to map, then put it in front: a headless shell starts in
+# the overview with nothing focused, and the menu bar describes the focused
+# application.
+menus = []
+for _ in range(40):
+    GLib.usleep(500 * 1000)
+    try:
+        call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "FocusFirstWindow")
+        menus = menu_tree()
+    except GLib.Error:
+        menus = []
+    if any(menu["label"] for menu in menus):
+        break
+
+if not any(menu["label"] for menu in menus):
+    # Report what the shell sees, so a failure here says why.
+    try:
+        seen = panel_state()
+        detail = (f"windows={seen['windowCount']} focus={seen['focusWindow']}")
+    except GLib.Error:
+        detail = "could not read panel state"
+    check("menus appear once a window is in front", False, detail)
+    menus = []
+else:
+    check("menus appear once a window is in front", True)
+
+if menus:
+    with open(f"{ARTIFACTS}/menu-tree.json", "w") as handle:
+        json.dump(menus, handle, indent=2)
+
+    labels = {menu["label"] for menu in menus if menu["label"]}
+    check("the expected menus are on the bar",
+          {"File", "Edit", "View", "Go", "Window", "Help"} <= labels,
+          f"found {sorted(labels)}")
+
+    def items_of(label):
+        for menu in menus:
+            if menu["label"] == label:
+                return [item["label"] for item in menu["items"] if item["label"]]
+        return []
+
+    for menu_label, expected in [
+        ("File", {"New Folder", "New Tab", "Close Window"}),
+        ("Edit", {"Copy", "Paste", "Select All"}),
+        ("Window", {"Minimize", "Maximize", "Close"}),
+        ("Go", {"Home", "Documents", "Downloads"}),
+    ]:
+        found = set(items_of(menu_label))
+        check(f"{menu_label} menu offers its entries", expected <= found,
+              f"missing {sorted(expected - found)}" if not expected <= found else "")
+
+    # The System Menu is the icon-only button, so it has no label of its own.
+    system_menu = next((m for m in menus if m["role"] == "pearup-logo"), None)
+    if system_menu:
+        entries = [item["label"] for item in system_menu["items"] if item["label"]]
+        check("System Menu offers About and Settings",
+              {"About This System", "System Settings"} <= set(entries),
+              f"found {entries}")
+        # Deliberately absent: these settings belong in GNOME Settings, and
+        # nothing can put them there.
+        check("System Menu has no settings entry of its own",
+              not any("Pear Up" in entry for entry in entries))
+    else:
+        check("System Menu was found", False, "no pearup-logo role")
 
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
@@ -160,12 +252,19 @@ check("extension reports itself disabled", after.get("state") != 1,
 check("disabling produced no error", not after.get("error"),
       after.get("error") or "none")
 
-# The debug interface goes away with it, so its absence is the check.
+# The hook stays loaded, so it can report that Pear Up left nothing behind.
 try:
-    panel_state()
-    check("debug interface withdrawn on disable", False, "still answering")
-except GLib.Error:
-    check("debug interface withdrawn on disable", True)
+    after_state = panel_state()
+    check("no menu buttons left on the panel", after_state["menuButtons"] == 0,
+          f"{after_state['menuButtons']} left")
+    check("System Menu removed", not after_state["hasSystemMenu"])
+    check("panel style class removed", not after_state["panelStyled"])
+    check("clock returned to the centre", after_state["clockInCentre"],
+          f"right={after_state['clockInRight']}")
+    check("Activities button shown again", after_state["activitiesVisible"] is True,
+          f"visible={after_state['activitiesVisible']}")
+except GLib.Error as exc:
+    check("panel state readable after disable", False, exc.message.splitlines()[0])
 
 # ------------------------------------------------------------------ summary
 failures = [label for label, ok, _ in results if not ok]

@@ -114,8 +114,14 @@ Both suites run in containers, so no other system has to be installed and nothin
 desktop you are using.
 
 **Does it still behave?** Boots a real GNOME Shell headless against a virtual monitor, loads the
-extension the way a login would, and checks what it actually did to the panel — the clock moved, the
-System Menu appeared, the power icon is hidden, and disabling it leaves nothing behind.
+extension the way a login would, and checks what it actually did to the panel: the clock moved, the
+System Menu appeared with its entries, the power icon is hidden, the bar stays bare while nothing is
+in front, the File, Edit, View, Go, Window and Help menus appear once a window is focused and hold
+the items they should — and disabling it leaves nothing behind.
+
+The menus are asserted rather than clicked. Activating them through the structure runs the same code
+a click would, without depending on pixel coordinates or animation timing, which is where interface
+tests usually become unreliable.
 
 ```bash
 tests/integration/run.sh        # GNOME 50
@@ -132,6 +138,11 @@ All six releases pass it, which is why `shell-version` claims them:
 | --- | --- | --- | --- | --- | --- | --- |
 | Behaviour | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Screenshot artifact | — | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+Nothing for tests is shipped in the extension. Inspecting a running shell needs a way in — a headless
+session has no Looking Glass, and `Eval` refuses to run without the unsafe mode only Looking Glass
+can enable — so that capability lives in a separate extension under `tests/integration/hook-extension`
+that exists only inside the container.
 
 The screenshot is a convenience, not evidence: whether a recording can be made depends on the
 release and the container's media stack, and 45 manages none. The assertions are what matter.

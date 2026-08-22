@@ -37,6 +37,16 @@ fi
 echo "installed"
 
 echo
+echo "== installing the test hook =="
+# Lives only in here: it reads the panel so the suite can assert against it,
+# which is not a capability worth shipping to anyone's desktop.
+HOOK_UUID=pear-up-test-hook@localhost
+HOOK_DIR="$HOME/.local/share/gnome-shell/extensions/$HOOK_UUID"
+mkdir -p "$HOOK_DIR"
+cp "$SRC/tests/integration/hook-extension/"* "$HOOK_DIR/"
+echo "installed $HOOK_UUID"
+
+echo
 echo "== starting a headless shell =="
 dbus-run-session -- bash -c '
     set -uo pipefail
@@ -57,7 +67,7 @@ dbus-run-session -- bash -c '
     # rather than being switched on afterwards. That ordering is what exposed
     # the power icon being hidden before Quick Settings had been built.
     gsettings set org.gnome.shell disable-user-extensions false
-    gsettings set org.gnome.shell enabled-extensions "[\"$UUID\"]"
+    gsettings set org.gnome.shell enabled-extensions "[\"$UUID\", \"pear-up-test-hook@localhost\"]"
 
     # The question here is whether the code works on this release, which is
     # separate from whether metadata.json claims it. Without this the shell
@@ -65,12 +75,6 @@ dbus-run-session -- bash -c '
     # only ever be "out of date" — leaving no way to gather the evidence for
     # widening the claim.
     gsettings set org.gnome.shell disable-extension-version-validation true
-
-    # The only way to ask the running shell what the extension did: a headless
-    # session has no Looking Glass, so Eval is permanently refused.
-    schemas="$HOME/.local/share/gnome-shell/extensions/$UUID/schemas"
-    GSETTINGS_SCHEMA_DIR="$schemas" \
-        gsettings set org.gnome.shell.extensions.pear-up debug-interface true
 
     # A virtual monitor gives the shell somewhere to draw with no display
     # attached. --no-x11 matters for releases before 50, which otherwise insist

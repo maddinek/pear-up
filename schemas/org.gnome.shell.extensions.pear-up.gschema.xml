@@ -94,12 +94,6 @@
       <description>Used for File menu items such as "New X Window" while an app is focused. The App menu no longer uses this as a fallback when every window is minimized.</description>
     </key>
 
-    <key name="debug-interface" type="b">
-      <default>false</default>
-      <summary>Expose a D-Bus method reporting what the extension did to the panel</summary>
-      <description>Used by the test suite, since a headless shell cannot reach Looking Glass, and useful for diagnosing a panel that looks wrong. Off by default: it reads the shell's internal state.</description>
-    </key>
-
     <key name="debug-logging" type="b">
       <default>false</default>
       <summary>Enable verbose error logging to the system journal</summary>

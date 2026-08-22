@@ -1,0 +1,7 @@
+{
+  "uuid": "pear-up-test-hook@localhost",
+  "name": "Pear Up Test Hook",
+  "description": "Reports what Pear Up did to the panel, for the test suite. Installed only inside the test container — never alongside a real desktop.",
+  "version": 1,
+  "shell-version": ["45", "46", "47", "48", "49", "50"]
+}
