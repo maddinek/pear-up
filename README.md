@@ -6,9 +6,10 @@ left, and one settings window that also drives your dock.
 
 > Not affiliated with Apple. The pear is the joke.
 
-A fork of [global-menu-for-gnome](https://github.com/ShiroOSL/global-menu-for-gnome), whose menu
-engine it still builds on — [Credits](#credits) says who wrote which parts. Not published on
-extensions.gnome.org, and not supported by that project's author.
+Its menu engine was carried over from
+[global-menu-for-gnome](https://github.com/ShiroOSL/global-menu-for-gnome) —
+[Credits](#credits) says who wrote which parts. This is a separate project rather than a
+continuation of that one: not published on extensions.gnome.org, and not supported by its author.
 
 ![The focused app's menus in the top bar](assets/screenshots/global-menu.png)
 
@@ -168,9 +169,15 @@ matrix is not grounds on its own for widening `shell-version` — behaviour has 
 
 ## Credits
 
-Pear Up is a fork of [global-menu-for-gnome](https://github.com/ShiroOSL/global-menu-for-gnome) by
+Pear Up took over the menu work from
+[global-menu-for-gnome](https://github.com/ShiroOSL/global-menu-for-gnome) by
 [ShiroOSL](https://github.com/ShiroOSL), published on
 [extensions.gnome.org](https://extensions.gnome.org/extension/10288/global-menu-for-gnome/).
+
+It is not a fork of that project in any live sense — separate repository, separate extension UUID,
+no shared history going forward, and nothing flows back and forth. What it is, is a project that
+carried their code across and built something larger on top of it. Under GPL-3.0 that still makes it
+a derivative work, which is why the licence is inherited rather than chosen.
 
 **The global menu itself is their work.** Specifically, still largely as they wrote it:
 
@@ -188,7 +195,7 @@ The rest of the project is not theirs and should not be read as such:
 
 By surviving lines, that is about 60% of the menu engine and three quarters of the System Menu from
 upstream, against none of the styling, tests, tooling or panel work. Line counts are a crude measure,
-but the split is clear enough: they built the menu bar, this fork built a desktop around it.
+but the split is clear enough: they built the menu bar, this project built a desktop around it.
 
 **Bugs here are this project's, not theirs.** Please report them on this repository's tracker, and use
 the upstream project if you want the published, supported extension rather than this one.
@@ -198,4 +205,4 @@ can be represented in the icon picker.
 
 ## License
 
-GPL-3.0, inherited from the original project.
+GPL-3.0. Not a choice: the carried-over code is GPL-3.0, and its terms follow it here.
