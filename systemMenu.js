@@ -13,7 +13,7 @@ function spawnCommandLine(commandLine) {
         let [, argv] = GLib.shell_parse_argv(commandLine);
         GLib.spawn_async(null, argv, null, GLib.SpawnFlags.SEARCH_PATH, null);
     } catch (e) {
-        console.error(`[globalmenu] Failed to launch '${commandLine}': ${e}`);
+        console.error(`[pear-up] Failed to launch '${commandLine}': ${e}`);
     }
 }
 
@@ -42,13 +42,13 @@ export const SystemMenuButton = GObject.registerClass(
     _init(settings, extensionPath) {
         super._init(0.5, 'System Menu');
 
-        this.add_style_class_name('globalmenu-system-menu');
+        this.add_style_class_name('pearup-system-menu');
         this._settings = settings;
         this._extensionPath = extensionPath;
         this._systemActions = SystemActions.getDefault();
 
         this._icon = new St.Icon({
-            style_class: 'globalmenu-logo-icon system-status-icon',
+            style_class: 'pearup-logo-icon system-status-icon',
         });
         this.add_child(this._icon);
 
@@ -252,7 +252,7 @@ export const SystemMenuButton = GObject.registerClass(
         try {
             window.kill();
         } catch (e) {
-            console.error(`[globalmenu] Force Quit failed: ${e}`);
+            console.error(`[pear-up] Force Quit failed: ${e}`);
         }
     }
 

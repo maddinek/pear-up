@@ -80,7 +80,7 @@ export default class GlobalMenuExtension extends Extension {
         }, this);
 
         this._loadStylesheet();
-        Main.panel.add_style_class_name('globalmenu-macos-panel');
+        Main.panel.add_style_class_name('pearup-panel');
         this._syncPanelTweaks();
 
         this._syncLogoButton();
@@ -238,7 +238,7 @@ export default class GlobalMenuExtension extends Extension {
         layout.right.push('dateMenu');
         Main.panel._updatePanel();
         this._clockMoved = true;
-        console.log(`[globalmenu] Clock moved to right. panel.right=${layout.right.join(',')}`);
+        console.log(`[pear-up] Clock moved to right. panel.right=${layout.right.join(',')}`);
     }
 
     _hidePowerButton() {
@@ -325,11 +325,11 @@ export default class GlobalMenuExtension extends Extension {
 
         if (shouldShow && !this._logoButton) {
             // A previous failed enable() can leave this role occupied.
-            let existing = Main.panel.statusArea['globalmenu-logo'];
+            let existing = Main.panel.statusArea['pearup-logo'];
             if (existing)
                 existing.destroy();
             this._logoButton = new SystemMenuButton(this._settings, this.path);
-            Main.panel.addToStatusArea('globalmenu-logo', this._logoButton, 0, 'left');
+            Main.panel.addToStatusArea('pearup-logo', this._logoButton, 0, 'left');
         } else if (!shouldShow && this._logoButton) {
             this._logoButton.destroy();
             this._logoButton = null;
@@ -417,7 +417,7 @@ export default class GlobalMenuExtension extends Extension {
         this._showSpacers();
         this._restoreClock();
         this._showPowerButton();
-        Main.panel.remove_style_class_name('globalmenu-macos-panel');
+        Main.panel.remove_style_class_name('pearup-panel');
         this._unloadStylesheet();
 
         this._settings = null;

@@ -6,7 +6,7 @@ EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 EXTENSION_DIR="$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
 
 echo "--------------------------------------------------"
-echo "🚀 Starting installation of Global Menu for GNOME (V4)"
+echo "🍐 Installing Pear Up"
 echo "--------------------------------------------------"
 
 echo "🧹 Clearing old structures..."

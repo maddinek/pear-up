@@ -5,7 +5,7 @@ EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 EXTENSION_DIR="$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
 
 echo "--------------------------------------------------"
-echo "🧹 Starting uninstallation of Global Menu"
+echo "🧹 Removing Pear Up"
 echo "--------------------------------------------------"
 
 echo "🚫 Disabling the extension..."

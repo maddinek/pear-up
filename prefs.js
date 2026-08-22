@@ -941,7 +941,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         const group = new Adw.PreferencesGroup();
         page.add(group);
 
-        group.add(new Adw.ActionRow({ title: meta.name || 'Global Menu for GNOME' }));
+        group.add(new Adw.ActionRow({ title: meta.name || 'Pear Up' }));
         group.add(new Adw.ActionRow({ title: 'Version', subtitle: String(meta.version ?? '') }));
 
         const descRow = new Adw.ActionRow({ title: 'Description', subtitle: meta.description || '' });

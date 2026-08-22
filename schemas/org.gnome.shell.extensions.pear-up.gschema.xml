@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
-  <schema id="org.gnome.shell.extensions.globalmenu" path="/org/gnome/shell/extensions/globalmenu/">
+  <schema id="org.gnome.shell.extensions.pear-up" path="/org/gnome/shell/extensions/pear-up/">
     <key name="show-indicator" type="b">
       <default>true</default>
       <summary>Show Global Menu</summary>

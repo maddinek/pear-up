@@ -55,9 +55,9 @@ gsettings set org.gnome.desktop.wm.preferences button-layout 'close,minimize,max
 
 # Global menu housekeeping
 export GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/${EXTENSION_UUID}/schemas"
-gsettings set org.gnome.shell.extensions.globalmenu debug-logging false
-gsettings set org.gnome.shell.extensions.globalmenu hide-overview-button true
-gsettings set org.gnome.shell.extensions.globalmenu logo-icon-size 14
+gsettings set org.gnome.shell.extensions.pear-up debug-logging false
+gsettings set org.gnome.shell.extensions.pear-up hide-overview-button true
+gsettings set org.gnome.shell.extensions.pear-up logo-icon-size 14
 
 # Reload extension so stylesheet applies
 gnome-extensions disable "$EXTENSION_UUID"

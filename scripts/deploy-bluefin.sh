@@ -46,7 +46,7 @@ EXTENSION_UUID="$1"
 export GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/${EXTENSION_UUID}/schemas"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
 
-SCHEMA=org.gnome.shell.extensions.globalmenu
+SCHEMA=org.gnome.shell.extensions.pear-up
 
 gsettings set "$SCHEMA" hide-overview-button true
 gsettings set "$SCHEMA" logo-distro-icon 'pear'

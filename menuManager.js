@@ -32,7 +32,7 @@ function spawnCommand(argv) {
             null
         );
     } catch (e) {
-        logError(`[globalmenu] Failed to spawn '${argv.join(' ')}': ${e}`);
+        logError(`[pear-up] Failed to spawn '${argv.join(' ')}': ${e}`);
     }
 }
 
@@ -43,9 +43,9 @@ const TopLevelMenuButton = GObject.registerClass(
       this._appInstance = appInstance;
       this._timeoutIds = [];
 
-      this.add_style_class_name('globalmenu-menu-button');
+      this.add_style_class_name('pearup-menu-button');
       if (isAppMenu)
-          this.add_style_class_name('globalmenu-app-menu');
+          this.add_style_class_name('pearup-app-menu');
 
       // GNOME 50 PanelMenu.Button has no `.label` at all. Keep a local
       // handle so we never touch `.clutter_text` on undefined.
@@ -98,7 +98,7 @@ const TopLevelMenuButton = GObject.registerClass(
 
             this.menu.actor.translation_x = offset;
         } catch (e) {
-            logError(`[globalmenu] Error aligning menu: ${e}`);
+            logError(`[pear-up] Error aligning menu: ${e}`);
         }
     }
 
@@ -126,7 +126,7 @@ const TopLevelMenuButton = GObject.registerClass(
                 let [, argv] = GLib.shell_parse_argv(cmd);
                 spawnCommand(argv);
             } catch (e) {
-                logError(`[globalmenu] Invalid custom command '${cmd}': ${e}`);
+                logError(`[pear-up] Invalid custom command '${cmd}': ${e}`);
             }
             return true;
         }
@@ -199,7 +199,7 @@ const TopLevelMenuButton = GObject.registerClass(
                 return true;
             }
         } catch (e) {
-            logError(`[globalmenu] Process execution error: ${e}`);
+            logError(`[pear-up] Process execution error: ${e}`);
         }
 
         try {
@@ -288,7 +288,7 @@ const TopLevelMenuButton = GObject.registerClass(
                 }
             }
         } catch (e) {
-            logError(`[globalmenu] Virtual Keyboard error: ${e}`);
+            logError(`[pear-up] Virtual Keyboard error: ${e}`);
         }
 
         return false;
@@ -300,7 +300,7 @@ const TopLevelMenuButton = GObject.registerClass(
         try {
             let [success, keyval, mods] = Clutter.accelerator_parse(accel);
             if (!success) {
-                logError(`[globalmenu] Could not parse shortcut '${accel}'`);
+                logError(`[pear-up] Could not parse shortcut '${accel}'`);
                 return;
             }
 
@@ -328,7 +328,7 @@ const TopLevelMenuButton = GObject.registerClass(
                 t += 5;
             });
         } catch (e) {
-            logError(`[globalmenu] Failed to send accelerator '${accel}': ${e}`);
+            logError(`[pear-up] Failed to send accelerator '${accel}': ${e}`);
         }
     }
 
@@ -349,7 +349,7 @@ const TopLevelMenuButton = GObject.registerClass(
 
             file.make_directory(null);
         } catch (e) {
-            logError(`[globalmenu] Failed to create new folder: ${e}`);
+            logError(`[pear-up] Failed to create new folder: ${e}`);
         }
     }
 

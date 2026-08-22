@@ -1,8 +1,8 @@
 {
-  "uuid": "globalmenu@maddinek.github.io",
-  "name": "Global Menu for GNOME",
-  "description": "Brings a macOS-style global menu bar to GNOME. Adds contextual File, Edit, View, Go, Window, and Help menus for the focused app, plus a configurable System Menu with quick access to Settings, Terminal, Software Center, Force Quit, and power options. Create your own custom menus with shell commands or keyboard shortcuts, and personalize the System Menu icon from bundled distro logos, an Apple-style icon, or your own image.",
-  "version": 15,
+  "uuid": "pear-up@maddinek.github.io",
+  "name": "Pear Up",
+  "description": "Pear up your GNOME: a macOS-like desktop in one extension. Adds a global menu bar with contextual File, Edit, View, Go, Window and Help menus for the focused app, and a System Menu behind a bitten-pear logo for About, System Settings, Terminal, Software Center, Force Quit and power actions. Moves the clock to the corner, puts the window buttons on the left, tidies the status area, and configures a Dash to Dock dock — its edge, size, visibility and display — from the same settings window. Custom menus can run shell commands or keyboard shortcuts.",
+  "version": 1,
   "shell-version": [
     "45",
     "46",
@@ -11,6 +11,6 @@
     "49",
     "50"
   ],
-  "url": "https://github.com/maddinek/global-menu-for-gnome",
-  "settings-schema": "org.gnome.shell.extensions.globalmenu"
+  "url": "https://github.com/maddinek/pear-up",
+  "settings-schema": "org.gnome.shell.extensions.pear-up"
 }

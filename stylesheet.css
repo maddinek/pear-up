@@ -1,64 +1,64 @@
-/* macOS-inspired menu bar styling for Global Menu for GNOME */
+/* macOS-inspired menu bar styling for Pear Up */
 
-#panel.globalmenu-macos-panel {
+#panel.pearup-panel {
   font-size: 13px;
   font-weight: 400;
 }
 
 /* Menu titles: File, Edit, View, … */
-#panel.globalmenu-macos-panel .globalmenu-menu-button {
+#panel.pearup-panel .pearup-menu-button {
   padding: 0 10px;
 }
 
-#panel.globalmenu-macos-panel .globalmenu-menu-button .panel-button-label {
+#panel.pearup-panel .pearup-menu-button .panel-button-label {
   font-size: 13px;
 }
 
 /* Active app name (Firefox, Cursor, …) — bold like macOS */
-#panel.globalmenu-macos-panel .globalmenu-app-menu .panel-button-label {
+#panel.pearup-panel .pearup-app-menu .panel-button-label {
   font-weight: 600;
 }
 
 /* Pear / system menu button */
-#panel.globalmenu-macos-panel .globalmenu-system-menu {
+#panel.pearup-panel .pearup-system-menu {
   padding: 0 4px 0 8px;
 }
 
-#panel.globalmenu-macos-panel .globalmenu-logo-icon {
+#panel.pearup-panel .pearup-logo-icon {
   icon-size: 14px;
 }
 
 /* Clock is reparented to the far right in extension.js.
    Status icons sit immediately to its left — keep this tight. */
-#panel.globalmenu-macos-panel .panel-button.clock-display {
+#panel.pearup-panel .panel-button.clock-display {
   margin-left: 0;
   padding-left: 2px;
   padding-right: 6px;
 }
 
-#panel.globalmenu-macos-panel .clock-display {
+#panel.pearup-panel .clock-display {
   font-size: 13px;
   font-weight: 500;
 }
 
-#panel.globalmenu-macos-panel .clock-display .clock {
+#panel.pearup-panel .clock-display .clock {
   padding: 0 2px;
 }
 
-#panel.globalmenu-macos-panel .clock-display-box {
+#panel.pearup-panel .clock-display-box {
   spacing: 0;
 }
 
-#panel.globalmenu-macos-panel .panel-status-indicators-box {
+#panel.pearup-panel .panel-status-indicators-box {
   spacing: 0;
 }
 
-#panel.globalmenu-macos-panel .system-status-icon {
+#panel.pearup-panel .system-status-icon {
   padding: 0 3px;
   margin: 0;
 }
 
-#panel.globalmenu-macos-panel .power-status {
+#panel.pearup-panel .power-status {
   width: 0;
   height: 0;
   min-width: 0;
@@ -67,11 +67,11 @@
 }
 
 /* Slightly tighter default panel buttons */
-#panel.globalmenu-macos-panel .panel-button {
+#panel.pearup-panel .panel-button {
   -natural-hpadding: 3px;
   -minimum-hpadding: 0px;
 }
 
-#panel.globalmenu-macos-panel #panelRight {
+#panel.pearup-panel #panelRight {
   spacing: 0;
 }
