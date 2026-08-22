@@ -1,4 +1,5 @@
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import St from 'gi://St';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
@@ -16,6 +17,9 @@ const PANEL_TWEAK_KEYS = [
 
 // GNOME reserves room in the right cluster for indicators that are inactive
 // most of the time. macOS has no equivalent, and they leave a visible gap.
+// Roughly ten seconds of waiting for Quick Settings to finish building.
+const POWER_RETRY_LIMIT = 20;
+
 const SPACER_ROLES = [
     'screenRecording',
     'screenSharing',
@@ -37,6 +41,11 @@ export default class GlobalMenuExtension extends Extension {
         this._clockSessionBackup = null;
         this._powerHidden = null;
         this._powerVisibleId = 0;
+        this._powerDestroyId = 0;
+        this._powerRetryId = 0;
+        this._powerRetries = 0;
+        this._sessionModeId = 0;
+        this._resyncId = 0;
         this._hiddenSpacers = [];
         this._spotlightMoved = null;
         this._minimizedWindow = null;
@@ -60,6 +69,7 @@ export default class GlobalMenuExtension extends Extension {
         console.log(`[${this.metadata.uuid}] Enabling extension.`);
 
         this._settings = this.getSettings();
+        this._powerRetries = 0;
 
         this._menuManager = new MenuManager(this.metadata.uuid, this._settings);
 
@@ -92,6 +102,11 @@ export default class GlobalMenuExtension extends Extension {
         global.workspace_manager.connectObject('active-workspace-changed', () => {
             this._syncMenuVisibility();
         }, this);
+
+        // The shell rebuilds the panel whenever the session mode changes —
+        // during startup, and on unlock — which discards our arrangement.
+        this._sessionModeId = Main.sessionMode.connect('updated',
+            () => this._queuePanelResync());
 
         this._loadStylesheet();
         Main.panel.add_style_class_name('pearup-panel');
@@ -150,15 +165,7 @@ export default class GlobalMenuExtension extends Extension {
     // see a non-empty cache, skip the work, and let the new power glyph or
     // indicators stay visible.
     _forgetPanelActors() {
-        if (this._powerHidden && this._powerVisibleId) {
-            try {
-                this._powerHidden.disconnect(this._powerVisibleId);
-            } catch (e) {
-                // Already destroyed along with the old panel.
-            }
-        }
-        this._powerVisibleId = 0;
-        this._powerHidden = null;
+        this._releasePowerButton();
         this._hiddenSpacers = [];
         this._spotlightMoved = null;
     }
@@ -171,17 +178,16 @@ export default class GlobalMenuExtension extends Extension {
         return true;
     }
 
+    // Per-actor rather than "have we run", so a rebuilt panel gets its new
+    // indicators hidden too instead of being skipped.
     _hideSpacers() {
-        if (this._hiddenSpacers.length > 0)
-            return;
-
         for (const role of SPACER_ROLES) {
             const item = Main.panel.statusArea[role];
             const actor = item?.container ?? item;
-            if (actor?.hide) {
-                actor.hide();
-                this._hiddenSpacers.push(actor);
-            }
+            if (!actor?.hide || this._hiddenSpacers.includes(actor))
+                continue;
+            actor.hide();
+            this._hiddenSpacers.push(actor);
         }
     }
 
@@ -306,36 +312,90 @@ export default class GlobalMenuExtension extends Extension {
     // over the clock. So hide that one actor, and keep it hidden: GNOME re-runs
     // its own visibility sync whenever the battery or recording state changes.
     _hidePowerButton() {
-        if (this._powerHidden)
-            return;
-
         let system = Main.panel.statusArea.quickSettings?._system;
         let indicator = system?._indicator ?? system;
-        if (!indicator?.hide)
+        if (!indicator?.hide) {
+            // Quick Settings exists before its system item does, so during
+            // login there is nothing to hide yet. Come back for it.
+            this._retryHidePowerButton();
             return;
+        }
+
+        // Compare against the actor rather than just "have we run", because a
+        // panel rebuild replaces it and leaves us holding a destroyed one.
+        if (this._powerHidden === indicator)
+            return;
+
+        this._releasePowerButton();
 
         indicator.hide();
         this._powerVisibleId = indicator.connect('notify::visible', () => {
             if (indicator.visible)
                 indicator.hide();
         });
+        // The shell rebuilds the panel more than once while starting up, so the
+        // icon hidden during enable() is often not the one left on screen.
+        this._powerDestroyId = indicator.connect('destroy',
+            () => this._queuePanelResync());
         this._powerHidden = indicator;
     }
 
-    _showPowerButton() {
+    // The system item is built asynchronously while the shell starts, and
+    // nothing announces its arrival, so poll briefly rather than give up.
+    _retryHidePowerButton() {
+        if (this._powerRetryId || this._powerRetries >= POWER_RETRY_LIMIT)
+            return;
+
+        this._powerRetries++;
+        this._powerRetryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+            this._powerRetryId = 0;
+            if (this._settings?.get_boolean('hide-power-button'))
+                this._guard('hiding the power icon', () => this._hidePowerButton());
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Forget the icon without revealing it: used when swapping to a newer one.
+    _releasePowerButton() {
         if (!this._powerHidden)
             return;
 
-        try {
-            if (this._powerVisibleId)
-                this._powerHidden.disconnect(this._powerVisibleId);
-            this._powerHidden.show();
-        } catch (e) {
-            // Destroyed with a panel rebuild; nothing to restore.
+        for (const id of [this._powerVisibleId, this._powerDestroyId]) {
+            if (!id)
+                continue;
+            try {
+                this._powerHidden.disconnect(id);
+            } catch (e) {
+                // Destroyed with the old panel.
+            }
         }
 
         this._powerVisibleId = 0;
+        this._powerDestroyId = 0;
         this._powerHidden = null;
+    }
+
+    // Re-apply the tweaks once the current batch of panel changes has settled.
+    _queuePanelResync() {
+        if (this._resyncId)
+            return;
+
+        this._resyncId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._resyncId = 0;
+            this._guard('re-applying panel tweaks', () => this._syncPanelTweaks());
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _showPowerButton() {
+        let indicator = this._powerHidden;
+        this._releasePowerButton();
+
+        try {
+            indicator?.show();
+        } catch (e) {
+            // Destroyed with a panel rebuild; nothing to restore.
+        }
     }
 
     _moveClockFallback() {
@@ -490,6 +550,18 @@ export default class GlobalMenuExtension extends Extension {
         global.window_manager.disconnectObject(this);
         global.workspace_manager.disconnectObject(this);
         this._unwatchMinimized();
+
+        if (this._sessionModeId) {
+            Main.sessionMode.disconnect(this._sessionModeId);
+            this._sessionModeId = 0;
+        }
+
+        for (const source of ['_resyncId', '_powerRetryId']) {
+            if (this[source]) {
+                GLib.source_remove(this[source]);
+                this[source] = 0;
+            }
+        }
 
         if (this._settings && this._settingsChangedId) {
             this._settings.disconnect(this._settingsChangedId);
