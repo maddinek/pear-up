@@ -37,6 +37,29 @@ at the edge — and which display it belongs to.
 | --- | --- |
 | ![Dock on the right edge](assets/screenshots/dock-right.jpg) | ![Dock along the bottom](assets/screenshots/dock-bottom.jpg) |
 
+**macOS keyboard shortcuts.** Optional sets you can switch on or off. On an Apple keyboard Command
+already acts as Super, so these are the real chords rather than an approximation; on a PC keyboard
+read Cmd as the Super or Windows key.
+
+| Shortcut | Does |
+| --- | --- |
+| `Cmd+Shift+3` | Whole screen straight to a file |
+| `Cmd+Shift+4` | Pick a region, window or screen |
+| `Cmd+Shift+5` | Screen recording |
+| `Cmd+Q` / `Cmd+W` | Close the window |
+| `Cmd+M` | Minimize |
+| `Ctrl+Cmd+F` | Full screen |
+| `Ctrl+Cmd+Q` | Lock the screen |
+| `Ctrl+↑` | Overview, like Mission Control |
+
+Screenshots land in `~/Pictures/Screenshots`, and `Print` keeps working alongside. Each accelerator is
+added next to GNOME's own rather than replacing it, so switching a set off leaves your own bindings
+untouched. Where Dash to Dock already grabs a chord — it takes `Cmd+number` and `Cmd+Q` — the switch
+stands that down and offers to move the dock shortcuts to `Cmd+F1…F9` instead.
+
+Shortcuts *inside* an application, like `Cmd+C`, are sent by the app rather than the desktop and
+cannot be rebound from here; matching those needs a key remapper such as `keyd`.
+
 **Your own menus.** Add any number of extra top-level menus whose items run shell commands or send
 keyboard shortcuts.
 
@@ -45,9 +68,13 @@ keyboard shortcuts.
 Everything lives in one window — the panel layout, which menus appear, the dock, and your custom
 menus.
 
-| General | Menus | Dock |
-| --- | --- | --- |
-| ![General settings](assets/screenshots/settings-general.png) | ![Menu settings](assets/screenshots/settings-menus.png) | ![Dock settings](assets/screenshots/settings-dock.png) |
+| General | Menus |
+| --- | --- |
+| ![General settings](assets/screenshots/settings-general.png) | ![Menu settings](assets/screenshots/settings-menus.png) |
+
+| Dock | Keyboard |
+| --- | --- |
+| ![Dock settings](assets/screenshots/settings-dock.png) | ![Keyboard settings](assets/screenshots/settings-keyboard.png) |
 
 ## Requirements
 

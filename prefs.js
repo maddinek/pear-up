@@ -13,6 +13,61 @@ const DASH_TO_DOCK_SCHEMA = 'org.gnome.shell.extensions.dash-to-dock';
 
 // Window controls live in a GNOME-wide setting, not in this extension.
 const WM_PREFERENCES_SCHEMA = 'org.gnome.desktop.wm.preferences';
+const INPUT_SOURCES_SCHEMA = 'org.gnome.desktop.input-sources';
+const SWAP_ALT_CMD_OPTION = 'altwin:swap_alt_win';
+
+// A Magic Keyboard reports Cmd as Super, so binding the Super combinations
+// gives the real macOS chords rather than an approximation of them. Each entry
+// is added alongside GNOME's own binding instead of replacing it, so Print and
+// Alt+F4 keep working and nothing has to be backed up to undo this.
+const MACOS_SCREENSHOT_SHORTCUTS = [
+    ['org.gnome.shell.keybindings', 'screenshot', '<Super><Shift>3', 'Whole screen, straight to a file'],
+    ['org.gnome.shell.keybindings', 'show-screenshot-ui', '<Super><Shift>4', 'Pick a region, window or screen'],
+    ['org.gnome.shell.keybindings', 'show-screen-recording-ui', '<Super><Shift>5', 'Screen recording'],
+];
+
+const MACOS_WINDOW_SHORTCUTS = [
+    ['org.gnome.desktop.wm.keybindings', 'close', '<Super>q', 'Close the window (Cmd+Q)'],
+    ['org.gnome.desktop.wm.keybindings', 'close', '<Super>w', 'Close the window (Cmd+W)'],
+    ['org.gnome.desktop.wm.keybindings', 'minimize', '<Super>m', 'Minimize (Cmd+M)'],
+    ['org.gnome.desktop.wm.keybindings', 'toggle-fullscreen', '<Super><Control>f', 'Full screen (Ctrl+Cmd+F)'],
+    ['org.gnome.shell.keybindings', 'toggle-overview', '<Control>Up', 'Overview, like Mission Control'],
+    ['org.gnome.settings-daemon.plugins.media-keys', 'screensaver', '<Super><Control>q', 'Lock the screen (Ctrl+Cmd+Q)'],
+];
+
+// Dash to Dock claims Cmd+number to launch dock items, including the
+// Cmd+Shift+3/4/5 that macOS uses for screenshots, and Cmd+Q to reveal the
+// dock. Those grabs win over the shell's, so they have to give way. Switching a
+// set back off resets them to their owner's default.
+const MACOS_SCREENSHOT_CONFLICTS = [
+    [DASH_TO_DOCK_SCHEMA, 'hot-keys', () => GLib.Variant.new_boolean(false),
+        'Dash to Dock stops launching apps with Cmd+number'],
+];
+
+const MACOS_WINDOW_CONFLICTS = [
+    [DASH_TO_DOCK_SCHEMA, 'shortcut', () => GLib.Variant.new_strv([]),
+        'Dash to Dock stops revealing the dock with Cmd+Q'],
+];
+
+// Somewhere to put the dock shortcuts that Cmd+number gave up. Cmd+F1 is
+// GNOME's help shortcut, so that one has to be taken over rather than shared —
+// two grabs on one accelerator have no defined winner.
+const DOCK_FUNCTION_KEY_SHORTCUTS = Array.from({ length: 9 }, (_, index) => [
+    DASH_TO_DOCK_SCHEMA,
+    `app-hotkey-${index + 1}`,
+    `<Super>F${index + 1}`,
+    `Dock item ${index + 1}`,
+]);
+
+const DOCK_FUNCTION_KEY_CONFLICTS = [
+    ['org.gnome.settings-daemon.plugins.media-keys', 'help', () => GLib.Variant.new_strv(['']),
+        "GNOME's help shortcut gives up Cmd+F1"],
+];
+
+// Schemas that live inside another extension rather than the system set.
+const EXTENSION_SCHEMA_OWNERS = {
+    [DASH_TO_DOCK_SCHEMA]: DASH_TO_DOCK_UUID,
+};
 const BUTTON_LAYOUT_LEFT = 'close,minimize,maximize:appmenu';
 const BUTTON_LAYOUT_RIGHT = 'appmenu:minimize,maximize,close';
 
@@ -81,36 +136,53 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         window.add(this._buildMenusPage(settings));
         window.add(this._buildCustomMenuPage(settings));
         window.add(this._buildDockPage());
+        window.add(this._buildKeyboardPage());
         window.add(this._buildAboutPage());
 
         window.set_default_size(680, 780);
     }
 
-    // Dash to Dock keeps its schema inside its own extension directory, so it
-    // is not in the default lookup path and cannot be opened by schema id.
-    _dashToDockSettings() {
-        const dataDirs = [GLib.get_user_data_dir(), ...GLib.get_system_data_dirs()];
+    // Other extensions keep their schemas inside their own directories, where
+    // the default source cannot see them, so fall back to searching those.
+    // Returns null when the schema is not installed at all.
+    _settingsForSchema(schemaId) {
+        this._schemaCache ??= new Map();
+        if (this._schemaCache.has(schemaId))
+            return this._schemaCache.get(schemaId);
 
-        for (const dataDir of dataDirs) {
-            const schemaDir = GLib.build_filenamev([
-                dataDir, 'gnome-shell', 'extensions', DASH_TO_DOCK_UUID, 'schemas',
-            ]);
-            if (!GLib.file_test(schemaDir, GLib.FileTest.IS_DIR))
-                continue;
-
-            try {
-                const source = Gio.SettingsSchemaSource.new_from_directory(
-                    schemaDir, Gio.SettingsSchemaSource.get_default(), false);
-                const schema = source.lookup(DASH_TO_DOCK_SCHEMA, true);
-                if (schema)
-                    return new Gio.Settings({ settings_schema: schema });
-            } catch (e) {
-                // Unreadable or stale schema directory; try the next one.
+        let settings = null;
+        const extensionUuid = EXTENSION_SCHEMA_OWNERS[schemaId];
+        const schema = Gio.SettingsSchemaSource.get_default()?.lookup(schemaId, true);
+        if (schema) {
+            settings = new Gio.Settings({ settings_schema: schema });
+        } else if (extensionUuid) {
+            const dataDirs = [GLib.get_user_data_dir(), ...GLib.get_system_data_dirs()];
+            for (const dataDir of dataDirs) {
+                const schemaDir = GLib.build_filenamev([
+                    dataDir, 'gnome-shell', 'extensions', extensionUuid, 'schemas',
+                ]);
+                if (!GLib.file_test(schemaDir, GLib.FileTest.IS_DIR))
+                    continue;
+                try {
+                    const source = Gio.SettingsSchemaSource.new_from_directory(
+                        schemaDir, Gio.SettingsSchemaSource.get_default(), false);
+                    const found = source.lookup(schemaId, true);
+                    if (found) {
+                        settings = new Gio.Settings({ settings_schema: found });
+                        break;
+                    }
+                } catch (e) {
+                    // Unreadable or stale schema directory; try the next one.
+                }
             }
         }
 
-        const schema = Gio.SettingsSchemaSource.get_default()?.lookup(DASH_TO_DOCK_SCHEMA, true);
-        return schema ? new Gio.Settings({ settings_schema: schema }) : null;
+        this._schemaCache.set(schemaId, settings);
+        return settings;
+    }
+
+    _dashToDockSettings() {
+        return this._settingsForSchema(DASH_TO_DOCK_SCHEMA);
     }
 
     _buildDockPage() {
@@ -200,6 +272,159 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         this._buildDockDisplayGroup(page, dock);
 
         return page;
+    }
+
+    _buildKeyboardPage() {
+        const page = new Adw.PreferencesPage({
+            title: 'Keyboard',
+            icon_name: 'input-keyboard-symbolic',
+        });
+
+        const keyGroup = new Adw.PreferencesGroup();
+        page.add(keyGroup);
+        const keyNote = new Adw.ActionRow({
+            title: 'Cmd means Command ⌘',
+            subtitle: 'On an Apple keyboard that key already acts as Super, so these shortcuts ' +
+                'are the real macOS ones. On a PC keyboard it is the Super or Windows key.',
+        });
+        keyNote.set_subtitle_lines(0);
+        keyGroup.add(keyNote);
+
+        const shotGroup = new Adw.PreferencesGroup({
+            title: 'Screenshots',
+            description: 'GNOME saves shots to ~/Pictures/Screenshots. Print keeps working either way',
+        });
+        page.add(shotGroup);
+        this._addShortcutSetRow(shotGroup, {
+            title: 'macOS Screenshot Shortcuts',
+            subtitle: 'Cmd+Shift+3, Cmd+Shift+4 and Cmd+Shift+5',
+            shortcuts: MACOS_SCREENSHOT_SHORTCUTS,
+            conflicts: MACOS_SCREENSHOT_CONFLICTS,
+        });
+
+        const windowGroup = new Adw.PreferencesGroup({ title: 'Windows' });
+        page.add(windowGroup);
+        this._addShortcutSetRow(windowGroup, {
+            title: 'macOS Window Shortcuts',
+            subtitle: 'Close, minimize, full screen, lock and the overview',
+            shortcuts: MACOS_WINDOW_SHORTCUTS,
+            conflicts: MACOS_WINDOW_CONFLICTS,
+        });
+
+        if (this._dashToDockSettings()) {
+            const dockGroup = new Adw.PreferencesGroup({
+                title: 'Dock',
+                description: 'Where the dock shortcuts go once Cmd+number is used for screenshots',
+            });
+            page.add(dockGroup);
+            this._addShortcutSetRow(dockGroup, {
+                title: 'Launch Dock Items with Cmd+F1…F9',
+                subtitle: 'On an Apple keyboard these are fn+F1 to fn+F9',
+                shortcuts: DOCK_FUNCTION_KEY_SHORTCUTS,
+                conflicts: DOCK_FUNCTION_KEY_CONFLICTS,
+                rows: [{
+                    title: 'Cmd+F1 … Cmd+F9',
+                    subtitle: 'Activates the first nine items in the dock',
+                }],
+            });
+        }
+
+        const layoutGroup = new Adw.PreferencesGroup({ title: 'Layout' });
+        page.add(layoutGroup);
+
+        const input = new Gio.Settings({ schema_id: INPUT_SOURCES_SCHEMA });
+        const swapRow = new Adw.SwitchRow({
+            title: 'Swap Alt and Cmd',
+            subtitle: 'For PC keyboards, so the key beside the space bar behaves like Cmd',
+            active: input.get_strv('xkb-options').includes(SWAP_ALT_CMD_OPTION),
+        });
+        layoutGroup.add(swapRow);
+        swapRow.connect('notify::active', () => {
+            const options = input.get_strv('xkb-options');
+            const has = options.includes(SWAP_ALT_CMD_OPTION);
+            if (swapRow.active && !has)
+                input.set_strv('xkb-options', [...options, SWAP_ALT_CMD_OPTION]);
+            else if (!swapRow.active && has)
+                input.set_strv('xkb-options', options.filter(o => o !== SWAP_ALT_CMD_OPTION));
+        });
+
+        const noteGroup = new Adw.PreferencesGroup();
+        page.add(noteGroup);
+        const note = new Adw.ActionRow({
+            title: 'Shortcuts inside applications',
+            subtitle: 'Cmd+C, Cmd+V and Cmd+Q within an app are sent by the app itself, not the ' +
+                'desktop, so they cannot be rebound from here. Matching those needs a key ' +
+                'remapper such as keyd.',
+        });
+        note.set_subtitle_lines(0);
+        noteGroup.add(note);
+
+        return page;
+    }
+
+    // One switch drives a whole set of accelerators. Each is appended to
+    // GNOME's existing list and removed again on the way out, so a user's own
+    // bindings for the same action are never disturbed. Conflicting grabs from
+    // other extensions are stood down while the set is on.
+    _addShortcutSetRow(group, { title, subtitle, shortcuts, conflicts = [], rows = null }) {
+        const expander = new Adw.ExpanderRow({ title, subtitle, show_enable_switch: true });
+        group.add(expander);
+
+        const isApplied = () => shortcuts.every(([schemaId, key, accel]) =>
+            this._settingsForSchema(schemaId)?.get_strv(key).includes(accel));
+
+        const detailRows = rows ?? shortcuts.map(([, , accel, description]) => ({
+            title: this._describeAccelerator(accel),
+            subtitle: description,
+        }));
+        for (const row of detailRows)
+            expander.add_row(new Adw.ActionRow(row));
+
+        const liveConflicts = conflicts.filter(
+            ([schemaId]) => this._settingsForSchema(schemaId) !== null);
+        for (const [, , , description] of liveConflicts) {
+            expander.add_row(new Adw.ActionRow({
+                title: 'Also changes',
+                subtitle: description,
+            }));
+        }
+
+        expander.set_enable_expansion(isApplied());
+        expander.connect('notify::enable-expansion', () => {
+            const wanted = expander.enable_expansion;
+
+            for (const [schemaId, key, accel] of shortcuts) {
+                const settings = this._settingsForSchema(schemaId);
+                if (!settings)
+                    continue;
+                const current = settings.get_strv(key);
+                const has = current.includes(accel);
+                if (wanted && !has)
+                    settings.set_strv(key, [...current, accel]);
+                else if (!wanted && has)
+                    settings.set_strv(key, current.filter(existing => existing !== accel));
+            }
+
+            for (const [schemaId, key, valueWhenApplied] of liveConflicts) {
+                const settings = this._settingsForSchema(schemaId);
+                if (wanted)
+                    settings.set_value(key, valueWhenApplied());
+                else
+                    settings.reset(key);
+            }
+        });
+    }
+
+    // Label accelerators the way the keys are printed on an Apple keyboard,
+    // since Super is Command there and that is who these are aimed at.
+    _describeAccelerator(accel) {
+        return accel
+            .replace(/<Super>/g, 'Cmd+')
+            .replace(/<Control>|<Ctrl>/g, 'Ctrl+')
+            .replace(/<Shift>/g, 'Shift+')
+            .replace(/<Alt>/g, 'Option+')
+            .replace(/\bUp\b/g, '↑')
+            .replace(/\bDown\b/g, '↓');
     }
 
     _currentDockVisibility(dock) {

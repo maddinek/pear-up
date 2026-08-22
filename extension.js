@@ -36,6 +36,7 @@ export default class GlobalMenuExtension extends Extension {
         this._clockMoved = false;
         this._clockSessionBackup = null;
         this._powerHidden = null;
+        this._powerVisibleId = 0;
         this._hiddenSpacers = [];
         this._spotlightMoved = null;
         this._minimizedWindow = null;
@@ -241,26 +242,37 @@ export default class GlobalMenuExtension extends Extension {
         console.log(`[pear-up] Clock moved to right. panel.right=${layout.right.join(',')}`);
     }
 
+    // The power glyph is the indicator icon inside the Quick Settings system
+    // item. Hiding the whole item would take the battery readout with it, and
+    // collapsing it in CSS only stops it reserving space — it still paints,
+    // over the clock. So hide that one actor, and keep it hidden: GNOME re-runs
+    // its own visibility sync whenever the battery or recording state changes.
     _hidePowerButton() {
         if (this._powerHidden)
             return;
 
-        let qs = Main.panel.statusArea.quickSettings;
-        let power = qs?._system || qs?._indicators?._system;
-        if (!power && qs?._indicators?.get_children) {
-            let children = qs._indicators.get_children();
-            if (children.length)
-                power = children[children.length - 1];
-        }
-        if (!power)
+        let system = Main.panel.statusArea.quickSettings?._system;
+        let indicator = system?._indicator ?? system;
+        if (!indicator?.hide)
             return;
-        power.hide();
-        this._powerHidden = power;
+
+        indicator.hide();
+        this._powerVisibleId = indicator.connect('notify::visible', () => {
+            if (indicator.visible)
+                indicator.hide();
+        });
+        this._powerHidden = indicator;
     }
 
     _showPowerButton() {
-        if (this._powerHidden)
-            this._powerHidden.show();
+        if (!this._powerHidden)
+            return;
+
+        if (this._powerVisibleId) {
+            this._powerHidden.disconnect(this._powerVisibleId);
+            this._powerVisibleId = 0;
+        }
+        this._powerHidden.show();
         this._powerHidden = null;
     }
 
