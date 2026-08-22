@@ -96,6 +96,29 @@
       <description>Lower values pack the icons and clock more tightly. Zero leaves no space at all between them.</description>
     </key>
 
+    <!-- The panel button is this extension's own, so it works with no search
+         extension installed at all. What it opens is left open: GNOME's search
+         needs nothing, and anything else people already use can be named. -->
+    <key name="show-search-icon" type="b">
+      <default>false</default>
+      <summary>Show a search icon on the right of the bar</summary>
+      <description>Sits where macOS keeps Spotlight, to the left of the status icons.</description>
+    </key>
+    <key name="search-opens" type="s">
+      <choices>
+        <choice value="overview"/>
+        <choice value="search-light"/>
+        <choice value="command"/>
+      </choices>
+      <default>"overview"</default>
+      <summary>What the search icon opens</summary>
+      <description>GNOME's own search, the Search Light extension, or a command of your own. Falls back to GNOME's search whenever the choice is unavailable.</description>
+    </key>
+    <key name="search-command" type="s">
+      <default>""</default>
+      <summary>Command the search icon runs when set to a custom command</summary>
+    </key>
+
     <key name="show-system-settings" type="b"><default>true</default><summary>Show System Settings item in System Menu</summary></key>
     <key name="show-app-grid" type="b"><default>true</default><summary>Show App Grid item in System Menu</summary></key>
     <key name="show-software-center" type="b"><default>true</default><summary>Show Software Center item</summary></key>

@@ -32,6 +32,12 @@ Quick Settings as a Spotlight stand-in. The gaps between the search icon, the co
 and the clock are adjustable, as is the padding each item reserves around itself — the first spreads
 the groups out, the second packs them closer than GNOME's own spacing allows.
 
+**A search icon of its own.** Optional, and it sits where macOS keeps Spotlight. What it opens is a
+setting: GNOME's own search, which needs nothing installed;
+[Search Light](https://extensions.gnome.org/extension/5489/search-light/), if you have it; or any
+launcher you name, such as `ulauncher` or `rofi`. Whatever the choice, it falls back to GNOME's
+search when that thing is unavailable, so the button is never a dead end.
+
 **Window buttons on the left.** Close, minimize and maximize in macOS order.
 
 **Dock control.** [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) is

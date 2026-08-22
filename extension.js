@@ -3,6 +3,7 @@ import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { MenuManager } from './menuManager.js';
 import { SystemMenuButton } from './systemMenu.js';
+import { SearchButton } from './searchButton.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
 // separate toggle so nothing about the stock top bar is changed silently.
@@ -64,6 +65,7 @@ export default class GlobalMenuExtension extends Extension {
         this._settings = null;
         this._settingsChangedId = null;
         this._logoButton = null;
+        this._searchButton = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -124,6 +126,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._syncOverviewButton();
             else if (key === 'show-logo-menu')
                 this._syncLogoButton();
+            else if (key === 'show-search-icon')
+                this._syncSearchButton();
             else if (PANEL_TWEAK_KEYS.includes(key))
                 this._syncPanelTweaks();
             else if (MENU_CONTENT_KEYS.includes(key))
@@ -154,6 +158,7 @@ export default class GlobalMenuExtension extends Extension {
         this._syncPanelTweaks();
 
         this._syncLogoButton();
+        this._syncSearchButton();
         this._syncOverviewButton();
         this._syncMenuVisibility();
     }
@@ -202,7 +207,12 @@ export default class GlobalMenuExtension extends Extension {
                 this._logoButton.destroy();
                 this._logoButton = null;
             }
+            if (this._searchButton) {
+                this._searchButton.destroy();
+                this._searchButton = null;
+            }
             this._syncLogoButton();
+            this._syncSearchButton();
             this._syncMenuVisibility();
         }
     }
@@ -286,13 +296,26 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     _indicatorsBox(button) {
-        for (const child of [button, ...button.get_children()]) {
-            const box = child.get_children?.().find(actor =>
+        for (const child of [button, ...this._childrenOf(button)]) {
+            const box = this._childrenOf(child).find(actor =>
                 actor.has_style_class_name?.('panel-status-indicators-box'));
             if (box)
                 return box;
         }
         return null;
+    }
+
+    // A session mode change during logout runs a resync while the shell is
+    // already disposing the panel, and touching an actor it has finished with
+    // throws "has been already disposed" — which would abandon the rest of the
+    // step. There is no way to ask an actor whether it is still alive, so the
+    // question gets asked by trying.
+    _childrenOf(actor) {
+        try {
+            return actor?.get_children?.() ?? [];
+        } catch (e) {
+            return [];
+        }
     }
 
     _clearIconPadding() {
@@ -321,11 +344,22 @@ export default class GlobalMenuExtension extends Extension {
     // like the rest instead of standing out. The box holds each button inside a
     // container, but not every child is one — hence the check rather than a cast.
     _statusAreaButtons() {
-        const children = Main.panel._rightBox?.get_children() ?? [];
-        const isButton = actor => !!actor?.has_style_class_name?.('panel-button');
+        const isButton = actor => {
+            try {
+                return !!actor?.has_style_class_name?.('panel-button');
+            } catch (e) {
+                return false;
+            }
+        };
 
-        return children
-            .map(child => (isButton(child) ? child : child.get_first_child()))
+        return this._childrenOf(Main.panel._rightBox)
+            .map(child => {
+                try {
+                    return isButton(child) ? child : child.get_first_child();
+                } catch (e) {
+                    return null;
+                }
+            })
             .filter(isButton);
     }
 
@@ -413,15 +447,22 @@ export default class GlobalMenuExtension extends Extension {
             return null;
 
         const looksLikeSearch = actor => {
-            const names = [actor.name, actor.style_class, ...(actor.get_style_class_name?.() ?? '').split(' ')];
-            return names.some(name => typeof name === 'string' && name.toLowerCase().includes('search'));
+            try {
+                const names = [actor.name, actor.style_class, ...(actor.get_style_class_name?.() ?? '').split(' ')];
+                return names.some(name => typeof name === 'string' && name.toLowerCase().includes('search'));
+            } catch (e) {
+                // Disposed while the shell tears the panel down.
+                return false;
+            }
         };
 
-        for (const child of rightBox.get_children()) {
+        for (const child of this._childrenOf(rightBox)) {
+            if (child === this._searchButton?.container)
+                continue;
             if (looksLikeSearch(child))
                 return child;
             // Search Light's button is wrapped, so check one level in too.
-            const inner = child.get_first_child?.();
+            const inner = this._childrenOf(child)[0];
             if (inner && looksLikeSearch(inner))
                 return child;
         }
@@ -622,6 +663,26 @@ export default class GlobalMenuExtension extends Extension {
         }
     }
 
+    // Index 0 of the right box puts it left of the status icons, which is where
+    // macOS keeps Spotlight and where Search Light puts its own button.
+    _syncSearchButton() {
+        if (!this._settings)
+            return;
+
+        let shouldShow = this._settings.get_boolean('show-search-icon');
+
+        if (shouldShow && !this._searchButton) {
+            let existing = Main.panel.statusArea['pearup-search'];
+            if (existing)
+                existing.destroy();
+            this._searchButton = new SearchButton(this._settings);
+            Main.panel.addToStatusArea('pearup-search', this._searchButton, 0, 'right');
+        } else if (!shouldShow && this._searchButton) {
+            this._searchButton.destroy();
+            this._searchButton = null;
+        }
+    }
+
     // Driven by what is actually on screen rather than by a remembered flag,
     // because a panel rebuild shows every indicator again and a flag-based
     // check would decide there was nothing to do.
@@ -733,6 +794,11 @@ export default class GlobalMenuExtension extends Extension {
         if (this._logoButton) {
             this._logoButton.destroy();
             this._logoButton = null;
+        }
+
+        if (this._searchButton) {
+            this._searchButton.destroy();
+            this._searchButton = null;
         }
 
         // Each step is guarded separately: these touch actors this extension

@@ -26,6 +26,7 @@
       "InputDeviceType",
       "ActorAlign",
       "Orientation",
+      "EVENT_STOP",
       "get_default_backend"
     ],
     "Meta": [
@@ -93,7 +94,11 @@
     "activateLogout",
     "openPreferences",
     "connectObject",
-    "disconnectObject"
+    "disconnectObject",
+    "searchEntry",
+    "extensionManager",
+    "stateObj",
+    "dontCreateMenu"
   ],
 
   "absent": {

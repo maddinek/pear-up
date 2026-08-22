@@ -78,6 +78,14 @@ const DOCK_POSITIONS = [
     ['TOP', 'Top'],
 ];
 
+// Whatever the icon is pointed at, it falls back to GNOME's own search when
+// that thing is missing, so the button is never a dead end.
+const SEARCH_TARGETS = [
+    ['overview', 'GNOME Search', 'The shell\u2019s own search — needs nothing installed'],
+    ['search-light', 'Search Light', 'The Search Light extension, when it is installed and enabled'],
+    ['command', 'Custom Command', 'A launcher of your own, such as ulauncher or rofi'],
+];
+
 // Dash to Dock spreads visibility across three booleans plus a mode enum.
 // Collapse the combinations people actually want into single choices.
 const DOCK_VISIBILITY = [
@@ -562,6 +570,48 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         });
     }
 
+    _buildSearchGroup(page, settings) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Search',
+            description: 'A search icon of this extension\u2019s own, where macOS keeps Spotlight',
+        });
+        page.add(group);
+
+        const showRow = new Adw.SwitchRow({ title: 'Show Search Icon' });
+        group.add(showRow);
+        settings.bind('show-search-icon', showRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const opensRow = new Adw.ComboRow({
+            title: 'Opens',
+            model: Gtk.StringList.new(SEARCH_TARGETS.map(([, label]) => label)),
+            selected: Math.max(0, SEARCH_TARGETS.findIndex(
+                ([value]) => value === settings.get_string('search-opens'))),
+        });
+        group.add(opensRow);
+
+        const commandRow = new Adw.EntryRow({ title: 'Command' });
+        commandRow.set_text(settings.get_string('search-command'));
+        this._onTextSettled(commandRow,
+            () => settings.set_string('search-command', commandRow.get_text()));
+        group.add(commandRow);
+
+        const sync = () => {
+            const [value, , subtitle] = SEARCH_TARGETS[opensRow.selected];
+            opensRow.set_subtitle(subtitle);
+            // Only worth showing for the one choice that needs it.
+            commandRow.set_visible(value === 'command');
+            opensRow.set_sensitive(showRow.active);
+            commandRow.set_sensitive(showRow.active);
+        };
+        sync();
+
+        opensRow.connect('notify::selected', () => {
+            settings.set_string('search-opens', SEARCH_TARGETS[opensRow.selected][0]);
+            sync();
+        });
+        showRow.connect('notify::active', sync);
+    }
+
     // A labelled slider in a row, matching the System Menu icon size control.
     _addScaleRow(group, title, { lower, upper, marks, value, unit = '', onChange }) {
         const scale = new Gtk.Scale({
@@ -674,6 +724,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         paddingRow.row.set_subtitle('Lower to pack the icons and clock closer together; zero leaves them touching');
         settings.connect('changed::status-icon-padding',
             () => paddingRow.setValue(settings.get_int('status-icon-padding')));
+
+        this._buildSearchGroup(page, settings);
 
         const logoGroup = new Adw.PreferencesGroup({
             title: 'System Menu',

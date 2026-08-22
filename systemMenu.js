@@ -7,15 +7,7 @@ import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
-
-function spawnCommandLine(commandLine) {
-    try {
-        let [, argv] = GLib.shell_parse_argv(commandLine);
-        GLib.spawn_async(null, argv, null, GLib.SpawnFlags.SEARCH_PATH, null);
-    } catch (e) {
-        console.error(`[pear-up] Failed to launch '${commandLine}': ${e}`);
-    }
-}
+import { spawnCommandLine } from './util.js';
 
 // Returns the first command (configured choice first, then fallbacks) whose
 // executable actually exists on this system, or null if none do.
