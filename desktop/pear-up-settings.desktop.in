@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Pear Up Settings
+GenericName=Desktop Settings
+Comment=Configure the menu bar, system menu, dock and keyboard shortcuts
+Exec=gnome-extensions prefs @UUID@
+Icon=@ICON@
+Terminal=false
+Categories=GNOME;GTK;Settings;DesktopSettings;
+Keywords=pear;pear up;macos;menu bar;global menu;dock;shortcuts;appearance;
+StartupNotify=true
+X-GNOME-UsesNotifications=false

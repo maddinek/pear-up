@@ -66,7 +66,12 @@ keyboard shortcuts.
 ## Settings
 
 Everything lives in one window — the panel layout, which menus appear, the dock, and your custom
-menus.
+menus. Open it by pressing <kbd>Super</kbd> and typing "pear", from the app grid, or through the
+Extensions app.
+
+These settings cannot appear in GNOME Settings beside Appearance, which is where they arguably
+belong: `gnome-control-center` compiles every panel into its binary and has no plugin interface, so
+no extension can add one. Installing puts a **Pear Up Settings** application entry in its place.
 
 | General | Menus |
 | --- | --- |

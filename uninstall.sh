@@ -20,4 +20,8 @@ echo "--------------------------------------------------"
 gnome-extensions disable "$EXTENSION_UUID" 2>/dev/null || true
 rm -rf "$EXTENSION_DIR"
 
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+rm -f "$APPS_DIR/pear-up-settings.desktop"
+update-desktop-database "$APPS_DIR" 2>/dev/null || true
+
 echo "✅ Removed. Log out and back in to unload it from the running session."

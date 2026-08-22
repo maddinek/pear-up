@@ -36,6 +36,19 @@ cp "$SOURCE_DIR/uninstall.sh" "$SOURCE_DIR/logs.sh" "$EXTENSION_DIR/"
 echo "⚙️ Compiling GSettings schemas..."
 glib-compile-schemas "$EXTENSION_DIR/schemas/"
 
+# GNOME Settings cannot be extended — every panel in its sidebar is compiled
+# into gnome-control-center, which has no plugin interface. An application entry
+# is the closest thing available: it puts these preferences in the app grid and
+# makes them turn up when you search for "pear".
+echo "🔎 Installing the settings launcher..."
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+mkdir -p "$APPS_DIR"
+sed -e "s|@UUID@|$EXTENSION_UUID|g" \
+    -e "s|@ICON@|$EXTENSION_DIR/icons/distro-pear-color.svg|g" \
+    "$SOURCE_DIR/desktop/pear-up-settings.desktop.in" \
+    > "$APPS_DIR/pear-up-settings.desktop"
+update-desktop-database "$APPS_DIR" 2>/dev/null || true
+
 echo "--------------------------------------------------"
 echo "✅ Installed. Log out and back in, then enable Pear Up."
 echo "--------------------------------------------------"
