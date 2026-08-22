@@ -21,7 +21,7 @@ else
     SSH_OPTS+=(-i "$SSH_KEY" -p "$SSH_PORT")
 fi
 
-REMOTE_DIR="${BLUEFIN_REMOTE_DIR:-~/global-menu-for-gnome}"
+REMOTE_DIR="${BLUEFIN_REMOTE_DIR:-~/pear-up}"
 EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_DIR/metadata.json")"
 
 echo "==> Syncing repo to ${SSH_TARGET}:${REMOTE_DIR}"
