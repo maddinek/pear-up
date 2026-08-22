@@ -21,7 +21,8 @@ else
     SSH_OPTS+=(-i "$SSH_KEY" -p "$SSH_PORT")
 fi
 
-REMOTE_DIR="${BLUEFIN_REMOTE_DIR:-~/pear-up}"
+# A staging copy, not somewhere to work, so keep it out of $HOME.
+REMOTE_DIR="${BLUEFIN_REMOTE_DIR:-~/.cache/pear-up-deploy}"
 EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_DIR/metadata.json")"
 
 echo "==> Syncing repo to ${SSH_TARGET}:${REMOTE_DIR}"
