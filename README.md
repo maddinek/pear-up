@@ -6,6 +6,8 @@ left, and one settings window that also drives your dock.
 
 > Not affiliated with Apple. The pear is the joke.
 
+![The focused app's menus in the top bar](assets/screenshots/global-menu.png)
+
 ## What it does
 
 **A global menu bar.** The focused application's name and its File, Edit, View, Go, Window and Help
@@ -16,6 +18,8 @@ When no window is in front, the bar clears itself.
 Activities, the App Grid, your software centre, system monitor, terminal and extensions manager,
 Force Quit, and the power actions — each one optional. The icon can be any bundled distro logo, an
 Apple-style glyph, or your own image.
+
+![The pear system menu open](assets/screenshots/system-menu.png)
 
 **A macOS-shaped top bar.** The clock moves to the far right with the status icons to its left, the
 power glyph is hidden, GNOME's usually-inactive indicators stop reserving space, and a
@@ -29,8 +33,21 @@ configured from the same window: which screen edge it sits on, icon size, how mu
 use, whether it is always visible, hides when a window is in the way, or only appears when you point
 at the edge — and which display it belongs to.
 
+| Right edge, always visible | Bottom edge, larger icons |
+| --- | --- |
+| ![Dock on the right edge](assets/screenshots/dock-right.jpg) | ![Dock along the bottom](assets/screenshots/dock-bottom.jpg) |
+
 **Your own menus.** Add any number of extra top-level menus whose items run shell commands or send
 keyboard shortcuts.
+
+## Settings
+
+Everything lives in one window — the panel layout, which menus appear, the dock, and your custom
+menus.
+
+| General | Menus | Dock |
+| --- | --- | --- |
+| ![General settings](assets/screenshots/settings-general.png) | ![Menu settings](assets/screenshots/settings-menus.png) | ![Dock settings](assets/screenshots/settings-dock.png) |
 
 ## Requirements
 

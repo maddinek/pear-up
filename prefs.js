@@ -798,8 +798,11 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         const group = new Adw.PreferencesGroup({
             title: 'Custom Menus',
+            // Adw group descriptions are parsed as Pango markup, so the angle
+            // brackets in an accelerator have to be escaped.
             description: 'Add any number of custom top-level menus, each running shell commands ' +
-                'or sending keyboard shortcuts (GTK accelerator syntax, e.g. <Control><Alt>t)',
+                'or sending keyboard shortcuts (GTK accelerator syntax, e.g. ' +
+                '&lt;Control&gt;&lt;Alt&gt;t)',
         });
         page.add(group);
 
