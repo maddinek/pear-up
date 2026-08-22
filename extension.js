@@ -18,6 +18,22 @@ const PANEL_TWEAK_KEYS = [
 // Roughly ten seconds of waiting for Quick Settings to finish building.
 const POWER_RETRY_LIMIT = 20;
 
+// Only these change what the menu bar contains. Anything else — an icon, a
+// command string, a System Menu item — is handled where it is used, so the bar
+// is not torn down and rebuilt for it.
+const MENU_CONTENT_KEYS = [
+    'show-indicator',
+    'desktop-app-name',
+    'menu-app-enabled',
+    'menu-file-enabled',
+    'menu-edit-enabled',
+    'menu-view-enabled',
+    'menu-go-enabled',
+    'menu-window-enabled',
+    'menu-help-enabled',
+    'custom-menus',
+];
+
 const SPACER_ROLES = [
     'screenRecording',
     'screenSharing',
@@ -86,22 +102,15 @@ export default class GlobalMenuExtension extends Extension {
 
         this._menuManager = new MenuManager(this.metadata.uuid, this._settings);
 
-        const ICON_ONLY_KEYS = ['logo-icon-name', 'logo-custom-icon-path', 'logo-distro-icon', 'logo-distro-icon-symbolic', 'logo-icon-size'];
-
         this._settingsChangedId = this._settings.connect('changed', (_settings, key) => {
-            if (key === 'hide-overview-button') {
+            if (key === 'hide-overview-button')
                 this._syncOverviewButton();
-            } else if (key === 'show-logo-menu') {
+            else if (key === 'show-logo-menu')
                 this._syncLogoButton();
-            } else if (PANEL_TWEAK_KEYS.includes(key)) {
+            else if (PANEL_TWEAK_KEYS.includes(key))
                 this._syncPanelTweaks();
-            } else if (!ICON_ONLY_KEYS.includes(key)) {
-                // Any other key (menu toggles, custom menus, indicator,
-                // logo-menu item toggles) affects what the bar should show
-                // right now. Icon-only keys are handled internally by
-                // SystemMenuButton itself.
+            else if (MENU_CONTENT_KEYS.includes(key))
                 this._syncMenuVisibility();
-            }
         });
 
         global.display.connectObject('notify::focus-window', () => {

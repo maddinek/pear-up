@@ -26,11 +26,16 @@ REMOTE_DIR="${BLUEFIN_REMOTE_DIR:-~/.cache/pear-up-deploy}"
 EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_DIR/metadata.json")"
 
 echo "==> Syncing repo to ${SSH_TARGET}:${REMOTE_DIR}"
+# Build the ssh command with each option quoted, so a key path containing a
+# space survives rsync re-splitting it.
+RSYNC_SSH="$(printf '%q ' ssh "${SSH_OPTS[@]}")"
+
 rsync -avz --delete \
   --exclude '.git' \
-  --exclude 'vm-screenshot*.png' \
+  --exclude 'assets/screenshots' \
   --exclude '*.ppm' \
-  -e "ssh ${SSH_OPTS[*]}" \
+  --exclude '*.png' \
+  -e "$RSYNC_SSH" \
   "$REPO_DIR/" "${SSH_TARGET}:${REMOTE_DIR}/"
 
 echo "==> Installing extension on VM"

@@ -93,11 +93,12 @@ const DOCK_VISIBILITY = [
     {
         title: 'Hide When a Window Is in the Way',
         subtitle: 'Visible on an empty desktop, hidden as soon as a window overlaps it',
-        apply: dock => {
+        apply: (dock, has) => {
             dock.set_boolean('dock-fixed', false);
             dock.set_boolean('autohide', true);
             dock.set_boolean('intellihide', true);
-            dock.set_string('intellihide-mode', 'ALL_WINDOWS');
+            if (has('intellihide-mode'))
+                dock.set_string('intellihide-mode', 'ALL_WINDOWS');
         },
     },
     {
@@ -203,75 +204,122 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             return page;
         }
 
+        const has = key => this._schemaHasKey(dock, key);
+
         const layoutGroup = new Adw.PreferencesGroup({
             title: 'Placement',
             description: 'These settings belong to Dash to Dock and apply immediately',
         });
         page.add(layoutGroup);
 
-        const positionRow = new Adw.ComboRow({
-            title: 'Screen Edge',
-            model: Gtk.StringList.new(DOCK_POSITIONS.map(([, label]) => label)),
-            selected: Math.max(0, DOCK_POSITIONS.findIndex(
-                ([value]) => value === dock.get_string('dock-position'))),
-        });
-        layoutGroup.add(positionRow);
-        positionRow.connect('notify::selected', () => {
-            dock.set_string('dock-position', DOCK_POSITIONS[positionRow.selected][0]);
-        });
+        if (has('dock-position')) {
+            const positionRow = new Adw.ComboRow({
+                title: 'Screen Edge',
+                model: Gtk.StringList.new(DOCK_POSITIONS.map(([, label]) => label)),
+                selected: Math.max(0, DOCK_POSITIONS.findIndex(
+                    ([value]) => value === dock.get_string('dock-position'))),
+            });
+            layoutGroup.add(positionRow);
+            positionRow.connect('notify::selected', () => {
+                dock.set_string('dock-position', DOCK_POSITIONS[positionRow.selected][0]);
+            });
+        }
 
-        const iconSizeRow = this._addScaleRow(layoutGroup, 'Icon Size', {
-            lower: 16, upper: 64, marks: [16, 24, 32, 48, 64],
-            value: dock.get_int('dash-max-icon-size'),
-            onChange: value => dock.set_int('dash-max-icon-size', value),
-        });
-        dock.connect('changed::dash-max-icon-size',
-            () => iconSizeRow.setValue(dock.get_int('dash-max-icon-size')));
+        if (has('dash-max-icon-size')) {
+            const iconSizeRow = this._addScaleRow(layoutGroup, 'Icon Size', {
+                lower: 16, upper: 64, marks: [16, 24, 32, 48, 64],
+                value: dock.get_int('dash-max-icon-size'),
+                onChange: value => dock.set_int('dash-max-icon-size', value),
+            });
+            dock.connect('changed::dash-max-icon-size',
+                () => iconSizeRow.setValue(dock.get_int('dash-max-icon-size')));
+        }
 
-        const spanRow = new Adw.SwitchRow({
-            title: 'Span the Whole Edge',
-            subtitle: 'Stretch the dock across the full width or height of the display',
-            active: dock.get_boolean('extend-height'),
-        });
-        layoutGroup.add(spanRow);
+        let spanRow = null;
+        if (has('extend-height')) {
+            spanRow = new Adw.SwitchRow({
+                title: 'Span the Whole Edge',
+                subtitle: 'Stretch the dock across the full width or height of the display',
+                active: dock.get_boolean('extend-height'),
+            });
+            layoutGroup.add(spanRow);
+            spanRow.connect('notify::active',
+                () => dock.set_boolean('extend-height', spanRow.active));
+        }
 
         // height-fraction is how much of the edge the dock may use. It only has
         // an effect while the dock is not stretched to the full edge.
-        const lengthRow = this._addScaleRow(layoutGroup, 'Maximum Length', {
-            lower: 20, upper: 100, marks: [20, 40, 60, 80, 100], unit: '%',
-            value: Math.round(dock.get_double('height-fraction') * 100),
-            onChange: value => dock.set_double('height-fraction', value / 100),
-        });
-        lengthRow.row.set_sensitive(!spanRow.active);
+        if (has('height-fraction')) {
+            const lengthRow = this._addScaleRow(layoutGroup, 'Maximum Length', {
+                lower: 20, upper: 100, marks: [20, 40, 60, 80, 100], unit: '%',
+                value: Math.round(dock.get_double('height-fraction') * 100),
+                onChange: value => dock.set_double('height-fraction', value / 100),
+            });
 
-        spanRow.connect('notify::active', () => {
-            dock.set_boolean('extend-height', spanRow.active);
-            lengthRow.row.set_sensitive(!spanRow.active);
-        });
+            const syncLengthSensitivity = () =>
+                lengthRow.row.set_sensitive(!spanRow?.active);
+            syncLengthSensitivity();
+            spanRow?.connect('notify::active', syncLengthSensitivity);
+        }
 
-        const visibilityGroup = new Adw.PreferencesGroup({ title: 'Visibility' });
-        page.add(visibilityGroup);
+        if (has('dock-fixed') && has('autohide') && has('intellihide')) {
+            const visibilityGroup = new Adw.PreferencesGroup({ title: 'Visibility' });
+            page.add(visibilityGroup);
 
-        const visibilityRow = new Adw.ComboRow({
-            title: 'When to Show the Dock',
-            model: Gtk.StringList.new(DOCK_VISIBILITY.map(mode => mode.title)),
-            selected: this._currentDockVisibility(dock),
-        });
-        visibilityGroup.add(visibilityRow);
+            const visibilityRow = new Adw.ComboRow({
+                title: 'When to Show the Dock',
+                model: Gtk.StringList.new(DOCK_VISIBILITY.map(mode => mode.title)),
+                selected: this._currentDockVisibility(dock),
+            });
+            visibilityGroup.add(visibilityRow);
 
-        const syncVisibilitySubtitle = () => {
-            visibilityRow.set_subtitle(DOCK_VISIBILITY[visibilityRow.selected].subtitle);
-        };
-        syncVisibilitySubtitle();
-
-        visibilityRow.connect('notify::selected', () => {
-            DOCK_VISIBILITY[visibilityRow.selected].apply(dock);
+            const syncVisibilitySubtitle = () => {
+                visibilityRow.set_subtitle(DOCK_VISIBILITY[visibilityRow.selected].subtitle);
+            };
             syncVisibilitySubtitle();
-        });
+
+            visibilityRow.connect('notify::selected', () => {
+                DOCK_VISIBILITY[visibilityRow.selected].apply(dock, has);
+                syncVisibilitySubtitle();
+            });
+        }
 
         this._buildDockDisplayGroup(page, dock);
 
         return page;
+    }
+
+    // Touching a key a schema does not define is a fatal GSettings error, not
+    // a catchable exception: it would take the whole preferences process down.
+    // Dash to Dock versions differ, so ask before reading or writing.
+    _schemaHasKey(settings, key) {
+        return settings?.settings_schema?.has_key(key) ?? false;
+    }
+
+    // Text entries fire on every keystroke, and several of these settings make
+    // the extension rebuild the whole menu bar — so writing per character makes
+    // the panel flicker and closes any open menu. Wait for a pause instead.
+    _onTextSettled(row, write) {
+        let pendingId = 0;
+
+        row.connect('notify::text', () => {
+            if (pendingId)
+                GLib.source_remove(pendingId);
+            pendingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+                pendingId = 0;
+                write();
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+
+        // A half-typed value must not be lost if the window closes first.
+        row.connect('destroy', () => {
+            if (pendingId) {
+                GLib.source_remove(pendingId);
+                pendingId = 0;
+                write();
+            }
+        });
     }
 
     _buildKeyboardPage() {
@@ -367,11 +415,25 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // bindings for the same action are never disturbed. Conflicting grabs from
     // other extensions are stood down while the set is on.
     _addShortcutSetRow(group, { title, subtitle, shortcuts, conflicts = [], rows = null }) {
+        // Bindings displaced by a set, kept so they can be handed back. Created
+        // here rather than in fillPreferencesWindow so a page built on its own
+        // still works.
+        this._displacedValues ??= new Map();
+
         const expander = new Adw.ExpanderRow({ title, subtitle, show_enable_switch: true });
         group.add(expander);
 
-        const isApplied = () => shortcuts.every(([schemaId, key, accel]) =>
-            this._settingsForSchema(schemaId)?.get_strv(key).includes(accel));
+        // Only the entries this system can actually take: a schema may be
+        // absent, or present without the key.
+        const usable = ([schemaId, key]) => {
+            const settings = this._settingsForSchema(schemaId);
+            return settings !== null && this._schemaHasKey(settings, key);
+        };
+        shortcuts = shortcuts.filter(usable);
+        conflicts = conflicts.filter(usable);
+
+        const isApplied = () => shortcuts.length > 0 && shortcuts.every(([schemaId, key, accel]) =>
+            this._settingsForSchema(schemaId).get_strv(key).includes(accel));
 
         const detailRows = rows ?? shortcuts.map(([, , accel, description]) => ({
             title: this._describeAccelerator(accel),
@@ -380,9 +442,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         for (const row of detailRows)
             expander.add_row(new Adw.ActionRow(row));
 
-        const liveConflicts = conflicts.filter(
-            ([schemaId]) => this._settingsForSchema(schemaId) !== null);
-        for (const [, , , description] of liveConflicts) {
+        for (const [, , , description] of conflicts) {
             expander.add_row(new Adw.ActionRow({
                 title: 'Also changes',
                 subtitle: description,
@@ -395,8 +455,6 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
             for (const [schemaId, key, accel] of shortcuts) {
                 const settings = this._settingsForSchema(schemaId);
-                if (!settings)
-                    continue;
                 const current = settings.get_strv(key);
                 const has = current.includes(accel);
                 if (wanted && !has)
@@ -405,12 +463,21 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                     settings.set_strv(key, current.filter(existing => existing !== accel));
             }
 
-            for (const [schemaId, key, valueWhenApplied] of liveConflicts) {
+            for (const [schemaId, key, valueWhenApplied] of conflicts) {
                 const settings = this._settingsForSchema(schemaId);
-                if (wanted)
+                if (wanted) {
+                    // Keep whatever was there so switching off restores the
+                    // user's own binding rather than the schema default.
+                    this._displacedValues.set(`${schemaId}:${key}`, settings.get_value(key));
                     settings.set_value(key, valueWhenApplied());
-                else
-                    settings.reset(key);
+                } else {
+                    const saved = this._displacedValues.get(`${schemaId}:${key}`);
+                    if (saved)
+                        settings.set_value(key, saved);
+                    else
+                        settings.reset(key);
+                    this._displacedValues.delete(`${schemaId}:${key}`);
+                }
             }
         });
     }
@@ -437,6 +504,11 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // so offer the connectors actually attached right now plus "primary".
     _buildDockDisplayGroup(page, dock) {
         const group = new Adw.PreferencesGroup({ title: 'Display' });
+
+        if (!this._schemaHasKey(dock, 'preferred-monitor-by-connector') ||
+            !this._schemaHasKey(dock, 'multi-monitor'))
+            return;
+
         page.add(group);
 
         const allRow = new Adw.SwitchRow({
@@ -459,7 +531,16 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         }
 
         const current = dock.get_string('preferred-monitor-by-connector');
-        const currentIndex = current === 'primary' ? 0 : connectors.indexOf(current) + 1;
+        let currentIndex = current === 'primary' ? 0 : connectors.indexOf(current) + 1;
+
+        // A connector that is stored but not attached right now would otherwise
+        // fall back to index 0 and read as "Primary Display", misreporting what
+        // is actually saved.
+        if (currentIndex === 0 && current !== 'primary') {
+            connectors.push(current);
+            labels.push(`${current} — not connected`);
+            currentIndex = connectors.length;
+        }
 
         const displayRow = new Adw.ComboRow({
             title: 'Place the Dock On',
@@ -535,7 +616,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         const desktopNameRow = new Adw.EntryRow({ title: 'File Manager / Desktop Name' });
         desktopNameRow.set_text(settings.get_string('desktop-app-name'));
-        desktopNameRow.connect('notify::text', () => settings.set_string('desktop-app-name', desktopNameRow.get_text() || 'Nautilus'));
+        this._onTextSettled(desktopNameRow,
+            () => settings.set_string('desktop-app-name', desktopNameRow.get_text() || 'Nautilus'));
         mainGroup.add(desktopNameRow);
 
         this._addWindowButtonsRow(mainGroup);
@@ -891,7 +973,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         const commandRow = new Adw.EntryRow({ title: `${title} Command` });
         commandRow.set_text(settings.get_string(commandKey));
-        commandRow.connect('notify::text', () => settings.set_string(commandKey, commandRow.get_text()));
+        this._onTextSettled(commandRow,
+            () => settings.set_string(commandKey, commandRow.get_text()));
         group.add(commandRow);
 
         if (presets.length > 0) {
@@ -961,8 +1044,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                     saveItems(current);
                 };
 
-                labelEntry.connect('notify::text', persist);
-                valueEntry.connect('notify::text', persist);
+                this._onTextSettled(labelEntry, persist);
+                this._onTextSettled(valueEntry, persist);
                 removeButton.connect('clicked', () => {
                     let current = loadItems();
                     current.splice(index, 1);
@@ -1076,11 +1159,12 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
                 let labelRow = new Adw.EntryRow({ title: 'Menu Label' });
                 labelRow.set_text(section.label || '');
-                labelRow.connect('notify::text', () => {
+                labelRow.connect('notify::text',
+                    () => expander.set_title(labelRow.get_text() || 'Untitled Menu'));
+                this._onTextSettled(labelRow, () => {
                     let current = loadSections();
                     current[sectionIndex].label = labelRow.get_text();
                     saveSections(current);
-                    expander.set_title(labelRow.get_text() || 'Untitled Menu');
                 });
                 expander.add_row(labelRow);
 
@@ -1112,12 +1196,12 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                         saveSections(current);
                     };
 
-                    labelEntry.connect('notify::text', persistItem);
+                    this._onTextSettled(labelEntry, persistItem);
                     kindDropdown.connect('notify::selected', () => {
                         valueEntry.set_placeholder_text(kindDropdown.selected === 1 ? '<Control><Alt>t' : 'command --flag');
                         persistItem();
                     });
-                    valueEntry.connect('notify::text', persistItem);
+                    this._onTextSettled(valueEntry, persistItem);
                     removeItemButton.connect('clicked', () => {
                         let current = loadSections();
                         current[sectionIndex].items.splice(itemIndex, 1);

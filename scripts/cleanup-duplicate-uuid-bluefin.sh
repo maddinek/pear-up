@@ -52,11 +52,23 @@ import ast, subprocess, sys
 
 keep = sys.argv[1]
 raw = subprocess.check_output(
-    ['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'], text=True)
-# Drop every other build of this extension plus the retired macos* helpers.
-superseded = ('globalmenu', 'macosbar@', 'macosclock@', 'macoscluster@')
+    ['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'], text=True).strip()
+# An empty list comes back as "@as []", which is not Python syntax.
+if raw.startswith('@'):
+    raw = raw.split(' ', 1)[1]
+
+# Drop earlier builds of this extension plus the retired helpers, named in full
+# so an unrelated extension cannot be caught by a prefix.
+SUPERSEDED = {
+    'globalmenu@ShiroOSL.github.io',
+    'globalmenu@maddinek.github.io',
+    'globalmenu-fixed@maddinek.local',
+    'macosbar@globalmenu.local',
+    'macosclock@globalmenu.local',
+    'macoscluster@globalmenu.local',
+}
 enabled = [uuid for uuid in ast.literal_eval(raw)
-           if uuid == keep or not uuid.startswith(superseded)]
+           if uuid == keep or uuid not in SUPERSEDED]
 if keep not in enabled:
     enabled.append(keep)
 
@@ -67,11 +79,20 @@ subprocess.check_call(
 print('enabled-extensions ->', literal)
 PY
 
-for dir in "$EXT_DIR"/globalmenu* "$EXT_DIR"/macos*; do
-    [[ -d "$dir" ]] || continue
-    [[ "$(basename "$dir")" == "$KEEP_UUID" ]] && continue
-    rm -rf "$dir"
-    echo "Removed $dir"
+# Named in full rather than globbed: "macos*" would also match somebody else's
+# extension that happens to start the same way.
+for uuid in \
+    globalmenu@ShiroOSL.github.io \
+    globalmenu@maddinek.github.io \
+    globalmenu-fixed@maddinek.local \
+    macosbar@globalmenu.local \
+    macosclock@globalmenu.local \
+    macoscluster@globalmenu.local
+do
+    [[ "$uuid" == "$KEEP_UUID" ]] && continue
+    [[ -d "$EXT_DIR/$uuid" ]] || continue
+    rm -rf "$EXT_DIR/$uuid"
+    echo "Removed $EXT_DIR/$uuid"
 done
 
 echo "Extensions still installed here:"

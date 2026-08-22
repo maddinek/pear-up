@@ -48,9 +48,21 @@ gsettings set "$SCHEMA" show-mounts false
 gsettings set "$SCHEMA" preferred-monitor-by-connector "$MONITOR"
 gsettings set "$SCHEMA" multi-monitor false
 
-# Pinned dock apps (GNOME favorites) — macOS-style daily drivers
-FAVORITES="['org.mozilla.firefox.desktop', 'org.gnome.Nautilus.desktop', 'cursor.desktop', 'net.cozic.joplin_desktop.desktop', 'io.github.kolunmi.Bazaar.desktop', 'org.gnome.Ptyxis.desktop']"
-gsettings set org.gnome.shell favorite-apps "$FAVORITES"
+# Pinned dock apps (GNOME favorites) — macOS-style daily drivers.
+# This replaces whatever is pinned, so keep a copy first: these are the user's
+# own choices and there is no undo otherwise.
+if [[ "${DOCK_SET_FAVORITES:-1}" == "1" ]]; then
+    BACKUP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/pear-up"
+    mkdir -p "$BACKUP_DIR"
+    if [[ ! -f "$BACKUP_DIR/favorite-apps.bak" ]]; then
+        gsettings get org.gnome.shell favorite-apps > "$BACKUP_DIR/favorite-apps.bak"
+        echo "Saved previous favourites to $BACKUP_DIR/favorite-apps.bak"
+    fi
+    FAVORITES="['org.mozilla.firefox.desktop', 'org.gnome.Nautilus.desktop', 'cursor.desktop', 'net.cozic.joplin_desktop.desktop', 'io.github.kolunmi.Bazaar.desktop', 'org.gnome.Ptyxis.desktop']"
+    gsettings set org.gnome.shell favorite-apps "$FAVORITES"
+else
+    echo "Leaving pinned favourites alone (DOCK_SET_FAVORITES=0)"
+fi
 
 echo "Dash to Dock settings:"
 gsettings list-recursively "$SCHEMA" | grep -E 'autohide|dock-fixed|intellihide|dash-max-icon|height-fraction|custom-theme-shrink|show-mounts|dock-position|preferred-monitor|extend-height'
