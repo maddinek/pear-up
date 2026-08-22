@@ -41,6 +41,19 @@ export default class GlobalMenuExtension extends Extension {
         this._spotlightMoved = null;
         this._minimizedWindow = null;
         this._minimizedId = 0;
+        this._minimizedGoneId = 0;
+    }
+
+    // Everything that reaches into GNOME's private panel internals goes
+    // through here. Those members can be renamed or removed between shell
+    // versions, and a throw escaping enable() would leave the panel half
+    // rearranged with no way to put it back.
+    _guard(what, fn) {
+        try {
+            fn();
+        } catch (e) {
+            console.warn(`[${this.metadata.uuid}] ${what} failed: ${e}`);
+        }
     }
 
     enable() {
@@ -92,29 +105,33 @@ export default class GlobalMenuExtension extends Extension {
     // Apply or undo each panel tweak to match its setting. Safe to call again
     // at any time, so a toggle in preferences takes effect immediately.
     _syncPanelTweaks() {
+        // A queued signal can still arrive after disable() has run.
+        if (!this._settings)
+            return;
+
         const clockOnRight = this._settings.get_boolean('clock-on-the-right');
         const clockWasMoved = this._clockMoved;
         if (clockOnRight && !this._clockMoved)
-            this._moveClockToRight();
+            this._guard('moving the clock', () => this._moveClockToRight());
         else if (!clockOnRight && this._clockMoved)
-            this._restoreClock();
+            this._guard('restoring the clock', () => this._restoreClock());
 
         if (this._settings.get_boolean('hide-power-button'))
-            this._hidePowerButton();
+            this._guard('hiding the power icon', () => this._hidePowerButton());
         else
-            this._showPowerButton();
+            this._guard('showing the power icon', () => this._showPowerButton());
 
         if (this._settings.get_boolean('hide-panel-spacers'))
-            this._hideSpacers();
+            this._guard('hiding panel indicators', () => this._hideSpacers());
         else
-            this._showSpacers();
+            this._guard('showing panel indicators', () => this._showSpacers());
 
         // Spotlight has to be repositioned after the clock, because moving the
         // clock rebuilds the panel boxes.
         if (this._settings.get_boolean('group-spotlight-with-quick-settings'))
-            this._groupSpotlightWithQuickSettings();
+            this._guard('grouping Spotlight', () => this._groupSpotlightWithQuickSettings());
         else
-            this._restoreSpotlightPosition();
+            this._guard('restoring Spotlight', () => this._restoreSpotlightPosition());
 
         // Rebuilding the panel drops buttons this extension added, so put the
         // System Menu and the app menus back.
@@ -126,6 +143,32 @@ export default class GlobalMenuExtension extends Extension {
             this._syncLogoButton();
             this._syncMenuVisibility();
         }
+    }
+
+    // Rebuilding the panel replaces the actors we were holding, so anything
+    // remembered from before is stale: without this, re-applying a tweak would
+    // see a non-empty cache, skip the work, and let the new power glyph or
+    // indicators stay visible.
+    _forgetPanelActors() {
+        if (this._powerHidden && this._powerVisibleId) {
+            try {
+                this._powerHidden.disconnect(this._powerVisibleId);
+            } catch (e) {
+                // Already destroyed along with the old panel.
+            }
+        }
+        this._powerVisibleId = 0;
+        this._powerHidden = null;
+        this._hiddenSpacers = [];
+        this._spotlightMoved = null;
+    }
+
+    _rebuildPanel() {
+        if (typeof Main.panel._updatePanel !== 'function')
+            return false;
+        Main.panel._updatePanel();
+        this._forgetPanelActors();
+        return true;
     }
 
     _hideSpacers() {
@@ -143,8 +186,13 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     _showSpacers() {
-        for (const actor of this._hiddenSpacers)
-            actor.show();
+        for (const actor of this._hiddenSpacers) {
+            try {
+                actor.show();
+            } catch (e) {
+                // Destroyed with a panel rebuild; nothing left to reveal.
+            }
+        }
         this._hiddenSpacers = [];
     }
 
@@ -186,14 +234,19 @@ export default class GlobalMenuExtension extends Extension {
         if (!actor || !parent)
             return;
 
-        const current = actor.get_parent();
-        if (current)
-            current.remove_child(actor);
+        try {
+            const current = actor.get_parent();
+            if (current)
+                current.remove_child(actor);
 
-        if (index >= 0 && index < parent.get_children().length)
-            parent.insert_child_at_index(actor, index);
-        else
-            parent.add_child(actor);
+            if (index >= 0 && index < parent.get_children().length)
+                parent.insert_child_at_index(actor, index);
+            else
+                parent.add_child(actor);
+        } catch (e) {
+            // Either actor or its old parent is gone; Search Light will place
+            // its own button again when it is next enabled.
+        }
     }
 
     // Search Light adds a bare St.Button rather than registering a status area
@@ -237,9 +290,14 @@ export default class GlobalMenuExtension extends Extension {
         layout.center = layout.center.filter(item => item !== 'dateMenu');
         layout.right = layout.right.filter(item => item !== 'dateMenu');
         layout.right.push('dateMenu');
-        Main.panel._updatePanel();
+        if (!this._rebuildPanel()) {
+            // Without a rebuild the shell keeps drawing the old layout, so fall
+            // back to reparenting the clock by hand.
+            this._clockSessionBackup = null;
+            this._moveClockFallback();
+            return;
+        }
         this._clockMoved = true;
-        console.log(`[pear-up] Clock moved to right. panel.right=${layout.right.join(',')}`);
     }
 
     // The power glyph is the indicator icon inside the Quick Settings system
@@ -268,26 +326,30 @@ export default class GlobalMenuExtension extends Extension {
         if (!this._powerHidden)
             return;
 
-        if (this._powerVisibleId) {
-            this._powerHidden.disconnect(this._powerVisibleId);
-            this._powerVisibleId = 0;
+        try {
+            if (this._powerVisibleId)
+                this._powerHidden.disconnect(this._powerVisibleId);
+            this._powerHidden.show();
+        } catch (e) {
+            // Destroyed with a panel rebuild; nothing to restore.
         }
-        this._powerHidden.show();
+
+        this._powerVisibleId = 0;
         this._powerHidden = null;
     }
 
     _moveClockFallback() {
-        let dateMenu = Main.panel.statusArea.dateMenu;
-        if (!dateMenu?.container)
+        let container = Main.panel.statusArea.dateMenu?.container;
+        let target = Main.panel._rightBox;
+        if (!container || !target)
             return;
 
-        let container = dateMenu.container;
         let parent = container.get_parent();
         if (!parent)
             return;
 
         parent.remove_child(container);
-        Main.panel._rightBox.add_child(container);
+        target.add_child(container);
         this._clockMoved = true;
     }
 
@@ -300,15 +362,15 @@ export default class GlobalMenuExtension extends Extension {
             layout.left = this._clockSessionBackup.left.slice();
             layout.center = this._clockSessionBackup.center.slice();
             layout.right = this._clockSessionBackup.right.slice();
-            Main.panel._updatePanel();
+            this._rebuildPanel();
         } else {
-            let dateMenu = Main.panel.statusArea.dateMenu;
-            let container = dateMenu?.container;
-            if (container) {
+            let container = Main.panel.statusArea.dateMenu?.container;
+            let target = Main.panel._centerBox;
+            if (container && target) {
                 let parent = container.get_parent();
                 if (parent)
                     parent.remove_child(container);
-                Main.panel._centerBox.add_child(container);
+                target.add_child(container);
             }
         }
 
@@ -320,19 +382,31 @@ export default class GlobalMenuExtension extends Extension {
         let cssFile = Gio.File.new_for_path(`${this.path}/stylesheet.css`);
         if (!cssFile.query_exists(null))
             return;
-        let themeContext = St.ThemeContext.get_for_stage(global.stage);
-        this._stylesheet = themeContext.get_theme().load_stylesheet(cssFile);
+
+        // A stylesheet the current shell cannot parse must not stop the rest of
+        // the extension from starting.
+        this._guard('loading the stylesheet', () => {
+            let themeContext = St.ThemeContext.get_for_stage(global.stage);
+            themeContext.get_theme().load_stylesheet(cssFile);
+            this._stylesheet = cssFile;
+        });
     }
 
     _unloadStylesheet() {
         if (!this._stylesheet)
             return;
-        let themeContext = St.ThemeContext.get_for_stage(global.stage);
-        themeContext.get_theme().unload_stylesheet(this._stylesheet);
+
+        this._guard('unloading the stylesheet', () => {
+            let themeContext = St.ThemeContext.get_for_stage(global.stage);
+            themeContext.get_theme().unload_stylesheet(this._stylesheet);
+        });
         this._stylesheet = null;
     }
 
     _syncLogoButton() {
+        if (!this._settings)
+            return;
+
         let shouldShow = this._settings.get_boolean('show-logo-menu');
 
         if (shouldShow && !this._logoButton) {
@@ -350,7 +424,7 @@ export default class GlobalMenuExtension extends Extension {
 
     _syncOverviewButton() {
         let activities = Main.panel.statusArea['activities'];
-        if (!activities) return;
+        if (!activities || !this._settings) return;
 
         let shouldHide = this._settings.get_boolean('hide-overview-button');
         if (shouldHide && !this._overviewHidden) {
@@ -363,7 +437,7 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     _syncMenuVisibility() {
-        if (!this._menuManager) return;
+        if (!this._menuManager || !this._settings) return;
 
         this._unwatchMinimized();
 
@@ -376,24 +450,37 @@ export default class GlobalMenuExtension extends Extension {
         }
     }
 
+    // Catches a window being minimized programmatically, which the window
+    // manager's own minimize signal does not always cover. Meta.Window is not
+    // one of the types the shell auto-disconnects for, so drop the reference
+    // when the window goes away rather than holding a dead object.
     _watchMinimized(window) {
         this._minimizedWindow = window;
         if (!window)
             return;
-        this._minimizedId = window.connect('notify::minimized', () => {
-            this._syncMenuVisibility();
-        });
+
+        this._minimizedId = window.connect('notify::minimized',
+            () => this._syncMenuVisibility());
+        this._minimizedGoneId = window.connect('unmanaged',
+            () => this._unwatchMinimized());
     }
 
     _unwatchMinimized() {
-        if (this._minimizedWindow && this._minimizedId) {
+        let window = this._minimizedWindow;
+        this._minimizedWindow = null;
+
+        for (const id of [this._minimizedId, this._minimizedGoneId]) {
+            if (!window || !id)
+                continue;
             try {
-                this._minimizedWindow.disconnect(this._minimizedId);
+                window.disconnect(id);
             } catch (e) {
+                // Window already gone; its handlers went with it.
             }
         }
-        this._minimizedWindow = null;
+
         this._minimizedId = 0;
+        this._minimizedGoneId = 0;
     }
 
     disable() {

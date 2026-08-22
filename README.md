@@ -78,7 +78,8 @@ menus.
 
 ## Requirements
 
-- GNOME Shell 45 – 50
+- GNOME Shell 45 – 50. Developed and tested on 50 under Wayland; the earlier releases use the same
+  APIs and are expected to work, but are untested.
 - Optional: [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) for the Dock page
 - Optional: [Search Light](https://extensions.gnome.org/extension/5489/search-light/) for Spotlight-style search
 
