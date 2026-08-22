@@ -233,7 +233,9 @@ export default class GlobalMenuExtension extends Extension {
             if (!container)
                 continue;
 
-            const gap = this._settings.get_int(key);
+            // Positive only: a negative margin collapses the panel's width and
+            // the bar stops rendering entirely.
+            const gap = Math.max(0, this._settings.get_int(key));
             container.set_style(gap > 0 ? `margin-left: ${gap}px;` : null);
             if (gap > 0)
                 this._gapped.add(container);

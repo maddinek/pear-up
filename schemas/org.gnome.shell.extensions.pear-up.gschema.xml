@@ -63,6 +63,10 @@
       <summary>Keep the Search Light icon next to Quick Settings</summary>
     </key>
 
+    <!-- Positive only. A negative margin makes the panel's computed width
+         collapse — cogl_framebuffer_set_viewport asserts on width > 0 and the
+         whole bar stops drawing — so pulling items closer has to be done by
+         reducing their padding instead. -->
     <key name="gap-before-quick-settings" type="i">
       <default>0</default>
       <range min="0" max="48"/>
