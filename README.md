@@ -28,7 +28,8 @@ Apple-style glyph, or your own image.
 **A macOS-shaped top bar.** The clock moves to the far right with the status icons to its left, the
 power glyph is hidden, GNOME's usually-inactive indicators stop reserving space, and a
 [Search Light](https://extensions.gnome.org/extension/5489/search-light/) icon can be grouped with
-Quick Settings as a Spotlight stand-in.
+Quick Settings as a Spotlight stand-in. The gaps between the search icon, the control centre icons
+and the clock are adjustable, since GNOME packs them tighter than macOS does.
 
 **Window buttons on the left.** Close, minimize and maximize in macOS order.
 

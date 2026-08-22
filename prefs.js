@@ -644,6 +644,28 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
         }
 
+        const spacingGroup = new Adw.PreferencesGroup({
+            title: 'Status Area Spacing',
+            description: 'Room between the groups on the right of the bar',
+        });
+        page.add(spacingGroup);
+
+        for (const [key, title, subtitle] of [
+            ['gap-before-quick-settings', 'Before the Control Center Icons',
+                'Separates them from a search icon sitting to their left'],
+            ['gap-before-clock', 'Before the Clock',
+                'Separates the date from the control center icons'],
+        ]) {
+            const row = this._addScaleRow(spacingGroup, title, {
+                lower: 0, upper: 48, marks: [0, 8, 16, 24, 32, 48], unit: 'px',
+                value: settings.get_int(key),
+                onChange: value => settings.set_int(key, value),
+            });
+            row.row.set_subtitle(subtitle);
+            settings.connect(`changed::${key}`,
+                () => row.setValue(settings.get_int(key)));
+        }
+
         const logoGroup = new Adw.PreferencesGroup({
             title: 'System Menu',
             description: 'A button on the far left of the bar, similar to the Apple menu on macOS',

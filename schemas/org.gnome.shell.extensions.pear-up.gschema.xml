@@ -63,6 +63,18 @@
       <summary>Keep the Search Light icon next to Quick Settings</summary>
     </key>
 
+    <key name="gap-before-quick-settings" type="i">
+      <default>0</default>
+      <range min="0" max="48"/>
+      <summary>Space to the left of the Quick Settings icons, in pixels</summary>
+      <description>Separates them from whatever sits before them, such as a search icon.</description>
+    </key>
+    <key name="gap-before-clock" type="i">
+      <default>0</default>
+      <range min="0" max="48"/>
+      <summary>Space between the Quick Settings icons and the clock, in pixels</summary>
+    </key>
+
     <key name="show-system-settings" type="b"><default>true</default><summary>Show System Settings item in System Menu</summary></key>
     <key name="show-app-grid" type="b"><default>true</default><summary>Show App Grid item in System Menu</summary></key>
     <key name="show-software-center" type="b"><default>true</default><summary>Show Software Center item</summary></key>

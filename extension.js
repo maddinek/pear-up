@@ -11,6 +11,16 @@ const PANEL_TWEAK_KEYS = [
     'hide-power-button',
     'hide-panel-spacers',
     'group-spotlight-with-quick-settings',
+    'gap-before-quick-settings',
+    'gap-before-clock',
+];
+
+// Which panel item each spacing setting sits in front of. Applied as a margin
+// on the item itself rather than through the stylesheet, because the amount
+// comes from a setting and has to change without reloading anything.
+const PANEL_GAPS = [
+    ['gap-before-quick-settings', 'quickSettings'],
+    ['gap-before-clock', 'dateMenu'],
 ];
 
 // GNOME reserves room in the right cluster for indicators that are inactive
@@ -65,6 +75,7 @@ export default class GlobalMenuExtension extends Extension {
         this._sessionModeId = 0;
         this._resyncId = 0;
         this._hiddenSpacers = [];
+        this._gapped = new Set();
         this._spotlightMoved = null;
         this._minimizedWindow = null;
         this._minimizedId = 0;
@@ -176,6 +187,8 @@ export default class GlobalMenuExtension extends Extension {
         else
             this._guard('restoring Spotlight', () => this._restoreSpotlightPosition());
 
+        this._guard('spacing the status area', () => this._applyPanelGaps());
+
         // A rebuild also re-shows the Activities button.
         this._guard('syncing the Activities button', () => this._syncOverviewButton());
 
@@ -198,6 +211,7 @@ export default class GlobalMenuExtension extends Extension {
     _forgetPanelActors() {
         this._releasePowerButton();
         this._hiddenSpacers = [];
+        this._gapped.clear();
         this._spotlightMoved = null;
     }
 
@@ -211,6 +225,32 @@ export default class GlobalMenuExtension extends Extension {
 
     // Per-actor rather than "have we run", so a rebuilt panel gets its new
     // indicators hidden too instead of being skipped.
+    // Set as an inline margin on the panel item, since the size comes from a
+    // setting. Re-applied after a rebuild, which replaces these actors.
+    _applyPanelGaps() {
+        for (const [key, role] of PANEL_GAPS) {
+            const container = Main.panel.statusArea[role]?.container;
+            if (!container)
+                continue;
+
+            const gap = this._settings.get_int(key);
+            container.set_style(gap > 0 ? `margin-left: ${gap}px;` : null);
+            if (gap > 0)
+                this._gapped.add(container);
+        }
+    }
+
+    _clearPanelGaps() {
+        for (const container of this._gapped) {
+            try {
+                container.set_style(null);
+            } catch (e) {
+                // Went away with a panel rebuild.
+            }
+        }
+        this._gapped.clear();
+    }
+
     _hideSpacers() {
         for (const role of SPACER_ROLES) {
             const item = Main.panel.statusArea[role];
@@ -622,6 +662,7 @@ export default class GlobalMenuExtension extends Extension {
         // of them may already be gone. A throw here would abandon the rest of
         // the cleanup and leave the panel rearranged.
         this._guard('restoring Spotlight', () => this._restoreSpotlightPosition());
+        this._guard('removing status area spacing', () => this._clearPanelGaps());
         this._guard('showing panel indicators', () => this._showSpacers());
         this._guard('showing the Activities button', () => this._showOverviewButton());
         this._guard('restoring the clock', () => this._restoreClock());
