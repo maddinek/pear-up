@@ -6,6 +6,10 @@ left, and one settings window that also drives your dock.
 
 > Not affiliated with Apple. The pear is the joke.
 
+A fork of [global-menu-for-gnome](https://github.com/ShiroOSL/global-menu-for-gnome), whose menu
+engine it still builds on — [Credits](#credits) says who wrote which parts. Not published on
+extensions.gnome.org, and not supported by that project's author.
+
 ![The focused app's menus in the top bar](assets/screenshots/global-menu.png)
 
 ## What it does
@@ -164,13 +168,30 @@ matrix is not grounds on its own for widening `shell-version` — behaviour has 
 
 ## Credits
 
-Originally written by [ShiroOSL](https://github.com/ShiroOSL) as
-[global-menu-for-gnome](https://github.com/ShiroOSL/global-menu-for-gnome), published on
+Pear Up is a fork of [global-menu-for-gnome](https://github.com/ShiroOSL/global-menu-for-gnome) by
+[ShiroOSL](https://github.com/ShiroOSL), published on
 [extensions.gnome.org](https://extensions.gnome.org/extension/10288/global-menu-for-gnome/).
 
-Pear Up is a fork with its own extension UUID, maintained separately and considerably rearranged.
-Anything broken here is this project's doing, not the original author's — please report it on this
-repository's issue tracker. Use the upstream project if you want the published, supported extension.
+**The global menu itself is their work.** Specifically, still largely as they wrote it:
+
+- **`menuManager.js`** — building the menus, and the handlers behind every entry in them
+- **`systemMenu.js`** — the System Menu behind the logo, and what it launches
+- **`prefs.js`** and the settings schema — roughly half the preferences, and most of the keys
+
+The rest of the project is not theirs and should not be read as such:
+
+- **`extension.js`** — panel arrangement, the clock, indicator handling, lifecycle
+- **`stylesheet.css`** — all of the macOS styling
+- The Dock, Keyboard and window-button integration, which drive settings outside this extension
+- `tests/` — the container test suites
+- `scripts/` — deployment and configuration
+
+By surviving lines, that is about 60% of the menu engine and three quarters of the System Menu from
+upstream, against none of the styling, tests, tooling or panel work. Line counts are a crude measure,
+but the split is clear enough: they built the menu bar, this fork built a desktop around it.
+
+**Bugs here are this project's, not theirs.** Please report them on this repository's tracker, and use
+the upstream project if you want the published, supported extension rather than this one.
 
 Bundled distro logos are trademarks of their respective owners, included only so each distribution
 can be represented in the icon picker.
