@@ -188,7 +188,8 @@ The rest of the project is not theirs and should not be read as such:
 - `tests/` — the container test suites
 - `scripts/` — deployment and configuration
 
-Bugs here are this project's, not theirs — please report them on this repository's tracker. Use
+Report anything broken on this repository's tracker, the menu included: that code has been changed
+enough here that a problem may well be this project's doing rather than theirs. Use
 global-menu-for-gnome if you want the published, supported extension instead.
 
 Bundled distro logos are trademarks of their respective owners, included only so each distribution
