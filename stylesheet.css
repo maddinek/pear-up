@@ -45,8 +45,12 @@
   padding: 0 2px;
 }
 
+#panel.globalmenu-macos-panel .clock-display-box {
+  spacing: 0;
+}
+
 #panel.globalmenu-macos-panel .panel-status-indicators-box {
-  spacing: 2px;
+  spacing: 0;
 }
 
 #panel.globalmenu-macos-panel .system-status-icon {
@@ -64,6 +68,10 @@
 
 /* Slightly tighter default panel buttons */
 #panel.globalmenu-macos-panel .panel-button {
-  -natural-hpadding: 4px;
-  -minimum-hpadding: 2px;
+  -natural-hpadding: 3px;
+  -minimum-hpadding: 0px;
+}
+
+#panel.globalmenu-macos-panel #panelRight {
+  spacing: 0;
 }

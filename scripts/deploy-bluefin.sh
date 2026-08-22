@@ -22,8 +22,7 @@ else
 fi
 
 REMOTE_DIR="${BLUEFIN_REMOTE_DIR:-~/global-menu-for-gnome}"
-EXTENSION_UUID="globalmenu@ShiroOSL.github.io"
-SCHEMA_DIR="\$HOME/.local/share/gnome-shell/extensions/${EXTENSION_UUID}/schemas"
+EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_DIR/metadata.json")"
 
 echo "==> Syncing repo to ${SSH_TARGET}:${REMOTE_DIR}"
 rsync -avz --delete \
@@ -41,10 +40,10 @@ ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
   "gnome-extensions disable logomenu@aryan_k 2>/dev/null || true"
 
 echo "==> Applying Bluefin-tuned settings"
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash -s <<'REMOTE'
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash -s -- "$EXTENSION_UUID" <<'REMOTE'
 set -euo pipefail
-SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/globalmenu@ShiroOSL.github.io/schemas"
-export GSETTINGS_SCHEMA_DIR="$SCHEMA_DIR"
+EXTENSION_UUID="$1"
+export GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/${EXTENSION_UUID}/schemas"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
 
 SCHEMA=org.gnome.shell.extensions.globalmenu

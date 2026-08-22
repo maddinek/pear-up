@@ -1,8 +1,9 @@
 #!/bin/bash
 
-EXTENSION_UUID="globalmenu@ShiroOSL.github.io"
-EXTENSION_DIR="$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
 SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
+# metadata.json is the single source of truth for the UUID.
+EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SOURCE_DIR/metadata.json")"
+EXTENSION_DIR="$HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
 
 echo "--------------------------------------------------"
 echo "🚀 Starting installation of Global Menu for GNOME (V4)"

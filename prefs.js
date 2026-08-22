@@ -11,6 +11,11 @@ import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/
 const DASH_TO_DOCK_UUID = 'dash-to-dock@micxgx.gmail.com';
 const DASH_TO_DOCK_SCHEMA = 'org.gnome.shell.extensions.dash-to-dock';
 
+// Window controls live in a GNOME-wide setting, not in this extension.
+const WM_PREFERENCES_SCHEMA = 'org.gnome.desktop.wm.preferences';
+const BUTTON_LAYOUT_LEFT = 'close,minimize,maximize:appmenu';
+const BUTTON_LAYOUT_RIGHT = 'appmenu:minimize,maximize,close';
+
 const DOCK_POSITIONS = [
     ['LEFT', 'Left'],
     ['BOTTOM', 'Bottom'],
@@ -308,6 +313,30 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         desktopNameRow.connect('notify::text', () => settings.set_string('desktop-app-name', desktopNameRow.get_text() || 'Nautilus'));
         mainGroup.add(desktopNameRow);
 
+        this._addWindowButtonsRow(mainGroup);
+
+        const panelGroup = new Adw.PreferencesGroup({
+            title: 'Top Bar',
+            description: 'Rearrange the stock GNOME panel to match macOS',
+        });
+        page.add(panelGroup);
+
+        const PANEL_TWEAKS = [
+            ['clock-on-the-right', 'Clock on the Right',
+                'GNOME centres it; macOS keeps it in the corner'],
+            ['hide-power-button', 'Hide the Power Icon',
+                'Battery and power state stay available in Quick Settings'],
+            ['hide-panel-spacers', 'Hide Inactive Indicators',
+                'Screen recording, screen sharing, dwell click, accessibility and keyboard layout'],
+            ['group-spotlight-with-quick-settings', 'Keep Search Light Beside Quick Settings',
+                'Groups the Spotlight-style search icon with the status icons'],
+        ];
+        for (const [key, title, subtitle] of PANEL_TWEAKS) {
+            const row = new Adw.SwitchRow({ title, subtitle });
+            panelGroup.add(row);
+            settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        }
+
         const logoGroup = new Adw.PreferencesGroup({
             title: 'System Menu',
             description: 'A button on the far left of the bar, similar to the Apple menu on macOS',
@@ -322,6 +351,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         const itemsGroup = new Adw.PreferencesGroup({ title: 'System Menu Items' });
         page.add(itemsGroup);
+
+        const systemSettingsRow = new Adw.SwitchRow({ title: 'System Settings' });
+        itemsGroup.add(systemSettingsRow);
+        settings.bind('show-system-settings', systemSettingsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
         const appGridRow = new Adw.SwitchRow({ title: 'App Grid' });
         itemsGroup.add(appGridRow);
@@ -383,6 +416,34 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         settings.bind('debug-logging', debugRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
         return page;
+    }
+
+    // Close/minimize/maximize sit on the right in GNOME and on the left in
+    // macOS. The layout string puts everything before the colon on the left,
+    // so read the current side from where "close" falls.
+    _addWindowButtonsRow(group) {
+        const wm = new Gio.Settings({ schema_id: WM_PREFERENCES_SCHEMA });
+
+        const buttonsOnLeft = () => {
+            const [left = ''] = wm.get_string('button-layout').split(':');
+            return left.includes('close');
+        };
+
+        const row = new Adw.SwitchRow({
+            title: 'Window Buttons on the Left',
+            subtitle: 'Close, minimize and maximize in macOS order. Turning this off restores the GNOME default',
+            active: buttonsOnLeft(),
+        });
+        group.add(row);
+
+        row.connect('notify::active', () => {
+            wm.set_string('button-layout', row.active ? BUTTON_LAYOUT_LEFT : BUTTON_LAYOUT_RIGHT);
+        });
+        wm.connect('changed::button-layout', () => {
+            const onLeft = buttonsOnLeft();
+            if (row.active !== onLeft)
+                row.set_active(onLeft);
+        });
     }
 
     // A visual icon picker: a grid of the bundled distro icons plus a

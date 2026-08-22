@@ -44,6 +44,26 @@
 
     <key name="hide-overview-button" type="b"><default>true</default><summary>Hide the Activities/overview button</summary></key>
 
+    <key name="clock-on-the-right" type="b">
+      <default>true</default>
+      <summary>Move the clock to the far right of the panel</summary>
+      <description>GNOME centres the clock; macOS keeps it in the corner with the status icons to its left.</description>
+    </key>
+    <key name="hide-power-button" type="b">
+      <default>true</default>
+      <summary>Hide the Quick Settings power icon</summary>
+    </key>
+    <key name="hide-panel-spacers" type="b">
+      <default>true</default>
+      <summary>Hide inactive GNOME status placeholders</summary>
+      <description>Screen recording, screen sharing, dwell click, accessibility and keyboard layout indicators.</description>
+    </key>
+    <key name="group-spotlight-with-quick-settings" type="b">
+      <default>true</default>
+      <summary>Keep the Search Light icon next to Quick Settings</summary>
+    </key>
+
+    <key name="show-system-settings" type="b"><default>true</default><summary>Show System Settings item in System Menu</summary></key>
     <key name="show-app-grid" type="b"><default>true</default><summary>Show App Grid item in System Menu</summary></key>
     <key name="show-software-center" type="b"><default>true</default><summary>Show Software Center item</summary></key>
     <key name="software-center-command" type="s"><default>"flatpak run io.github.kolunmi.Bazaar"</default><summary>Command for Software Center</summary></key>

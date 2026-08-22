@@ -24,9 +24,12 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 echo "==> Deploying global-menu extension (stylesheet + menus)"
 bash "$REPO_DIR/scripts/deploy-bluefin.sh"
 
+EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_DIR/metadata.json")"
+
 echo "==> Applying macOS-like top bar settings on ${SSH_TARGET}"
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash -s <<'REMOTE'
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash -s -- "$EXTENSION_UUID" <<'REMOTE'
 set -euo pipefail
+EXTENSION_UUID="$1"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
 
 # Translucent blurred panel (blur-my-shell)
@@ -47,16 +50,19 @@ export GSETTINGS_SCHEMA_DIR="/usr/share/gnome-shell/extensions/search-light@iced
 gsettings set org.gnome.shell.extensions.search-light show-panel-icon true
 gnome-extensions enable search-light@icedman.github.com 2>/dev/null || true
 
+# macOS puts the window buttons on the left, close first
+gsettings set org.gnome.desktop.wm.preferences button-layout 'close,minimize,maximize:appmenu'
+
 # Global menu housekeeping
-export GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/globalmenu@ShiroOSL.github.io/schemas"
+export GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/${EXTENSION_UUID}/schemas"
 gsettings set org.gnome.shell.extensions.globalmenu debug-logging false
 gsettings set org.gnome.shell.extensions.globalmenu hide-overview-button true
 gsettings set org.gnome.shell.extensions.globalmenu logo-icon-size 14
 
 # Reload extension so stylesheet applies
-gnome-extensions disable globalmenu@ShiroOSL.github.io
+gnome-extensions disable "$EXTENSION_UUID"
 sleep 1
-gnome-extensions enable globalmenu@ShiroOSL.github.io
+gnome-extensions enable "$EXTENSION_UUID"
 
 echo "Top bar settings applied."
 REMOTE

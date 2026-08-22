@@ -59,10 +59,10 @@ export const SystemMenuButton = GObject.registerClass(
             if (['logo-icon-name', 'logo-custom-icon-path', 'logo-distro-icon',
                  'logo-distro-icon-symbolic', 'logo-icon-size'].includes(key)) {
                 this._syncIcon();
-            } else if (['hide-overview-button', 'show-app-grid', 'show-software-center',
-                        'show-system-monitor', 'show-terminal', 'show-extensions-app',
-                        'show-force-quit', 'show-power-options', 'show-lock-screen',
-                        'show-log-out', 'system-menu-custom-items'].includes(key)) {
+            } else if (['hide-overview-button', 'show-system-settings', 'show-app-grid',
+                        'show-software-center', 'show-system-monitor', 'show-terminal',
+                        'show-extensions-app', 'show-force-quit', 'show-power-options',
+                        'show-lock-screen', 'show-log-out', 'system-menu-custom-items'].includes(key)) {
                 this._rebuildMenu();
             }
         }, this);
@@ -109,6 +109,7 @@ export const SystemMenuButton = GObject.registerClass(
         this.menu.removeAll();
 
         const hideOverview = this._settings.get_boolean('hide-overview-button');
+        const showSystemSettings = this._settings.get_boolean('show-system-settings');
         const showAppGrid = this._settings.get_boolean('show-app-grid');
         const showSoftwareCenter = this._settings.get_boolean('show-software-center');
         const showSystemMonitor = this._settings.get_boolean('show-system-monitor');
@@ -122,6 +123,10 @@ export const SystemMenuButton = GObject.registerClass(
         this._addItem('About This System', () => this._aboutThisSystem());
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+        // Settings sits directly below About, where macOS keeps it.
+        if (showSystemSettings)
+            this._addItem('System Settings', () => this._openSystemSettings());
+
         // Only offer an "Activities" menu entry when the real panel button
         // is hidden, so overview access is never lost entirely.
         if (hideOverview)
@@ -130,7 +135,7 @@ export const SystemMenuButton = GObject.registerClass(
         if (showAppGrid)
             this._addItem('App Grid', () => this._showAppGrid());
 
-        if (hideOverview || showAppGrid)
+        if (showSystemSettings || hideOverview || showAppGrid)
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         if (showSoftwareCenter)
@@ -199,6 +204,21 @@ export const SystemMenuButton = GObject.registerClass(
 
     _aboutThisSystem() {
         spawnCommandLine('gnome-control-center system about');
+    }
+
+    _openSystemSettings() {
+        let appSys = Shell.AppSystem.get_default();
+        let app = appSys.lookup_app('org.gnome.Settings.desktop') ||
+                  appSys.lookup_app('gnome-control-center.desktop');
+        if (app) {
+            try {
+                app.activate();
+                return;
+            } catch (e) {
+                // Desktop file present but unusable; fall through to the binary.
+            }
+        }
+        spawnCommandLine('gnome-control-center');
     }
 
     _showAppGrid() {

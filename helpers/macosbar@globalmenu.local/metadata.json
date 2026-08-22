@@ -1,7 +1,0 @@
-{
-  "uuid": "macosbar@globalmenu.local",
-  "name": "macOS Bar Tweaks",
-  "description": "Hide the Quick Settings power icon, tighten right-cluster spacing. Companion to global-menu-for-gnome.",
-  "version": 1,
-  "shell-version": ["45", "46", "47", "48", "49", "50"]
-}

@@ -1,6 +1,7 @@
 #!/bin/bash
 
-EXTENSION_UUID="globalmenu@ShiroOSL.github.io"
+SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
+EXTENSION_UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SOURCE_DIR/metadata.json")"
 LOG_FILE="testing.log"
 
 echo "--------------------------------------------------"

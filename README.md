@@ -2,22 +2,13 @@
 
 Global Menu for GNOME brings a clean, streamlined desktop layout to your system by adding a dedicated application menu directly into the GNOME top panel. Inspired by the sleek aesthetic of macOS, this extension places essential window actions, navigation controls, a System Menu, and quick-access options into a single unified top-bar component.
 
+This is a fork. It is not published on extensions.gnome.org and is not supported by the
+original author — see [Credits](#credits).
+
 ## 🚀 Installation
 
-### Recommended: Install from GNOME Extensions
-
-The easiest and safest way to install is directly from the official extensions website:
-
-👉 [Get it on GNOME Extensions](https://extensions.gnome.org/extension/10288/global-menu-for-gnome/)
-
-Just click **Install**, no terminal required. Updates are delivered automatically through the Extensions app.
-
-### Alternative: Install from Source (for developers/contributors)
-
-If you want to run a development build or contribute, you can install from source instead:
-
 ```bash
-git clone https://github.com/ShiroOSL/global-menu-for-gnome.git
+git clone https://github.com/maddinek/global-menu-for-gnome.git
 cd global-menu-for-gnome
 bash install.sh
 ```
@@ -48,6 +39,20 @@ bash uninstall.sh
 - Optional hiding of the Activities button
 - Dock page for driving [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) from the same
   window: screen edge, icon size, length, whether it hides behind windows, and which display it appears on
+- macOS-style window buttons on the left of the title bar
+
+## Credits
+
+Originally written by [ShiroOSL](https://github.com/ShiroOSL) as
+[global-menu-for-gnome](https://github.com/ShiroOSL/global-menu-for-gnome), available on
+[extensions.gnome.org](https://extensions.gnome.org/extension/10288/global-menu-for-gnome/).
+
+This fork carries its own extension UUID and is maintained separately. Bugs here are not the
+upstream author's — please report them on this repository's issue tracker, and use the upstream
+project if you want the published, supported extension.
+
+Bundled distro logos are trademarks of their respective owners, included only to represent each
+distribution in the icon picker.
 
 ## License
 

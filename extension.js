@@ -5,6 +5,25 @@ import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { MenuManager } from './menuManager.js';
 import { SystemMenuButton } from './systemMenu.js';
 
+// Panel layout differs from macOS in a few fixed ways; each of these is a
+// separate toggle so nothing about the stock top bar is changed silently.
+const PANEL_TWEAK_KEYS = [
+    'clock-on-the-right',
+    'hide-power-button',
+    'hide-panel-spacers',
+    'group-spotlight-with-quick-settings',
+];
+
+// GNOME reserves room in the right cluster for indicators that are inactive
+// most of the time. macOS has no equivalent, and they leave a visible gap.
+const SPACER_ROLES = [
+    'screenRecording',
+    'screenSharing',
+    'dwellClick',
+    'a11y',
+    'keyboard',
+];
+
 export default class GlobalMenuExtension extends Extension {
     constructor(metadata) {
         super(metadata);
@@ -17,6 +36,8 @@ export default class GlobalMenuExtension extends Extension {
         this._clockMoved = false;
         this._clockSessionBackup = null;
         this._powerHidden = null;
+        this._hiddenSpacers = [];
+        this._spotlightMoved = null;
         this._minimizedWindow = null;
         this._minimizedId = 0;
     }
@@ -26,9 +47,7 @@ export default class GlobalMenuExtension extends Extension {
 
         this._settings = this.getSettings();
 
-        const uuid = this.metadata.uuid || 'globalmenu@ShiroOSL.github.io';
-
-        this._menuManager = new MenuManager(uuid, this._settings);
+        this._menuManager = new MenuManager(this.metadata.uuid, this._settings);
 
         const ICON_ONLY_KEYS = ['logo-icon-name', 'logo-custom-icon-path', 'logo-distro-icon', 'logo-distro-icon-symbolic', 'logo-icon-size'];
 
@@ -37,6 +56,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._syncOverviewButton();
             } else if (key === 'show-logo-menu') {
                 this._syncLogoButton();
+            } else if (PANEL_TWEAK_KEYS.includes(key)) {
+                this._syncPanelTweaks();
             } else if (!ICON_ONLY_KEYS.includes(key)) {
                 // Any other key (menu toggles, custom menus, indicator,
                 // logo-menu item toggles) affects what the bar should show
@@ -60,12 +81,139 @@ export default class GlobalMenuExtension extends Extension {
 
         this._loadStylesheet();
         Main.panel.add_style_class_name('globalmenu-macos-panel');
-        this._moveClockToRight();
-        this._hidePowerButton();
+        this._syncPanelTweaks();
 
         this._syncLogoButton();
         this._syncOverviewButton();
         this._syncMenuVisibility();
+    }
+
+    // Apply or undo each panel tweak to match its setting. Safe to call again
+    // at any time, so a toggle in preferences takes effect immediately.
+    _syncPanelTweaks() {
+        const clockOnRight = this._settings.get_boolean('clock-on-the-right');
+        const clockWasMoved = this._clockMoved;
+        if (clockOnRight && !this._clockMoved)
+            this._moveClockToRight();
+        else if (!clockOnRight && this._clockMoved)
+            this._restoreClock();
+
+        if (this._settings.get_boolean('hide-power-button'))
+            this._hidePowerButton();
+        else
+            this._showPowerButton();
+
+        if (this._settings.get_boolean('hide-panel-spacers'))
+            this._hideSpacers();
+        else
+            this._showSpacers();
+
+        // Spotlight has to be repositioned after the clock, because moving the
+        // clock rebuilds the panel boxes.
+        if (this._settings.get_boolean('group-spotlight-with-quick-settings'))
+            this._groupSpotlightWithQuickSettings();
+        else
+            this._restoreSpotlightPosition();
+
+        // Rebuilding the panel drops buttons this extension added, so put the
+        // System Menu and the app menus back.
+        if (clockWasMoved !== this._clockMoved && this._menuManager) {
+            if (this._logoButton) {
+                this._logoButton.destroy();
+                this._logoButton = null;
+            }
+            this._syncLogoButton();
+            this._syncMenuVisibility();
+        }
+    }
+
+    _hideSpacers() {
+        if (this._hiddenSpacers.length > 0)
+            return;
+
+        for (const role of SPACER_ROLES) {
+            const item = Main.panel.statusArea[role];
+            const actor = item?.container ?? item;
+            if (actor?.hide) {
+                actor.hide();
+                this._hiddenSpacers.push(actor);
+            }
+        }
+    }
+
+    _showSpacers() {
+        for (const actor of this._hiddenSpacers)
+            actor.show();
+        this._hiddenSpacers = [];
+    }
+
+    // macOS keeps Spotlight immediately beside the Control Center icons.
+    _groupSpotlightWithQuickSettings() {
+        if (this._spotlightMoved)
+            return;
+
+        const rightBox = Main.panel._rightBox;
+        const quickSettings = Main.panel.statusArea.quickSettings?.container;
+        const spotlight = this._findSpotlightIndicator(rightBox);
+        if (!rightBox || !quickSettings || !spotlight || spotlight === quickSettings)
+            return;
+
+        const parent = spotlight.get_parent();
+        if (!parent)
+            return;
+
+        this._spotlightMoved = {
+            actor: spotlight,
+            parent,
+            index: parent.get_children().indexOf(spotlight),
+        };
+
+        parent.remove_child(spotlight);
+        const quickSettingsIndex = rightBox.get_children().indexOf(quickSettings);
+        if (quickSettingsIndex >= 0)
+            rightBox.insert_child_at_index(spotlight, quickSettingsIndex);
+        else
+            rightBox.add_child(spotlight);
+    }
+
+    _restoreSpotlightPosition() {
+        if (!this._spotlightMoved)
+            return;
+
+        const { actor, parent, index } = this._spotlightMoved;
+        this._spotlightMoved = null;
+        if (!actor || !parent)
+            return;
+
+        const current = actor.get_parent();
+        if (current)
+            current.remove_child(actor);
+
+        if (index >= 0 && index < parent.get_children().length)
+            parent.insert_child_at_index(actor, index);
+        else
+            parent.add_child(actor);
+    }
+
+    // Search Light adds a bare St.Button rather than registering a status area
+    // role, so it is the one child of the right box we cannot name.
+    _findSpotlightIndicator(rightBox) {
+        if (!rightBox?.get_children)
+            return null;
+
+        const claimed = new Set();
+        const statusArea = Main.panel.statusArea ?? {};
+        for (const role of Object.keys(statusArea)) {
+            const container = statusArea[role]?.container;
+            if (container)
+                claimed.add(container);
+        }
+
+        for (const child of rightBox.get_children()) {
+            if (!claimed.has(child))
+                return child;
+        }
+        return null;
     }
 
     // GNOME 42+ puts the clock in the center. macOS has it on the far
@@ -94,6 +242,9 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     _hidePowerButton() {
+        if (this._powerHidden)
+            return;
+
         let qs = Main.panel.statusArea.quickSettings;
         let power = qs?._system || qs?._indicators?._system;
         if (!power && qs?._indicators?.get_children) {
@@ -262,6 +413,8 @@ export default class GlobalMenuExtension extends Extension {
             this._overviewHidden = false;
         }
 
+        this._restoreSpotlightPosition();
+        this._showSpacers();
         this._restoreClock();
         this._showPowerButton();
         Main.panel.remove_style_class_name('globalmenu-macos-panel');

@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# Leave exactly one copy of the extension installed on the Bluefin VM.
+# Leave exactly one extension installed on the Bluefin VM.
 #
-# Debugging GNOME 50 needed a throwaway UUID, because a Wayland session never
-# re-imports an extension's JavaScript: the only way to load fixed code without
-# logging out is to install it under a name the shell has not seen yet. That
-# leaves two directories behind, and at the next login both would try to own
-# the panel.
+# Several things put stale copies on disk. Debugging GNOME 50 needed a
+# throwaway UUID, because a Wayland session never re-imports an extension's
+# JavaScript: the only way to load fixed code without logging out is to install
+# it under a name the shell has not seen yet. Renaming the extension away from
+# the upstream author's UUID left that older directory behind. The panel tweaks
+# (clock position, hidden indicators, Spotlight placement) also started life as
+# small separate "macos*" helpers before moving into the extension itself.
 #
 # Run this and then log out. The switch cannot take effect in the running
-# session (the old UUID still has the crashing module cached), so the menus
-# stay on the throwaway copy until the shell restarts.
+# session, so the panel keeps using whatever is already loaded until the shell
+# restarts.
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SSH_HOST="${BLUEFIN_SSH:-vm-bluefin}"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no)
@@ -27,15 +32,13 @@ else
     SSH_OPTS+=(-i "$SSH_KEY" -p "$SSH_PORT")
 fi
 
-KEEP_UUID="${KEEP_UUID:-globalmenu@ShiroOSL.github.io}"
-DROP_UUID="${DROP_UUID:-globalmenu-fixed@maddinek.local}"
+KEEP_UUID="${KEEP_UUID:-$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_DIR/metadata.json")}"
 
-echo "==> Keeping ${KEEP_UUID}, removing ${DROP_UUID} on ${SSH_TARGET}"
+echo "==> Keeping ${KEEP_UUID}, removing superseded copies and helpers on ${SSH_TARGET}"
 
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash -s -- "$KEEP_UUID" "$DROP_UUID" <<'REMOTE'
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash -s -- "$KEEP_UUID" <<'REMOTE'
 set -euo pipefail
 KEEP_UUID="$1"
-DROP_UUID="$2"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
 EXT_DIR="$HOME/.local/share/gnome-shell/extensions"
 
@@ -44,13 +47,16 @@ if [[ ! -f "$EXT_DIR/$KEEP_UUID/menuManager.js" ]]; then
     exit 1
 fi
 
-python3 - "$KEEP_UUID" "$DROP_UUID" <<'PY'
+python3 - "$KEEP_UUID" <<'PY'
 import ast, subprocess, sys
 
-keep, drop = sys.argv[1], sys.argv[2]
+keep = sys.argv[1]
 raw = subprocess.check_output(
     ['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'], text=True)
-enabled = [uuid for uuid in ast.literal_eval(raw) if uuid != drop]
+# Drop every other build of this extension plus the retired macos* helpers.
+superseded = ('globalmenu', 'macosbar@', 'macosclock@', 'macoscluster@')
+enabled = [uuid for uuid in ast.literal_eval(raw)
+           if uuid == keep or not uuid.startswith(superseded)]
 if keep not in enabled:
     enabled.append(keep)
 
@@ -61,9 +67,15 @@ subprocess.check_call(
 print('enabled-extensions ->', literal)
 PY
 
-rm -rf "$EXT_DIR/$DROP_UUID"
-echo "Removed $EXT_DIR/$DROP_UUID"
-ls -1 "$EXT_DIR" | grep -i globalmenu || true
+for dir in "$EXT_DIR"/globalmenu* "$EXT_DIR"/macos*; do
+    [[ -d "$dir" ]] || continue
+    [[ "$(basename "$dir")" == "$KEEP_UUID" ]] && continue
+    rm -rf "$dir"
+    echo "Removed $dir"
+done
+
+echo "Installed copies now:"
+ls -1d "$EXT_DIR"/globalmenu* "$EXT_DIR"/macos* 2>/dev/null || echo "  (none)"
 REMOTE
 
 echo
