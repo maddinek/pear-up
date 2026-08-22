@@ -63,10 +63,12 @@
       <summary>Keep the Search Light icon next to Quick Settings</summary>
     </key>
 
-    <!-- Positive only. A negative margin makes the panel's computed width
-         collapse — cogl_framebuffer_set_viewport asserts on width > 0 and the
-         whole bar stops drawing — so pulling items closer has to be done by
-         reducing their padding instead. -->
+    <!-- Positive only, and not for want of trying: measured on GNOME 50, -1 is
+         silently clamped and moves the cluster by exactly nothing, while -2 and
+         beyond collapse the panel's computed width — cogl_framebuffer_set_viewport
+         asserts on width > 0 and the entire bar stops drawing, with the extension
+         still reporting itself active and error-free. There is no useful negative
+         value, so pulling items closer has to come off their padding instead. -->
     <key name="gap-before-quick-settings" type="i">
       <default>0</default>
       <range min="0" max="48"/>
