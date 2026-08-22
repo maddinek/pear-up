@@ -1,0 +1,53 @@
+# A throwaway GNOME session for testing, with no display attached.
+#
+# gnome-shell can run headless against a virtual monitor, so a real shell — real
+# panel, real extension loading — can be started, queried and screenshotted with
+# no display. That is the only way to catch behaviour rather than mere API
+# presence: a symbol can exist and still not be ready when the extension runs,
+# which is exactly how the power icon regression survived two fixes.
+#
+# systemd runs as PID 1 because the shell refuses to finish starting without
+# logind: it calls org.freedesktop.login1 while building the end-session dialog,
+# and a bare container has nothing to answer.
+#
+# Build argument picks the GNOME version, via the Fedora release that ships it:
+#   45→39  46→40  47→41  48→42  49→43  50→44
+ARG FEDORA=44
+FROM fedora:${FEDORA}
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+        systemd \
+        dbus-daemon \
+        dbus-tools \
+        polkit \
+        gnome-shell \
+        gjs \
+        mesa-dri-drivers \
+        mesa-libgbm \
+        python3 \
+        python3-gobject-base \
+        procps-ng \
+    && dnf clean all
+
+# Nothing here needs networking, printing, or a boot splash. Masking these keeps
+# startup to a couple of seconds and the logs readable.
+RUN systemctl mask \
+        systemd-remount-fs.service \
+        systemd-random-seed.service \
+        systemd-machine-id-commit.service \
+        dev-hugepages.mount \
+        sys-fs-fuse-connections.mount \
+        systemd-oomd.service \
+    && systemctl set-default multi-user.target \
+    && systemctl enable systemd-logind.service
+
+# Software rendering: there is no GPU in here.
+ENV LIBGL_ALWAYS_SOFTWARE=1 \
+    GALLIUM_DRIVER=llvmpipe \
+    NO_AT_BRIDGE=1
+
+COPY run-tests.sh /usr/local/bin/run-tests.sh
+RUN chmod +x /usr/local/bin/run-tests.sh
+
+STOPSIGNAL SIGRTMIN+3
+ENTRYPOINT ["/sbin/init"]

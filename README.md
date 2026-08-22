@@ -83,8 +83,8 @@ no extension can add one. Installing puts a **Pear Up Settings** application ent
 
 ## Requirements
 
-- GNOME Shell 45 – 50. Developed and tested on 50 under Wayland; the earlier releases use the same
-  APIs and are expected to work, but are untested.
+- GNOME Shell 50, under Wayland. Earlier releases are not claimed until they are verified —
+  see [Testing](#testing).
 - Optional: [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) for the Dock page
 - Optional: [Search Light](https://extensions.gnome.org/extension/5489/search-light/) for Spotlight-style search
 
@@ -107,6 +107,39 @@ To remove it:
 ```bash
 bash uninstall.sh
 ```
+
+## Testing
+
+Both suites run in containers, so no other system has to be installed and nothing touches the
+desktop you are using.
+
+**Does it still behave?** Boots a real GNOME Shell headless against a virtual monitor, loads the
+extension the way a login would, and checks what it actually did to the panel — the clock moved, the
+System Menu appeared, the power icon is hidden, and disabling it leaves nothing behind.
+
+```bash
+tests/integration/run.sh        # GNOME 50
+tests/integration/run.sh 48     # GNOME 48
+```
+
+This is the suite worth trusting, because the interesting failures are about timing rather than
+missing functions. The power icon survived two fixes precisely because every API involved existed —
+it was being hidden before the thing that draws it had been built.
+
+**Do the APIs still exist?** Resolves every GNOME API the extension touches against a given version:
+introspected symbols, and the private shell internals that no typelib describes, which are the ones
+that vanish quietly between releases.
+
+```bash
+tests/run-api-matrix.sh             # every version in the table
+tests/run-api-matrix.sh 48 50       # just these
+```
+
+`tests/api-manifest.json` is the list of what is depended upon, kept by hand so each entry is a
+deliberate statement rather than a grep result.
+
+Neither suite replaces reading GNOME's porting notes when a new release lands, and a passing API
+matrix is not grounds on its own for widening `shell-version` — behaviour has to be checked too.
 
 ## Credits
 

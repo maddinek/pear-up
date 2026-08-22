@@ -1,0 +1,108 @@
+{
+  "comment": [
+    "Every GNOME API this extension depends on, so a target shell version can be",
+    "checked before it is claimed in metadata.json. Kept by hand rather than",
+    "derived from the source: the point is to state the dependency deliberately,",
+    "and a grep cannot tell an API we rely on from a string that merely looks",
+    "like one.",
+    "",
+    "'introspected' entries live in a typelib and can be resolved for real.",
+    "'shellInternals' are private JavaScript inside gnome-shell, which no",
+    "typelib describes, so they are searched for in the shell's compiled-in",
+    "sources instead. Those are the ones that break silently between releases.",
+    "",
+    "A present symbol still says nothing about behaviour: on GNOME 50",
+    "quickSettings._system exists but is not built yet when enable() runs. Only a",
+    "running shell catches that."
+  ],
+
+  "introspected": {
+    "Clutter": [
+      "KEY_Control_L",
+      "KEY_Shift_L",
+      "KEY_Alt_L",
+      "KEY_Super_L",
+      "KeyState",
+      "InputDeviceType",
+      "ActorAlign",
+      "Orientation",
+      "get_default_backend"
+    ],
+    "Meta": [
+      "WindowType",
+      "MaximizeFlags"
+    ],
+    "St": [
+      "Label",
+      "Icon",
+      "Bin",
+      "BoxLayout",
+      "ThemeContext"
+    ],
+    "Shell": [
+      "AppSystem",
+      "WindowTracker"
+    ]
+  },
+
+  "methods": {
+    "comment": "Instance methods, checked on the prototype so a rename is caught.",
+    "Meta.Window": [
+      "minimize",
+      "delete",
+      "kill",
+      "get_wm_class",
+      "get_title",
+      "get_window_type",
+      "get_id",
+      "showing_on_its_workspace",
+      "unmaximize",
+      "maximize"
+    ],
+    "Clutter.VirtualInputDevice": [
+      "notify_keyval"
+    ]
+  },
+
+  "eitherOf": {
+    "comment": [
+      "Alternatives, where one form replaced another. mutter 49 introduced",
+      "is_maximized() alongside the older get_maximized() flags getter, so the",
+      "code copes with both and only needs one to exist."
+    ],
+    "Meta.Window maximized state": ["is_maximized", "get_maximized"]
+  },
+
+  "shellInternals": [
+    "_updatePanel",
+    "_rightBox",
+    "_centerBox",
+    "addToStatusArea",
+    "statusArea",
+    "quickSettings",
+    "_indicator",
+    "showAppsButton",
+    "canSuspend",
+    "canPowerOff",
+    "canLockScreen",
+    "canLogout",
+    "activateSuspend",
+    "activateRestart",
+    "activatePowerOff",
+    "activateLockScreen",
+    "activateLogout",
+    "openPreferences",
+    "connectObject",
+    "disconnectObject"
+  ],
+
+  "absent": {
+    "comment": [
+      "APIs that look like they should exist and do not. Listed so a future",
+      "change cannot reintroduce a call to one without the check failing.",
+      "Clutter has no accelerator parser in any supported version — only",
+      "keyval_name, in the opposite direction."
+    ],
+    "Clutter": ["accelerator_parse"]
+  }
+}
