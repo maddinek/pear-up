@@ -64,6 +64,11 @@
     </key>
 
     <key name="show-system-settings" type="b"><default>true</default><summary>Show System Settings item in System Menu</summary></key>
+    <key name="show-extension-settings" type="b">
+      <default>true</default>
+      <summary>Show this extension's own settings in the System Menu</summary>
+      <description>Without it, the preferences window can only be reached through the Extensions app.</description>
+    </key>
     <key name="show-app-grid" type="b"><default>true</default><summary>Show App Grid item in System Menu</summary></key>
     <key name="show-software-center" type="b"><default>true</default><summary>Show Software Center item</summary></key>
     <key name="software-center-command" type="s"><default>"flatpak run io.github.kolunmi.Bazaar"</default><summary>Command for Software Center</summary></key>

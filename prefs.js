@@ -663,6 +663,13 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         itemsGroup.add(systemSettingsRow);
         settings.bind('show-system-settings', systemSettingsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
+        const ownSettingsRow = new Adw.SwitchRow({
+            title: `${this.metadata.name ?? 'Extension'} Settings`,
+            subtitle: 'Opens this window from the System Menu',
+        });
+        itemsGroup.add(ownSettingsRow);
+        settings.bind('show-extension-settings', ownSettingsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
         const appGridRow = new Adw.SwitchRow({ title: 'App Grid' });
         itemsGroup.add(appGridRow);
         settings.bind('show-app-grid', appGridRow, 'active', Gio.SettingsBindFlags.DEFAULT);
