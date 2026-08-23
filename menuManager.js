@@ -65,9 +65,10 @@ function spawnCommand(argv) {
 
 const TopLevelMenuButton = GObject.registerClass(
   class TopLevelMenuButton extends PanelMenu.Button {
-    _init(label, children, appInstance = null, isAppMenu = false) {
+    _init(label, children, appInstance = null, isAppMenu = false, refreshChildren = null) {
       super._init(0.5, label);
       this._appInstance = appInstance;
+      this._refreshChildren = refreshChildren;
       this._timeoutIds = [];
       this._virtualDevice = null;
 
@@ -95,7 +96,15 @@ const TopLevelMenuButton = GObject.registerClass(
       this._buildSubMenu(children, this.menu);
 
       if (this.menu) {
-          this.menu.connectObject('open-state-changed', (_menu, _isOpen) => {
+          this.menu.connectObject('open-state-changed', (menu, isOpen) => {
+              // The menu bar is rebuilt when the focused app changes, so items
+              // derived from window state — the list of open windows and their
+              // titles — are otherwise a snapshot from whenever that happened.
+              // Titles change constantly, so refresh them on the way open.
+              if (isOpen && this._refreshChildren) {
+                  menu.removeAll();
+                  this._buildSubMenu(this._refreshChildren(), menu);
+              }
               this._alignMenuToLeft();
           }, this);
       }
@@ -207,8 +216,20 @@ const TopLevelMenuButton = GObject.registerClass(
             }
         }
 
+        if (action === "new-file-manager-win") {
+            // Opening the home folder raises whichever window already shows it
+            // rather than adding one, so ask the app for a window and only fall
+            // back to the folder when there is no app to ask.
+            if (this._appInstance) {
+                this._appInstance.open_new_window(-1);
+                return true;
+            }
+            spawnCommand(['xdg-open', GLib.get_home_dir()]);
+            return true;
+        }
+
         try {
-            if (action === "open-file-manager" || action === "new-file-manager-win" || action === "go-home") {
+            if (action === "open-file-manager" || action === "go-home") {
                 spawnCommand(['xdg-open', GLib.get_home_dir()]);
                 return true;
             } else if (action === "new-folder") {
@@ -539,27 +560,9 @@ export class MenuManager {
             return;
         }
 
-        let firstMenuChildren = [];
-        if (detectedApp) {
-            let openWindows = detectedApp.get_windows();
-            if (openWindows.length > 0) {
-                firstMenuChildren.push({ type: "section-header", label: "Open Windows" });
-                openWindows.forEach(win => {
-                    firstMenuChildren.push({
-                        label: win.get_title() || appName,
-                        action: `activate-window:${win.get_id()}`
-                    });
-                });
-                firstMenuChildren.push({ type: "separator" });
-            }
-        }
-        firstMenuChildren.push(
-            { label: "New Window", action: "new-app-window" },
-            { type: "separator" },
-            { label: "App Details", action: `app-details:${desktopId}` },
-            { type: "separator" },
-            { label: `Quit ${appName}`, action: "close" }
-        );
+        const appMenuChildren = () =>
+            this._appMenuChildren(detectedApp, appName, desktopId);
+        let firstMenuChildren = appMenuChildren();
 
         const fileMenu = {
             type: "submenu",
@@ -664,7 +667,8 @@ export class MenuManager {
 
         menuData.forEach((item, index) => {
             let isAppMenu = this._settings.get_boolean('menu-app-enabled') && index === 0;
-            let btn = new TopLevelMenuButton(item.label, item.children, detectedApp, isAppMenu);
+            let refresh = isAppMenu ? appMenuChildren : null;
+            let btn = new TopLevelMenuButton(item.label, item.children, detectedApp, isAppMenu, refresh);
             Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, this._slotFor(index), 'left');
             this._buttons.push(btn);
         });
@@ -686,6 +690,33 @@ export class MenuManager {
 
         const after = box.get_children().indexOf(logo) + 1;
         return (after > 0 ? after : 0) + index;
+    }
+
+    // The application menu, rebuilt from live window state each time it opens.
+    _appMenuChildren(detectedApp, appName, desktopId) {
+        const children = [];
+
+        const openWindows = detectedApp?.get_windows() ?? [];
+        if (openWindows.length > 0) {
+            children.push({ type: "section-header", label: "Open Windows" });
+            for (const win of openWindows) {
+                children.push({
+                    label: win.get_title() || appName,
+                    action: `activate-window:${win.get_id()}`,
+                });
+            }
+            children.push({ type: "separator" });
+        }
+
+        children.push(
+            { label: "New Window", action: "new-app-window" },
+            { type: "separator" },
+            { label: "App Details", action: `app-details:${desktopId}` },
+            { type: "separator" },
+            { label: `Quit ${appName}`, action: "close" }
+        );
+
+        return children;
     }
 
     _buildCustomMenus() {

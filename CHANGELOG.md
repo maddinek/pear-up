@@ -40,6 +40,13 @@ running it somewhere other than the machine it was written on.
   panel presses that way. It now asks the base class what the shell does.
 - **Panel teardown throwing during logout**, where a session mode change resynced
   the panel while the shell was disposing it.
+- **"New <app> Window" not opening a window.** It opened the home folder, which
+  the file manager answers by raising whichever window already shows it. It now
+  asks the application for a window.
+- **Stale window titles in the application menu.** The list of open windows was
+  a snapshot from the last time the focused application changed, so a window
+  that had since been renamed — every folder you navigate to renames one — was
+  listed under its old title. The list is now rebuilt as the menu opens.
 
 ### Notes
 

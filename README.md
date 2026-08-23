@@ -196,14 +196,21 @@ tests/vm/rd-click.py 1038 13        # click, in screen coordinates
 tests/vm/rd-click.py 640 400 --move-only
 ```
 
-Run it inside the session under test. This is what verified the search button's three backends, and
-that clicking Search Light no longer ends the session.
+Run it inside the session under test. This is what verified the search button's three backends, that
+clicking Search Light no longer ends the session, and the menu items that only mean something with a
+real application in front: minimising a window, sending a shortcut an application listens for, and
+raising a window from the list of open ones.
+
+That last group is the edge of what the automated suites reach. The headless container has a shell
+but no applications, so it can prove the menu bar is built correctly and cannot prove that a menu
+item does what its label says. Those stay a manual pass in a VM, with clicks injected as above.
 
 **Does it lint?** `eslint.config.mjs` carries the recommended rules and GJS's globals — deliberately
 nothing stylistic, so the signal stays the class of mistake that reads fine and breaks at runtime.
 
 ```bash
-npm ci && npx eslint .
+tests/run-lint.sh                   # in a container, needing no Node on the host
+npm ci && npx eslint .              # if you have one
 ```
 
 Everything except the integration suite also runs in [CI](.github/workflows/ci.yml) on every push.
