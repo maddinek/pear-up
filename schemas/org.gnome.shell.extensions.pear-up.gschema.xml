@@ -21,6 +21,12 @@
       <description>Each entry: {label, enabled, items: [{label, kind: "command"|"shortcut", value}]}. Supports any number of independent custom top-level menus.</description>
     </key>
 
+    <key name="displaced-keybindings" type="s">
+      <default>"{}"</default>
+      <summary>Keybindings displaced while a shortcut set is enabled</summary>
+      <description>JSON object mapping "schemaId:key" to the displaced GVariant, serialized so switching a set off can restore the user's own binding even after the preferences window has been closed and reopened.</description>
+    </key>
+
     <key name="show-logo-menu" type="b"><default>true</default><summary>Show the System Menu button</summary></key>
     <key name="logo-icon-name" type="s"><default>"start-here-symbolic"</default><summary>System icon name for the System Menu button</summary></key>
     <key name="logo-custom-icon-path" type="s">

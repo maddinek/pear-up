@@ -17,18 +17,54 @@ import { ForceQuitPicker } from './forceQuit.js';
 export const LOGO_ROLE = 'pearup-logo';
 
 // Returns the first command (configured choice first, then fallbacks) whose
-// executable actually exists on this system, or null if none do.
+// target actually exists on this system, or null if none do.
 function findAvailableCommand(preferred, fallbacks) {
     let candidates = [preferred, ...fallbacks].filter(Boolean);
     for (let cmd of candidates) {
         try {
             let [, argv] = GLib.shell_parse_argv(cmd);
-            if (argv && argv[0] && GLib.find_program_in_path(argv[0]))
-                return cmd;
+            if (!argv || !argv[0])
+                continue;
+
+            // "flatpak run <app-id>" passes the argv[0] check whenever the
+            // flatpak binary exists, whether or not the app is installed.
+            // Look the app up through its desktop file instead; a pattern this
+            // cannot verify keeps the plain argv[0] check.
+            let appId = flatpakRunAppId(argv);
+            if (appId) {
+                // The shell's app database is the one source of "is this
+                // installed" that exists on every supported release —
+                // DesktopAppInfo's statics were split off to GioUnix.
+                try {
+                    if (!Shell.AppSystem.get_default().lookup_app(`${appId}.desktop`))
+                        continue;
+                } catch {
+                    // App database unavailable; assume it is there.
+                }
+            } else if (!GLib.find_program_in_path(argv[0])) {
+                continue;
+            }
+
+            return cmd;
         } catch {
             // Malformed command string; skip it.
         }
     }
+    return null;
+}
+
+// Matches "flatpak run <app-id>" and "flatpak-spawn --host run <app-id>",
+// returning the app id, or null for anything else.
+function flatpakRunAppId(argv) {
+    let i = 0;
+    if (argv[0] === 'flatpak-spawn') {
+        i = 1;
+        while (i < argv.length && argv[i].startsWith('--'))
+            i++;
+    }
+
+    if (argv[i] === 'flatpak' && argv[i + 1] === 'run' && argv[i + 2])
+        return argv[i + 2];
     return null;
 }
 
@@ -437,12 +473,30 @@ export const SystemMenuButton = GObject.registerClass(
 
     // The bindings for these live in GNOME's media-keys settings, as string
     // lists that are empty when nothing is bound.
+    //
+    // The settings object is kept rather than built per lookup: every menu
+    // rebuild asks for several accelerators, and each fresh Gio.Settings
+    // re-reads the schema source.
+    _mediaKeysSettings() {
+        if (!this._mediaKeys) {
+            if (!schemaExists(MEDIA_KEYS_SCHEMA))
+                return null;
+
+            try {
+                this._mediaKeys = new Gio.Settings({ schema_id: MEDIA_KEYS_SCHEMA });
+            } catch {
+                return null;
+            }
+        }
+        return this._mediaKeys;
+    }
+
     _acceleratorFor(key) {
-        if (!schemaExists(MEDIA_KEYS_SCHEMA))
+        const settings = this._mediaKeysSettings();
+        if (!settings)
             return null;
 
         try {
-            const settings = new Gio.Settings({ schema_id: MEDIA_KEYS_SCHEMA });
             if (!settings.settings_schema.has_key(key))
                 return null;
 
@@ -464,11 +518,15 @@ export const SystemMenuButton = GObject.registerClass(
     _launchOrNotify(settingKey, fallbacks, label) {
         let configured = this._settings.get_string(settingKey);
         let resolved = findAvailableCommand(configured, fallbacks);
-        if (resolved) {
-            spawnCommandLine(resolved);
-        } else {
-            Main.notify('System Menu', `No ${label} application found. Set one in Preferences.`);
+        if (!resolved) {
+            Main.notify('Pear Up', `No ${label} application found. Set one in Preferences.`);
+            return;
         }
+
+        // The command exists but refused to run; say so rather than fail
+        // silently behind a click.
+        if (!spawnCommandLine(resolved))
+            Main.notify('Pear Up', `Could not launch ${label}.`);
     }
 
     _aboutThisSystem() {
@@ -532,6 +590,7 @@ export const SystemMenuButton = GObject.registerClass(
         this._settings = null;
         this._systemActions = null;
         this._extensionPath = null;
+        this._mediaKeys = null;
         this._icon = null;
         this._iconTheme = null;
     }

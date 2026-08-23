@@ -8,6 +8,9 @@ ICON_SIZE="${DOCK_ICON_SIZE:-27}"           # slim: 75% of prior 36px (originall
 HEIGHT_FRACTION="${DOCK_HEIGHT_FRACTION:-0.68}"  # 75% of default 0.9 vertical span
 MONITOR="${DOCK_MONITOR:-primary}"      # connector name or 'primary'
 DOCK_POSITION="${DOCK_POSITION:-RIGHT}" # TOP, RIGHT, BOTTOM, or LEFT
+# Passed positionally to the remote shell: the heredoc is quoted (<<'REMOTE'),
+# so it is not expanded locally and env vars do not survive the ssh hop.
+SET_FAVORITES="${DOCK_SET_FAVORITES:-1}"
 
 if [[ "$SSH_HOST" == *"@"* ]]; then
     SSH_TARGET="$SSH_HOST"
@@ -26,12 +29,13 @@ fi
 echo "==> Configuring Dash to Dock on ${SSH_TARGET}"
 echo "    position: ${DOCK_POSITION}, icon size: ${ICON_SIZE}px, height: ${HEIGHT_FRACTION}, monitor: ${MONITOR}"
 
-ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash -s -- "$ICON_SIZE" "$HEIGHT_FRACTION" "$MONITOR" "$DOCK_POSITION" <<'REMOTE'
+ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash -s -- "$ICON_SIZE" "$HEIGHT_FRACTION" "$MONITOR" "$DOCK_POSITION" "$SET_FAVORITES" <<'REMOTE'
 set -euo pipefail
 ICON_SIZE="$1"
 HEIGHT_FRACTION="$2"
 MONITOR="$3"
 POSITION="$4"
+SET_FAVORITES="$5"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
 export GSETTINGS_SCHEMA_DIR="/usr/share/gnome-shell/extensions/dash-to-dock@micxgx.gmail.com/schemas"
 SCHEMA=org.gnome.shell.extensions.dash-to-dock
@@ -51,7 +55,7 @@ gsettings set "$SCHEMA" multi-monitor false
 # Pinned dock apps (GNOME favorites) — macOS-style daily drivers.
 # This replaces whatever is pinned, so keep a copy first: these are the user's
 # own choices and there is no undo otherwise.
-if [[ "${DOCK_SET_FAVORITES:-1}" == "1" ]]; then
+if [[ "$SET_FAVORITES" == "1" ]]; then
     BACKUP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/pear-up"
     mkdir -p "$BACKUP_DIR"
     if [[ ! -f "$BACKUP_DIR/favorite-apps.bak" ]]; then

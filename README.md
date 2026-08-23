@@ -133,6 +133,19 @@ To remove it:
 bash uninstall.sh
 ```
 
+By default this only removes the extension's own files. Changes made from the Preferences
+window to settings owned by other parts of the desktop — the macOS shortcut sets appended
+to GNOME's keybindings, the Alt/Cmd swap in `xkb-options`, the Dash to Dock hot keys stood
+down for them, and the window button layout — are left in place. To revert those as well:
+
+```bash
+bash uninstall.sh --reset-settings
+```
+
+That removes exactly the accelerators this extension added (leaving any of your own on the
+same actions alone) and resets the other keys only while they still hold the values it
+wrote, printing what was restored.
+
 ## Testing
 
 Both suites run in containers, so no other system has to be installed and nothing touches the
@@ -213,6 +226,21 @@ raising a window from the list of open ones.
 That last group is the edge of what the automated suites reach. The headless container has a shell
 but no applications, so it can prove the menu bar is built correctly and cannot prove that a menu
 item does what its label says. Those stay a manual pass in a VM, with clicks injected as above.
+
+**Do the helpers that reach into settings behave?** The undo logic in uninstall.sh does string
+surgery on printed GVariant lists, and the dock script forwards its opt-outs through a quoted heredoc
+— exactly the kind of code that reads fine and eats someone's keybindings. Both are checked against
+fakes (a stubbed `gsettings`, a stubbed `ssh`) with no system touched:
+
+```bash
+tests/check-uninstall.sh    # accel removal keeps neighbours; resets only untouched values
+tests/check-dock-script.sh  # DOCK_SET_FAVORITES actually reaches the remote shell
+```
+
+**Do the menu templates stay pure?** The templates are shared constants, so everything built from
+them must be a copy. `tests/check-menu-templates.js` asserts token-exact file-manager detection, what
+each menu contains, and that mutating a built menu cannot reach the template underneath. It needs a
+real `gjs`, so it runs inside the API matrix containers rather than on the host.
 
 **Does it lint?** `eslint.config.mjs` carries the recommended rules and GJS's globals — deliberately
 nothing stylistic, so the signal stays the class of mistake that reads fine and breaks at runtime.

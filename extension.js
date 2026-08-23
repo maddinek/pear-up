@@ -83,6 +83,7 @@ export default class GlobalMenuExtension extends Extension {
         this._overviewRetries = 0;
         this._sessionModeId = 0;
         this._resyncId = 0;
+        this._menuSyncId = 0;
         this._hiddenSpacers = [];
         this._gapped = new Set();
         this._padded = new Set();
@@ -100,7 +101,9 @@ export default class GlobalMenuExtension extends Extension {
         try {
             fn();
         } catch (e) {
-            console.warn(`[${this.metadata.uuid}] ${what} failed: ${e}`);
+            // Pass the error itself: console prints the stack for Error objects,
+            // which `${e}` throws away.
+            console.warn(`[${this.metadata.uuid}] ${what} failed:`, e);
         }
     }
 
@@ -138,19 +141,19 @@ export default class GlobalMenuExtension extends Extension {
             else if (PANEL_TWEAK_KEYS.includes(key))
                 this._syncPanelTweaks();
             else if (MENU_CONTENT_KEYS.includes(key))
-                this._syncMenuVisibility();
+                this._queueMenuSync();
         });
 
         global.display.connectObject('notify::focus-window', () => {
-            this._syncMenuVisibility();
+            this._queueMenuSync();
         }, this);
         global.window_manager.connectObject(
-            'minimize', () => this._syncMenuVisibility(),
-            'unminimize', () => this._syncMenuVisibility(),
+            'minimize', () => this._queueMenuSync(),
+            'unminimize', () => this._queueMenuSync(),
             this
         );
         global.workspace_manager.connectObject('active-workspace-changed', () => {
-            this._syncMenuVisibility();
+            this._queueMenuSync();
         }, this);
 
         // The shell rebuilds the panel whenever the session mode changes —
@@ -520,7 +523,11 @@ export default class GlobalMenuExtension extends Extension {
     // its own visibility sync whenever the battery or recording state changes.
     _hidePowerButton() {
         let system = Main.panel.statusArea.quickSettings?._system;
-        let indicator = system?._indicator ?? system;
+        // On shells where `_system` exists but `_indicator` does not — usually
+        // a rename — hiding the whole item would take the battery readout with
+        // it, so retry instead of guessing. Only older shells without `_system`
+        // at all fall back to using the item itself.
+        let indicator = system ? system._indicator : system;
         if (!indicator?.hide) {
             // Quick Settings exists before its system item does, so during
             // login there is nothing to hide yet. Come back for it.
@@ -532,6 +539,10 @@ export default class GlobalMenuExtension extends Extension {
         // panel rebuild replaces it and leaves us holding a destroyed one.
         if (this._powerHidden === indicator)
             return;
+
+        // Found it, so clear the poll budget: a later rebuild in the same
+        // session should still get the full window of retries.
+        this._powerRetries = 0;
 
         this._releasePowerButton();
 
@@ -725,6 +736,10 @@ export default class GlobalMenuExtension extends Extension {
         if (this._overviewActor === actor)
             return;
 
+        // Found it, so clear the poll budget: a later rebuild in the same
+        // session should still get the full window of retries.
+        this._overviewRetries = 0;
+
         this._releaseOverviewButton();
         actor.hide();
         // What it holds on GNOME 50 is the workspace indicators, which re-show
@@ -776,16 +791,29 @@ export default class GlobalMenuExtension extends Extension {
         this._overviewHidden = false;
     }
 
+    // Focus, minimize and workspace signals arrive in bursts, and each one
+    // used to rebuild the menu synchronously. Coalesce them onto an idle so
+    // the work happens once per burst instead of once per signal.
+    _queueMenuSync() {
+        if (this._menuSyncId)
+            return;
+
+        this._menuSyncId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._menuSyncId = 0;
+            this._guard('syncing menu visibility', () => this._syncMenuVisibility());
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     _syncMenuVisibility() {
         if (!this._menuManager || !this._settings) return;
-
-        this._unwatchMinimized();
 
         if (this._settings.get_boolean('show-indicator')) {
             let activeWindow = global.display.get_focus_window();
             this._watchMinimized(activeWindow);
             this._menuManager.updateMenuForWindow(activeWindow);
         } else {
+            this._unwatchMinimized();
             this._menuManager.clear();
         }
     }
@@ -794,13 +822,17 @@ export default class GlobalMenuExtension extends Extension {
     // manager's own minimize signal does not always cover. Meta.Window is not
     // one of the types the shell auto-disconnects for, so drop the reference
     // when the window goes away rather than holding a dead object.
+    //
+    // Unwatches any previous window first, so a caller that forgets cannot
+    // leave handlers connected to two windows at once.
     _watchMinimized(window) {
+        this._unwatchMinimized();
         this._minimizedWindow = window;
         if (!window)
             return;
 
         this._minimizedId = window.connect('notify::minimized',
-            () => this._syncMenuVisibility());
+            () => this._queueMenuSync());
         this._minimizedGoneId = window.connect('unmanaged',
             () => this._unwatchMinimized());
     }
@@ -836,7 +868,7 @@ export default class GlobalMenuExtension extends Extension {
             this._sessionModeId = 0;
         }
 
-        for (const source of ['_resyncId', '_powerRetryId', '_overviewRetryId']) {
+        for (const source of ['_resyncId', '_menuSyncId', '_powerRetryId', '_overviewRetryId']) {
             if (this[source]) {
                 GLib.source_remove(this[source]);
                 this[source] = 0;

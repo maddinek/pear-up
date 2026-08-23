@@ -81,6 +81,24 @@ for (const [target, methods] of Object.entries(manifest.methods ?? {})) {
     }
 }
 
+// GObject properties, whose accessors GJS hangs off the prototype too. Checked
+// with `in`, which sees the accessor without invoking it: calling the getter
+// against the bare prototype would read the property from the wrong instance.
+for (const [target, properties] of Object.entries(manifest.properties ?? {})) {
+    if (target === 'comment')
+        continue;
+    await load(target.split('.')[0]);
+    const proto = prototypeOf(target);
+    if (!proto) {
+        failures.push(`${target} could not be resolved`);
+        continue;
+    }
+    for (const property of properties) {
+        if (!(property in proto))
+            failures.push(`${target}:${property} is missing`);
+    }
+}
+
 // One of several spellings is enough.
 for (const [label, alternatives] of Object.entries(manifest.eitherOf ?? {})) {
     if (label === 'comment')
