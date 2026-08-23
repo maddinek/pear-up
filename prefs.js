@@ -180,7 +180,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                         settings = new Gio.Settings({ settings_schema: found });
                         break;
                     }
-                } catch (e) {
+                } catch {
                     // Unreadable or stale schema directory; try the next one.
                 }
             }
@@ -1082,7 +1082,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                         settings.set_string('logo-custom-icon-path', path);
                         customRow.set_subtitle(path);
                     }
-                } catch (e) {
+                } catch {
                     // User cancelled, or the dialog failed; nothing to do.
                 }
             });
@@ -1137,7 +1137,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             try {
                 let items = JSON.parse(settings.get_string('system-menu-custom-items') || '[]');
                 return Array.isArray(items) ? items : [];
-            } catch (e) {
+            } catch {
                 return [];
             }
         };
@@ -1251,7 +1251,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         const loadSections = () => {
             try {
                 return JSON.parse(settings.get_string('custom-menus') || '[]');
-            } catch (e) {
+            } catch {
                 return [];
             }
         };

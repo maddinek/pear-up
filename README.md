@@ -171,8 +171,42 @@ tests/run-api-matrix.sh 48 50       # just these
 `tests/api-manifest.json` is the list of what is depended upon, kept by hand so each entry is a
 deliberate statement rather than a grep result.
 
+**Do the preferences still open?** Preferences run in their own process, so nothing above touches
+them: a property libadwaita dropped, or a method that never existed, shows up only when the window is
+opened — as an empty window and a stack trace in the journal. This builds every page headlessly and
+fails on the first throw.
+
+```bash
+tests/run-prefs-smoke.sh            # every version in the table
+tests/run-prefs-smoke.sh 49 50      # just these
+```
+
+**Does it lint?** `eslint.config.mjs` carries the recommended rules and GJS's globals — deliberately
+nothing stylistic, so the signal stays the class of mistake that reads fine and breaks at runtime.
+
+```bash
+npm ci && npx eslint .
+```
+
+Everything except the integration suite also runs in
+[CI](.github/workflows/ci.yml) on every push, using these same scripts rather than a
+reimplementation in YAML. The integration suite stays local: it boots systemd in a privileged
+container to get logind, and a runner is the wrong place to find out that has broken.
+
 Neither suite replaces reading GNOME's porting notes when a new release lands, and a passing API
 matrix is not grounds on its own for widening `shell-version` — behaviour has to be checked too.
+
+## Releases
+
+Two version fields, because they answer different questions:
+
+| Field | | |
+| --- | --- | --- |
+| `version` | integer, +1 every published build | what GNOME compares |
+| `version-name` | `major.minor.patch` | what a human reads |
+
+Bump both in the commit that ships, and only once the API matrix, the preferences smoke test and the
+integration suite have passed on every release in `shell-version`.
 
 ## Credits
 

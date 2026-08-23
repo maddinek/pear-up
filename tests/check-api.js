@@ -3,7 +3,6 @@
 // here, and report anything missing. Runs headless: it only loads typelibs, so
 // it needs no display, no session and no compositor.
 import GLib from 'gi://GLib';
-import Gio from 'gi://Gio';
 import system from 'system';
 
 const manifestPath = system.programArgs[0] ?? 'tests/api-manifest.json';
@@ -17,11 +16,11 @@ const namespaces = new Map();
 const load = async name => {
     if (namespaces.has(name))
         return namespaces.get(name);
-    let namespace = null;
+    let namespace;
     try {
-        namespace = await import(`gi://${name}`);
-        namespace = namespace.default;
-    } catch (e) {
+        namespace = (await import(`gi://${name}`)).default;
+    } catch {
+        // Not every namespace exists on every release; that is the point.
         namespace = null;
     }
     namespaces.set(name, namespace);

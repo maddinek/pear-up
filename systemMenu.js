@@ -22,7 +22,7 @@ function findAvailableCommand(preferred, fallbacks) {
             let [, argv] = GLib.shell_parse_argv(cmd);
             if (argv && argv[0] && GLib.find_program_in_path(argv[0]))
                 return cmd;
-        } catch (e) {
+        } catch {
             // Malformed command string; skip it.
         }
     }
@@ -215,7 +215,7 @@ export const SystemMenuButton = GObject.registerClass(
         try {
             let items = JSON.parse(this._settings.get_string('system-menu-custom-items') || '[]');
             return Array.isArray(items) ? items.filter(item => item && item.value) : [];
-        } catch (e) {
+        } catch {
             return [];
         }
     }
@@ -242,7 +242,7 @@ export const SystemMenuButton = GObject.registerClass(
             try {
                 app.activate();
                 return;
-            } catch (e) {
+            } catch {
                 // Desktop file present but unusable; fall through to the binary.
             }
         }
@@ -270,7 +270,7 @@ export const SystemMenuButton = GObject.registerClass(
         if (app) {
             try {
                 app.activate();
-            } catch (e) {
+            } catch {
                 spawnCommandLine('gnome-extensions-app');
             }
         } else {

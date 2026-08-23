@@ -390,7 +390,7 @@ const TopLevelMenuButton = GObject.registerClass(
             for (const k of modKeyvals.slice().reverse()) {
                 try {
                     release(k);
-                } catch (e) {
+                } catch {
                     // Nothing more can be done for this one.
                 }
             }
@@ -479,7 +479,7 @@ export class MenuManager {
                 return false;
             if (window.get_window_type() !== Meta.WindowType.NORMAL)
                 return false;
-        } catch (e) {
+        } catch {
             return false;
         }
         return true;
@@ -690,10 +690,11 @@ export class MenuManager {
 
     _buildCustomMenus() {
         let raw = this._settings.get_string('custom-menus') || '[]';
-        let sections = [];
+        let sections;
         try {
             sections = JSON.parse(raw);
-        } catch (e) {
+        } catch {
+            // Hand-edited JSON, or a setting written by an older version.
             sections = [];
         }
 

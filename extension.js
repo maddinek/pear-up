@@ -267,7 +267,7 @@ export default class GlobalMenuExtension extends Extension {
         for (const container of this._gapped) {
             try {
                 container.set_style(null);
-            } catch (e) {
+            } catch {
                 // Went away with a panel rebuild.
             }
         }
@@ -321,7 +321,7 @@ export default class GlobalMenuExtension extends Extension {
     _childrenOf(actor) {
         try {
             return actor?.get_children?.() ?? [];
-        } catch (e) {
+        } catch {
             return [];
         }
     }
@@ -330,7 +330,7 @@ export default class GlobalMenuExtension extends Extension {
         for (const button of this._padded) {
             try {
                 this._restyle(button, null);
-            } catch (e) {
+            } catch {
                 // Went away with a panel rebuild.
             }
         }
@@ -355,7 +355,7 @@ export default class GlobalMenuExtension extends Extension {
         const isButton = actor => {
             try {
                 return !!actor?.has_style_class_name?.('panel-button');
-            } catch (e) {
+            } catch {
                 return false;
             }
         };
@@ -364,7 +364,7 @@ export default class GlobalMenuExtension extends Extension {
             .map(child => {
                 try {
                     return isButton(child) ? child : child.get_first_child();
-                } catch (e) {
+                } catch {
                     return null;
                 }
             })
@@ -386,7 +386,7 @@ export default class GlobalMenuExtension extends Extension {
         for (const actor of this._hiddenSpacers) {
             try {
                 actor.show();
-            } catch (e) {
+            } catch {
                 // Destroyed with a panel rebuild; nothing left to reveal.
             }
         }
@@ -440,7 +440,7 @@ export default class GlobalMenuExtension extends Extension {
                 parent.insert_child_at_index(actor, index);
             else
                 parent.add_child(actor);
-        } catch (e) {
+        } catch {
             // Either actor or its old parent is gone; Search Light will place
             // its own button again when it is next enabled.
         }
@@ -458,7 +458,7 @@ export default class GlobalMenuExtension extends Extension {
             try {
                 const names = [actor.name, actor.style_class, ...(actor.get_style_class_name?.() ?? '').split(' ')];
                 return names.some(name => typeof name === 'string' && name.toLowerCase().includes('search'));
-            } catch (e) {
+            } catch {
                 // Disposed while the shell tears the panel down.
                 return false;
             }
@@ -572,7 +572,7 @@ export default class GlobalMenuExtension extends Extension {
                 continue;
             try {
                 this._powerHidden.disconnect(id);
-            } catch (e) {
+            } catch {
                 // Destroyed with the old panel.
             }
         }
@@ -600,7 +600,7 @@ export default class GlobalMenuExtension extends Extension {
 
         try {
             indicator?.show();
-        } catch (e) {
+        } catch {
             // Destroyed with a panel rebuild; nothing to restore.
         }
     }
@@ -756,7 +756,7 @@ export default class GlobalMenuExtension extends Extension {
         if (this._overviewVisibleId) {
             try {
                 this._overviewActor?.disconnect(this._overviewVisibleId);
-            } catch (e) {
+            } catch {
                 // Went away with a panel rebuild.
             }
         }
@@ -814,7 +814,7 @@ export default class GlobalMenuExtension extends Extension {
                 continue;
             try {
                 window.disconnect(id);
-            } catch (e) {
+            } catch {
                 // Window already gone; its handlers went with it.
             }
         }

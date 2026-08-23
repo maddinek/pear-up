@@ -1,0 +1,13 @@
+{
+  "name": "pear-up",
+  "private": true,
+  "description": "Lint tooling only. The extension itself is plain GJS and needs no build step.",
+  "scripts": {
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.0",
+    "globals": "^17.11.0"
+  }
+}

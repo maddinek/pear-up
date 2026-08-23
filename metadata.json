@@ -2,7 +2,8 @@
   "uuid": "pear-up@maddinek.github.io",
   "name": "Pear Up",
   "description": "Pear up your GNOME: a macOS-like desktop in one extension. Adds a global menu bar with contextual File, Edit, View, Go, Window and Help menus for the focused app, and a System Menu behind a bitten-pear logo for About, System Settings, Terminal, Software Center, Force Quit and power actions. Moves the clock to the corner, puts the window buttons on the left, tidies the status area, and configures a Dash to Dock dock — its edge, size, visibility and display — from the same settings window. Custom menus can run shell commands or keyboard shortcuts.",
-  "version": 1,
+  "version": 2,
+  "version-name": "0.2.0",
   "shell-version": [
     "45",
     "46",

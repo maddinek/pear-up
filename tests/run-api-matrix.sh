@@ -35,6 +35,10 @@ if ! command -v "$RUNTIME" >/dev/null; then
     exit 1
 fi
 
+# :Z relabels the mount for SELinux, which podman needs and docker rejects.
+MOUNT="ro"
+[[ "$RUNTIME" == *podman* ]] && MOUNT="ro,Z"
+
 failed=()
 skipped=()
 
@@ -54,7 +58,7 @@ for version in "${VERSIONS[@]}"; do
     # gnome-shell brings the shell library; gjs and the mutter typelibs are what
     # the introspection check needs. No X, no Wayland, no session.
     if ! "$RUNTIME" run --rm \
-        -v "$REPO_DIR:/src:ro,Z" \
+        -v "$REPO_DIR:/src:$MOUNT" \
         -w /src \
         "$image" \
         bash -c '
