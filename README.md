@@ -181,6 +181,20 @@ tests/run-prefs-smoke.sh            # every version in the table
 tests/run-prefs-smoke.sh 49 50      # just these
 ```
 
+**Clicking things in a VM.** GNOME 50 drives its panel buttons with
+`Clutter.ClickGesture`, which ignores the synthetic pointer a hypervisor injects — the pointer moves
+and hovers, but no button ever activates, and the shell's own clock is just as unresponsive. Mutter's
+RemoteDesktop interface goes through the compositor's input path instead, which Clutter cannot tell
+from hardware:
+
+```bash
+tests/vm/rd-click.py 1038 13        # click, in screen coordinates
+tests/vm/rd-click.py 640 400 --move-only
+```
+
+Run it inside the session under test. This is what verified the search button's three backends, and
+that clicking Search Light no longer ends the session.
+
 **Does it lint?** `eslint.config.mjs` carries the recommended rules and GJS's globals — deliberately
 nothing stylistic, so the signal stays the class of mistake that reads fine and breaks at runtime.
 
