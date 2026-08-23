@@ -1,0 +1,128 @@
+--- a/extension.js
++++ b/extension.js
+@@ -44,6 +44,22 @@
+   gettext as _,
+ } from 'resource:///org/gnome/shell/extensions/extension.js';
+ 
++// Clutter 18 refuses actor surgery while an input, gesture or signal is still
++// being dispatched, and aborts the shell over it — a lost session on Wayland.
++// show()/hide() reparent the entry, move key focus and connect stage signals,
++// so every one of them that starts inside a handler is pushed past the end of
++// that dispatch. Upstream icedman/search-light#166 lists the sites.
++const afterDispatch = (fn) => {
++  GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
++    try {
++      fn();
++    } catch (err) {
++      // The extension may have been disabled before the tick arrived.
++    }
++    return GLib.SOURCE_REMOVE;
++  });
++};
++
+ var SearchLight = GObject.registerClass(
+   {},
+   class SearchLight extends St.Widget {
+@@ -281,7 +297,20 @@
+     this._indicator.set_child(icon);
+     this._indicator.connectObject(
+       'button-press-event',
+-      this._toggle_search_light.bind(this),
++      () => {
++        // Defer the toggle out of the press gesture's handler: show()
++        // reparents the entry/search actors and grabs key focus, and doing
++        // that synchronously while the Clutter press gesture is in flight
++        // corrupts its state machine on GNOME 48+ (Clutter 18), aborting the
++        // shell with clutter-gesture.c:set_state assertion (new_state ==
++        // CLUTTER_GESTURE_STATE_POSSIBLE). idle_add lets the gesture finish
++        // first (imperceptible, one tick).
++        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
++          this._toggle_search_light();
++          return GLib.SOURCE_REMOVE;
++        });
++        return Clutter.EVENT_STOP;
++      },
+       this,
+     );
+     try {
+@@ -491,9 +520,19 @@
+     if (this._isDraggingIcon()) {
+       return;
+     }
++    // Re-entrancy guard: _release_ui() hides the entry, which flips the
++    // stage key-focus -> _onKeyFocusChanged -> hide() again, re-entering
++    // teardown while the first pass is still mid-unmap -> Clutter aborts
++    // with clutter_actor_real_unrealize "!clutter_actor_is_mapped". Make
++    // the re-entrant hide() a no-op so teardown runs exactly once.
++    if (this._hiding) {
++      return;
++    }
++    this._hiding = true;
+ 
+     this._release_ui();
+     this._remove_events();
++    this._hiding = false;
+ 
+     if (this._useAnimations) {
+       this.mainContainer.ease({
+@@ -618,7 +657,9 @@
+     }
+ 
+     if (!disable) {
+-      this.accel.listenFor(shortcut, this._toggle_search_light.bind(this));
++      this.accel.listenFor(shortcut, () =>
++        afterDispatch(() => this._toggle_search_light()),
++      );
+     }
+   }
+ 
+@@ -636,7 +677,9 @@
+     }
+ 
+     if (!disable) {
+-      this.accel2.listenFor(shortcut, this._toggle_search_light.bind(this));
++      this.accel2.listenFor(shortcut, () =>
++        afterDispatch(() => this._toggle_search_light()),
++      );
+     }
+   }
+ 
+@@ -752,6 +795,7 @@
+   _release_ui() {
+     if (this._entry) {
+       if (this._entry.get_parent()) {
++        this._entry.hide();
+         this._entry.get_parent().remove_child(this._entry);
+       }
+       this._entryParent.add_child(this._entry);
+@@ -1006,10 +1050,11 @@
+         focus.style_class.includes('popup-menu')
+       ) {
+         this._lastPopup = focus;
+-        this._hidePopups();
++        afterDispatch(() => this._hidePopups());
+       }
+ 
+-      this.hide();
++      // Reached from notify::key-focus, so the teardown cannot run here.
++      afterDispatch(() => this.hide());
+     }
+ 
+     // hide window immediately when activated
+@@ -1029,7 +1074,7 @@
+     let focus = global.stage.get_key_focus();
+     if (!focus || !this._entry.contains(focus)) {
+       if (evt.get_key_symbol() === Clutter.KEY_Escape) {
+-        this.hide();
++        afterDispatch(() => this.hide());
+         return Clutter.EVENT_STOP;
+       }
+       this._search._text.get_parent().grab_key_focus();
+@@ -1039,6 +1084,6 @@
+   }
+ 
+   _onFullScreen() {
+-    this.hide();
++    afterDispatch(() => this.hide());
+   }
+ }

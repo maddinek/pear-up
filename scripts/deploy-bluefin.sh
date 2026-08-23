@@ -33,6 +33,7 @@ RSYNC_SSH="$(printf '%q ' ssh "${SSH_OPTS[@]}")"
 rsync -avz --delete \
   --exclude '.git' \
   --exclude 'assets/screenshots' \
+  --exclude 'contrib' \
   --exclude '*.ppm' \
   --exclude '*.png' \
   -e "$RSYNC_SSH" \
