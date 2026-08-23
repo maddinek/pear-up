@@ -10,8 +10,10 @@
 // anything else would, so it stays useful even as Pear Up changes.
 import Gio from 'gi://Gio';
 import Clutter from 'gi://Clutter';
+import St from 'gi://St';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 const IFACE = `
 <node>
@@ -31,6 +33,15 @@ const IFACE = `
     <method name="ActivateSearch">
       <arg type="b" direction="out" name="activated"/>
     </method>
+    <method name="ClaimLeftEdge">
+      <arg type="b" direction="out" name="claimed"/>
+    </method>
+    <method name="ReleaseLeftEdge">
+      <arg type="b" direction="out" name="released"/>
+    </method>
+    <method name="LeftBoxOrder">
+      <arg type="s" direction="out" name="roles"/>
+    </method>
   </interface>
 </node>`;
 
@@ -40,6 +51,7 @@ const PATH = '/io/github/maddinek/PearUpTestHook';
 const PEAR_UP_UUID = 'pear-up@maddinek.github.io';
 const LOGO_ROLE = 'pearup-logo';
 const SEARCH_ROLE = 'pearup-search';
+const DECOY_ROLE = 'pear-up-test-decoy';
 
 export default class TestHookExtension extends Extension {
     enable() {
@@ -48,6 +60,7 @@ export default class TestHookExtension extends Extension {
     }
 
     disable() {
+        this.ReleaseLeftEdge();
         this._export?.unexport();
         this._export = null;
     }
@@ -151,6 +164,39 @@ export default class TestHookExtension extends Extension {
 
         button._activate();
         return true;
+    }
+
+    // Stand in for the kind of extension that puts its own button at the left
+    // edge of the panel — a distro logo menu, say, which is enabled by default
+    // on Bazzite. Pear Up used to assume that slot was its own and inserted the
+    // menu bar at fixed indices, which pushed its System Menu further right with
+    // every menu it added.
+    ClaimLeftEdge() {
+        if (this._decoy)
+            return true;
+
+        this._decoy = new PanelMenu.Button(0.5, 'Test Decoy', true);
+        this._decoy.add_child(new St.Icon({
+            icon_name: 'start-here-symbolic',
+            style_class: 'system-status-icon',
+        }));
+        Main.panel.addToStatusArea(DECOY_ROLE, this._decoy, 0, 'left');
+        return true;
+    }
+
+    ReleaseLeftEdge() {
+        this._decoy?.destroy();
+        this._decoy = null;
+        return true;
+    }
+
+    LeftBoxOrder() {
+        const roles = Main.panel._leftBox.get_children().map(container => {
+            const role = Object.keys(Main.panel.statusArea).find(
+                r => Main.panel.statusArea[r]?.container === container);
+            return role ?? 'unknown';
+        });
+        return JSON.stringify(roles);
     }
 
     // The label on each panel button, and the items inside its menu. Enough to

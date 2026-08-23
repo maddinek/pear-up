@@ -9,6 +9,7 @@ import Shell from 'gi://Shell';
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
+import { LOGO_ROLE } from './systemMenu.js';
 
 // Error logging is gated behind the "debug-logging" setting (off by
 // default) so the extension doesn't spam the journal in normal use.
@@ -532,7 +533,7 @@ export class MenuManager {
             this.clear();
             this._buildCustomMenus().forEach((item, index) => {
                 let btn = new TopLevelMenuButton(item.label, item.children, null, false);
-                Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, index + 1, 'left');
+                Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, this._slotFor(index), 'left');
                 this._buttons.push(btn);
             });
             return;
@@ -664,9 +665,27 @@ export class MenuManager {
         menuData.forEach((item, index) => {
             let isAppMenu = this._settings.get_boolean('menu-app-enabled') && index === 0;
             let btn = new TopLevelMenuButton(item.label, item.children, detectedApp, isAppMenu);
-            Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, index + 1, 'left');
+            Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, this._slotFor(index), 'left');
             this._buttons.push(btn);
         });
+    }
+
+    // Where the nth menu goes: immediately after the System Menu button,
+    // wherever the panel has actually put it.
+    //
+    // This used to be `index + 1`, which assumed our own button owned slot 0.
+    // It does not: any extension that claims the left edge first takes that
+    // slot, and then every menu inserted at a fixed index pushes our button one
+    // place further right. On Bazzite, whose distro logo menu does exactly that,
+    // the System Menu ended up ninth — behind the whole menu bar.
+    _slotFor(index) {
+        const box = Main.panel._leftBox;
+        const logo = Main.panel.statusArea[LOGO_ROLE]?.container;
+        if (!box || !logo)
+            return index;
+
+        const after = box.get_children().indexOf(logo) + 1;
+        return (after > 0 ? after : 0) + index;
     }
 
     _buildCustomMenus() {

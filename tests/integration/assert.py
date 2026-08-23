@@ -206,6 +206,43 @@ if menus:
         check(f"{menu_label} menu offers its entries", expected <= found,
               f"missing {sorted(expected - found)}" if not expected <= found else "")
 
+    # ------------------------------------------ sharing the bar with a stranger
+    # Found on Bazzite, whose distro logo menu owns the left edge: the menu bar
+    # was inserted at fixed indices on the assumption that slot 0 belonged to
+    # this extension, so every menu added pushed the System Menu one place
+    # further right until it sat behind the whole bar.
+    def pear_up_setting(key, value):
+        subprocess.run(
+            ["gsettings", "set", "org.gnome.shell.extensions.pear-up", key, value],
+            env={**os.environ,
+                 "GSETTINGS_SCHEMA_DIR":
+                     f"{os.environ.get('HOME', '/root')}/.local/share/gnome-shell"
+                     f"/extensions/{UUID}/schemas"},
+            capture_output=True, check=False)
+
+    try:
+        call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "ClaimLeftEdge")
+        # Rebuild the bar now that the decoy holds slot 0.
+        pear_up_setting("menu-help-enabled", "false")
+        GLib.usleep(500 * 1000)
+        pear_up_setting("menu-help-enabled", "true")
+        GLib.usleep(1500 * 1000)
+
+        order = json.loads(
+            call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "LeftBoxOrder").unpack()[0])
+        logo_at = order.index("pearup-logo") if "pearup-logo" in order else -1
+        menus_at = [i for i, role in enumerate(order) if role.startswith(f"{UUID}-")]
+
+        check("the System Menu stays ahead of the menu bar when another "
+              "extension owns the left edge",
+              logo_at >= 0 and menus_at and logo_at < min(menus_at),
+              f"order={order}")
+    except (GLib.Error, ValueError) as exc:
+        check("panel order could be checked against a competing extension",
+              False, str(exc).splitlines()[0])
+    finally:
+        call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "ReleaseLeftEdge")
+
     # The System Menu is the icon-only button, so it has no label of its own.
     system_menu = next((m for m in menus if m["role"] == "pearup-logo"), None)
     if system_menu:

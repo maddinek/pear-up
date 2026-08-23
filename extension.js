@@ -2,7 +2,7 @@ import GLib from 'gi://GLib';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { MenuManager } from './menuManager.js';
-import { SystemMenuButton } from './systemMenu.js';
+import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
@@ -25,10 +25,10 @@ const PANEL_GAPS = [
     ['gap-before-clock', 'dateMenu'],
 ];
 
-// GNOME reserves room in the right cluster for indicators that are inactive
-// most of the time. macOS has no equivalent, and they leave a visible gap.
-// Roughly ten seconds of waiting for Quick Settings to finish building.
-const POWER_RETRY_LIMIT = 20;
+// Some panel items are built after extensions are enabled, so hiding one during
+// enable() can find nothing there to hide. Roughly ten seconds of coming back
+// for it, which covers the power icon and the Activities button both.
+const PANEL_RETRY_LIMIT = 20;
 
 // Nothing here reports state for tests. The suite loads a separate extension
 // that inspects the panel from outside, so this one carries no test surface and
@@ -50,6 +50,8 @@ const MENU_CONTENT_KEYS = [
     'custom-menus',
 ];
 
+// GNOME reserves room in the right cluster for indicators that are inactive
+// most of the time. macOS has no equivalent, and they leave a visible gap.
 const SPACER_ROLES = [
     'screenRecording',
     'screenSharing',
@@ -75,6 +77,10 @@ export default class GlobalMenuExtension extends Extension {
         this._powerDestroyId = 0;
         this._powerRetryId = 0;
         this._powerRetries = 0;
+        this._overviewActor = null;
+        this._overviewVisibleId = 0;
+        this._overviewRetryId = 0;
+        this._overviewRetries = 0;
         this._sessionModeId = 0;
         this._resyncId = 0;
         this._hiddenSpacers = [];
@@ -115,6 +121,7 @@ export default class GlobalMenuExtension extends Extension {
 
         this._settings = this.getSettings();
         this._powerRetries = 0;
+        this._overviewRetries = 0;
         this._hiddenSpacers = [];
         this._spotlightMoved = null;
         this._overviewHidden = false;
@@ -223,6 +230,7 @@ export default class GlobalMenuExtension extends Extension {
     // indicators stay visible.
     _forgetPanelActors() {
         this._releasePowerButton();
+        this._releaseOverviewButton();
         this._hiddenSpacers = [];
         this._gapped.clear();
         this._padded.clear();
@@ -542,7 +550,7 @@ export default class GlobalMenuExtension extends Extension {
     // The system item is built asynchronously while the shell starts, and
     // nothing announces its arrival, so poll briefly rather than give up.
     _retryHidePowerButton() {
-        if (this._powerRetryId || this._powerRetries >= POWER_RETRY_LIMIT)
+        if (this._powerRetryId || this._powerRetries >= PANEL_RETRY_LIMIT)
             return;
 
         this._powerRetries++;
@@ -652,11 +660,11 @@ export default class GlobalMenuExtension extends Extension {
 
         if (shouldShow && !this._logoButton) {
             // A previous failed enable() can leave this role occupied.
-            let existing = Main.panel.statusArea['pearup-logo'];
+            let existing = Main.panel.statusArea[LOGO_ROLE];
             if (existing)
                 existing.destroy();
             this._logoButton = new SystemMenuButton(this._settings, this.path);
-            Main.panel.addToStatusArea('pearup-logo', this._logoButton, 0, 'left');
+            Main.panel.addToStatusArea(LOGO_ROLE, this._logoButton, 0, 'left');
         } else if (!shouldShow && this._logoButton) {
             this._logoButton.destroy();
             this._logoButton = null;
@@ -690,21 +698,75 @@ export default class GlobalMenuExtension extends Extension {
         if (!this._settings)
             return;
 
-        let activities = Main.panel.statusArea['activities'];
-        let actor = activities?.container ?? activities;
-        if (!actor)
+        const hide = this._settings.get_boolean('hide-overview-button');
+        const activities = Main.panel.statusArea['activities'];
+        const actor = activities?.container ?? activities;
+
+        if (!actor) {
+            // On GNOME 50 this button is built after extensions are enabled, so
+            // during startup there is nothing here to hide yet — the same trap
+            // the power icon falls into. Come back for it.
+            if (hide)
+                this._retryHideOverviewButton();
+            return;
+        }
+
+        if (!hide) {
+            this._releaseOverviewButton();
+            if (this._overviewHidden) {
+                actor.show();
+                this._overviewHidden = false;
+            }
+            return;
+        }
+
+        // Compare against the actor, not "have we run": a rebuild replaces it
+        // and leaves us holding a destroyed one.
+        if (this._overviewActor === actor)
             return;
 
-        if (this._settings.get_boolean('hide-overview-button')) {
-            actor.hide();
-            this._overviewHidden = true;
-        } else if (this._overviewHidden) {
-            actor.show();
-            this._overviewHidden = false;
+        this._releaseOverviewButton();
+        actor.hide();
+        // What it holds on GNOME 50 is the workspace indicators, which re-show
+        // the button as workspaces come and go, so hiding it once is not enough.
+        this._overviewVisibleId = actor.connect('notify::visible', () => {
+            if (actor.visible)
+                actor.hide();
+        });
+        this._overviewActor = actor;
+        this._overviewHidden = true;
+    }
+
+    // Roughly ten seconds of waiting for the button to turn up.
+    _retryHideOverviewButton() {
+        if (this._overviewRetryId || this._overviewRetries >= PANEL_RETRY_LIMIT)
+            return;
+
+        this._overviewRetries++;
+        this._overviewRetryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+            this._overviewRetryId = 0;
+            this._guard('hiding the Activities button', () => this._syncOverviewButton());
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Stop keeping it hidden, without revealing it: for swapping to a newer
+    // actor after a rebuild.
+    _releaseOverviewButton() {
+        if (this._overviewVisibleId) {
+            try {
+                this._overviewActor?.disconnect(this._overviewVisibleId);
+            } catch (e) {
+                // Went away with a panel rebuild.
+            }
         }
+        this._overviewVisibleId = 0;
+        this._overviewActor = null;
     }
 
     _showOverviewButton() {
+        this._releaseOverviewButton();
+
         if (!this._overviewHidden)
             return;
 
@@ -774,7 +836,7 @@ export default class GlobalMenuExtension extends Extension {
             this._sessionModeId = 0;
         }
 
-        for (const source of ['_resyncId', '_powerRetryId']) {
+        for (const source of ['_resyncId', '_powerRetryId', '_overviewRetryId']) {
             if (this[source]) {
                 GLib.source_remove(this[source]);
                 this[source] = 0;

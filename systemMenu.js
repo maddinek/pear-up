@@ -9,6 +9,10 @@ import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import { spawnCommandLine } from './util.js';
 
+// The panel role this button is registered under. Shared, because the menu bar
+// has to know where it sits in order to line up beside it.
+export const LOGO_ROLE = 'pearup-logo';
+
 // Returns the first command (configured choice first, then fallbacks) whose
 // executable actually exists on this system, or null if none do.
 function findAvailableCommand(preferred, fallbacks) {
