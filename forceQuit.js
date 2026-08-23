@@ -126,12 +126,21 @@ export class ForceQuitPicker {
                 return Clutter.EVENT_STOP;
             }
 
+            // Anything but a plain left click does nothing: an accidental
+            // middle-click must not take a window down.
+            if (event.get_button() !== 1)
+                return Clutter.EVENT_STOP;
+
             const [x, y] = event.get_coords();
             const window = this._windowAt(x, y);
             this._ungrab();
             if (window) {
+                // Read the name before kill(), which may drop the window
+                // object out from under us before the notify below runs.
+                const killed = window.get_wm_class?.() || window.get_title() || 'window';
                 try {
                     window.kill();
+                    Main.notify('Force Quit', `Killed ${killed}.`);
                 } catch (e) {
                     console.error(`[pear-up] Force Quit failed: ${e}`);
                 }
@@ -166,6 +175,15 @@ export class ForceQuitPicker {
         if (window.minimized)
             return false;
         if (!this._types.has(window.get_window_type()))
+            return false;
+
+        // Only the minimised flag used to be checked, so a maximised window
+        // parked on another workspace passed the filter and clicking the
+        // current desktop could kill something the user cannot see. Sticky
+        // windows (on_all_workspaces) show everywhere and stay pickable.
+        const active = global.workspace_manager?.get_active_workspace?.();
+        if (!window.on_all_workspaces && active &&
+            !window.located_on_workspace?.(active))
             return false;
 
         // The shell's own actors are in the list too. Killing gnome-shell is

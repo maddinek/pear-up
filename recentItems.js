@@ -159,6 +159,10 @@ export function openRecentUri(uri) {
 // is counted by the shell separately and has no public way to reset it, so the
 // Applications section survives this — noted in the README rather than hidden.
 export function clearRecent() {
+    // This rewrites recently-used.xbel wholesale, so it races with any live
+    // GTK application holding or rewriting its own cached copy of the list.
+    // Clearing is therefore best-effort: a running app flushing later can put
+    // the old entries back.
     try {
         recentFile().replace_contents(
             new TextEncoder().encode(EMPTY_XBEL),

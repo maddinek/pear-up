@@ -466,15 +466,62 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         return page;
     }
 
+    // Displaced bindings have to survive the preferences process exiting:
+    // keeping them only in a Map meant that closing the window between enabling
+    // a shortcut set and disabling it again fell back to settings.reset(), which
+    // clobbers the user's own binding with the schema default. They are stored
+    // in our own settings as JSON mapping '<schemaId>:<key>' to the displaced
+    // GVariant serialized with variant.print(true), which round-trips through
+    // GLib.Variant.parse.
+    _getDisplacedMap() {
+        if (!this._displacedValues) {
+            this._displacedValues = new Map();
+            try {
+                const parsed = JSON.parse(
+                    this.getSettings().get_string('displaced-keybindings') || '{}');
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    for (const [id, serialized] of Object.entries(parsed)) {
+                        if (typeof serialized !== 'string')
+                            continue;
+                        try {
+                            this._displacedValues.set(id,
+                                GLib.Variant.parse(null, serialized, null));
+                        } catch {
+                            // One bad entry must not sink the rest; skip it.
+                        }
+                    }
+                }
+            } catch {
+                // Corrupt or unreadable JSON: start from an empty map rather
+                // than failing to build the page.
+            }
+        }
+        return this._displacedValues;
+    }
+
+    _saveDisplacedMap() {
+        if (!this._displacedValues)
+            return;
+        const serialized = {};
+        for (const [id, variant] of this._displacedValues.entries())
+            serialized[id] = variant.print(true);
+        try {
+            this.getSettings().set_string('displaced-keybindings', JSON.stringify(serialized));
+        } catch {
+            // Losing durability is better than losing the page; the in-memory
+            // map still covers this session.
+        }
+    }
+
     // One switch drives a whole set of accelerators. Each is appended to
     // GNOME's existing list and removed again on the way out, so a user's own
     // bindings for the same action are never disturbed. Conflicting grabs from
     // other extensions are stood down while the set is on.
     _addShortcutSetRow(group, { title, subtitle, shortcuts, conflicts = [], rows = null }) {
-        // Bindings displaced by a set, kept so they can be handed back. Created
-        // here rather than in fillPreferencesWindow so a page built on its own
-        // still works.
-        this._displacedValues ??= new Map();
+        // Bindings displaced by a set, kept so they can be handed back. Backed
+        // by our own settings rather than memory alone, so they survive the
+        // preferences process exiting between enabling a set and disabling it.
+        const displacedValues = this._getDisplacedMap();
 
         const expander = new Adw.ExpanderRow({ title, subtitle, show_enable_switch: true });
         group.add(expander);
@@ -505,8 +552,22 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             }));
         }
 
+        // The expansion state starts as whatever is already applied. GObject
+        // notifies synchronously, so that programmatic write would reach the
+        // handler below as if the user had toggled it on — merely OPENING
+        // Preferences re-applied the set and stood down conflicting grabs.
+        // Flag the initialisation off so the handler ignores exactly that one
+        // invocation; the flag is cleared before returning because notify
+        // handlers run inline, never later on a queue.
+        this._initialisingExpansion = true;
         expander.set_enable_expansion(isApplied());
+        this._initialisingExpansion = false;
+
         expander.connect('notify::enable-expansion', () => {
+            // Set programmatically above when mirroring reality, not by the user.
+            if (this._initialisingExpansion)
+                return;
+
             const wanted = expander.enable_expansion;
 
             for (const [schemaId, key, accel] of shortcuts) {
@@ -524,17 +585,20 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 if (wanted) {
                     // Keep whatever was there so switching off restores the
                     // user's own binding rather than the schema default.
-                    this._displacedValues.set(`${schemaId}:${key}`, settings.get_value(key));
+                    displacedValues.set(`${schemaId}:${key}`, settings.get_value(key));
                     settings.set_value(key, valueWhenApplied());
                 } else {
-                    const saved = this._displacedValues.get(`${schemaId}:${key}`);
+                    const saved = displacedValues.get(`${schemaId}:${key}`);
                     if (saved)
                         settings.set_value(key, saved);
                     else
                         settings.reset(key);
-                    this._displacedValues.delete(`${schemaId}:${key}`);
+                    displacedValues.delete(`${schemaId}:${key}`);
                 }
             }
+
+            // Persist the displacement bookkeeping so it outlives this process.
+            this._saveDisplacedMap();
         });
     }
 
@@ -1202,6 +1266,11 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
                 const persist = () => {
                     let current = loadItems();
+                    // The captured index can go stale if rows are removed or
+                    // reordered between render and edit; drop the write rather
+                    // than overwrite whatever moved into its place.
+                    if (!Array.isArray(current) || index >= current.length)
+                        return;
                     current[index] = { label: labelEntry.get_text(), value: valueEntry.get_text() };
                     saveItems(current);
                 };
@@ -1311,7 +1380,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         const loadSections = () => {
             try {
-                return JSON.parse(settings.get_string('custom-menus') || '[]');
+                // Valid JSON that is not an array would otherwise throw later,
+                // at sections.forEach; mirror loadItems() and fall back to [].
+                const sections = JSON.parse(settings.get_string('custom-menus') || '[]');
+                return Array.isArray(sections) ? sections : [];
             } catch {
                 return [];
             }
@@ -1380,7 +1452,15 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
                     const persistItem = () => {
                         let current = loadSections();
-                        current[sectionIndex].items[itemIndex] = {
+                        // The captured indices can go stale if rows are removed
+                        // or reordered between render and edit; drop the write
+                        // rather than overwrite the wrong section or item.
+                        const section = Array.isArray(current)
+                            ? current[sectionIndex] : undefined;
+                        if (!section || !Array.isArray(section.items) ||
+                            itemIndex >= section.items.length)
+                            return;
+                        section.items[itemIndex] = {
                             label: labelEntry.get_text(),
                             kind: kindDropdown.selected === 1 ? 'shortcut' : 'command',
                             value: valueEntry.get_text(),

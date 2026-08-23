@@ -79,7 +79,9 @@ gsettings set org.gnome.shell.extensions.pear-up hide-overview-button true
 gsettings set org.gnome.shell.extensions.pear-up logo-icon-size 14
 
 # Reload extension so stylesheet applies
-gnome-extensions disable "$EXTENSION_UUID"
+# `disable` fails if the extension is not currently enabled, which would abort
+# the script under `set -e` and skip the reload.
+gnome-extensions disable "$EXTENSION_UUID" || true
 sleep 1
 gnome-extensions enable "$EXTENSION_UUID"
 

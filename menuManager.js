@@ -170,7 +170,21 @@ const TopLevelMenuButton = GObject.registerClass(
         let window = display.get_focus_window();
 
         if (action === "close") {
-            if (window) window.delete(global.get_current_time());
+            // "Quit <app>" has to end the whole application, not just the
+            // window that happens to hold focus. When a tracked app exists,
+            // take down all of its windows; otherwise fall back to the one
+            // with focus.
+            if (this._appInstance) {
+                for (const win of this._appInstance.get_windows()) {
+                    try {
+                        win.delete(global.get_current_time());
+                    } catch (e) {
+                        logError(`[pear-up] Failed to close window: ${e}`);
+                    }
+                }
+            } else if (window) {
+                window.delete(global.get_current_time());
+            }
             return true;
         } else if (action === "minimize") {
             if (window) window.minimize();
@@ -220,8 +234,14 @@ const TopLevelMenuButton = GObject.registerClass(
 
         if (action.startsWith("app-details:")) {
             let appId = action.split(":")[1];
-            if (appId) {
+            if (appId && Gio.DesktopAppInfo.lookup(appId)) {
                 spawnCommand(['gnome-software', `--details=${appId}`]);
+                return true;
+            }
+            if (appId) {
+                // A desktop id guessed from wm_class usually resolves to
+                // nothing, and gnome-software would open into a void.
+                Main.notify('Pear Up', `Could not identify “${appId}” as an installed application.`);
                 return true;
             }
         }
@@ -399,7 +419,9 @@ const TopLevelMenuButton = GObject.registerClass(
         if (!device)
             return;
 
-        let time = GLib.get_monotonic_time();
+        // notify_keyval wants millisecond event stamps comparable to
+        // global.get_current_time(), not the microseconds get_monotonic_time().
+        let time = global.get_current_time();
         const press = k => {
             device.notify_keyval(time, k, Clutter.KeyState.PRESSED);
             time += 5;
@@ -536,9 +558,10 @@ export class MenuManager {
                 let checkId = detectedApp ? (detectedApp.get_id() || "") : "";
                 let checkName = detectedApp ? (detectedApp.get_name() || "") : "";
                 wmClass = window.get_wm_class() || "";
-                let title = window.get_title() || "";
-
-                let combinedIdentifiers = `${checkId} ${checkName} ${wmClass} ${title}`.toLowerCase();
+                // Blacklist entries match identity fields only — id, name,
+                // wm_class. A window title like "Debugging gjs" must not trip
+                // a blacklist entry of "gjs".
+                let combinedIdentifiers = `${checkId} ${checkName} ${wmClass}`.toLowerCase();
 
                 let isBlacklisted = this._blacklist.some(item =>
                     combinedIdentifiers.includes(item.toLowerCase())

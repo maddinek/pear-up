@@ -37,7 +37,9 @@ export function compactMenuItems(items) {
         if (item.children)
             kept.push({ ...item, children: compactMenuItems(item.children) });
         else
-            kept.push(item);
+            // Spread leaves too: these are shared template constants, and a
+            // caller mutating what a built menu hands back must not reach them.
+            kept.push({ ...item });
     }
 
     const squeezed = [];

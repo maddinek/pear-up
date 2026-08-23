@@ -133,6 +133,19 @@ To remove it:
 bash uninstall.sh
 ```
 
+By default this only removes the extension's own files. Changes made from the Preferences
+window to settings owned by other parts of the desktop — the macOS shortcut sets appended
+to GNOME's keybindings, the Alt/Cmd swap in `xkb-options`, the Dash to Dock hot keys stood
+down for them, and the window button layout — are left in place. To revert those as well:
+
+```bash
+bash uninstall.sh --reset-settings
+```
+
+That removes exactly the accelerators this extension added (leaving any of your own on the
+same actions alone) and resets the other keys only while they still hold the values it
+wrote, printing what was restored.
+
 ## Testing
 
 Both suites run in containers, so no other system has to be installed and nothing touches the
