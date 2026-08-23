@@ -194,21 +194,69 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         return this._settingsForSchema(DASH_TO_DOCK_SCHEMA);
     }
 
+    // Shown instead of the dock settings when Dash to Dock is not installed.
+    // Nothing here installs anything: which dock to run, and how to get it, is
+    // the user's call. It just answers the question the empty page raises.
+    _buildDockMissingGroup(page) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Dash to Dock Is Not Installed',
+            description: 'GNOME has no dock of its own — its dash only appears in the ' +
+                'overview and goes away with it. Dash to Dock turns that dash into a dock ' +
+                'that stays. Install it, log out and back in, and this page becomes its ' +
+                'settings: edge, icon size, length, visibility and which display.',
+        });
+        page.add(group);
+
+        const command = this._dockInstallCommand();
+        if (command) {
+            const row = new Adw.ActionRow({
+                title: command,
+                subtitle: 'Packaged for this system, so it updates along with it',
+            });
+            // Selectable so it can be copied; there is no clipboard button here
+            // because a preferences window has no business writing to the
+            // clipboard unasked.
+            row.set_title_selectable(true);
+            row.add_css_class('monospace');
+            group.add(row);
+        }
+
+        const linkRow = new Adw.ActionRow({
+            title: 'Or install it from the GNOME Extensions site',
+            subtitle: 'extensions.gnome.org/extension/307/dash-to-dock',
+        });
+        linkRow.add_suffix(new Gtk.LinkButton({
+            uri: 'https://extensions.gnome.org/extension/307/dash-to-dock/',
+            label: 'Open',
+            valign: Gtk.Align.CENTER,
+        }));
+        group.add(linkRow);
+    }
+
+    // The packaged route, when this system is one we can name a package for.
+    // Guessing a command for a distribution we cannot identify would be worse
+    // than saying nothing, so unknown systems get the link alone.
+    _dockInstallCommand() {
+        const ids = [
+            GLib.get_os_info('ID') ?? '',
+            ...(GLib.get_os_info('ID_LIKE') ?? '').split(' '),
+        ];
+        if (!ids.includes('fedora'))
+            return null;
+
+        // Image-based Fedora — Silverblue, Bazzite, Bluefin — layers packages
+        // instead of installing them.
+        return GLib.file_test('/run/ostree-booted', GLib.FileTest.EXISTS)
+            ? 'rpm-ostree install gnome-shell-extension-dash-to-dock'
+            : 'sudo dnf install gnome-shell-extension-dash-to-dock';
+    }
+
     _buildDockPage() {
         const page = new Adw.PreferencesPage({ title: 'Dock', icon_name: 'view-grid-symbolic' });
         const dock = this._dashToDockSettings();
 
         if (!dock) {
-            const missingGroup = new Adw.PreferencesGroup({ title: 'Dash to Dock Not Found' });
-            page.add(missingGroup);
-
-            const row = new Adw.ActionRow({
-                title: 'Install the Dash to Dock extension',
-                subtitle: 'The dock is provided by Dash to Dock. Once it is installed, ' +
-                    'its position, size and visibility can be changed from here.',
-            });
-            row.set_subtitle_lines(0);
-            missingGroup.add(row);
+            this._buildDockMissingGroup(page);
             return page;
         }
 
