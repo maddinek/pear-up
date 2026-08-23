@@ -41,6 +41,19 @@ for (const [name, symbols] of Object.entries(manifest.introspected ?? {})) {
     }
 }
 
+// Used where available. Reported either way: a symbol that comes and goes across
+// versions is worth seeing, and reading its presence as a guarantee of behaviour
+// is its own kind of mistake.
+for (const [name, symbols] of Object.entries(manifest.optional ?? {})) {
+    if (name === 'comment')
+        continue;
+    const namespace = await load(name);
+    for (const symbol of symbols) {
+        const present = namespace?.[symbol] !== undefined;
+        notes.push(`${name}.${symbol} ${present ? 'is available here' : 'does not exist here'}`);
+    }
+}
+
 // Instance methods, checked on the prototype. Resolving a class can throw for
 // types GJS cannot represent, which must not end the whole run.
 const prototypeOf = target => {

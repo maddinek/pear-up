@@ -43,7 +43,31 @@
     "Shell": [
       "AppSystem",
       "WindowTracker"
+    ],
+    "GLib": [
+      "idle_add",
+      "source_remove",
+      "PRIORITY_DEFAULT_IDLE",
+      "SOURCE_REMOVE",
+      "spawn_async",
+      "shell_parse_argv",
+      "SpawnFlags"
     ]
+  },
+
+  "optional": {
+    "comment": [
+      "Used only where present, so absence is not a failure — but presence is not",
+      "permission either, and that distinction cost a release's worth of broken",
+      "clicks. Clutter.ClickGesture exists from GNOME 49, while only GNOME 50",
+      "delivers panel button presses through one; wiring the search button to a",
+      "gesture because the class resolved left it inert on 45 to 49. The code asks",
+      "PanelMenu.Button what the shell actually does instead, and only the",
+      "integration suite can confirm that answer.",
+      "",
+      "Reported per version rather than asserted, so the split stays visible."
+    ],
+    "Clutter": ["ClickGesture"]
   },
 
   "methods": {
@@ -62,6 +86,10 @@
     ],
     "Clutter.VirtualInputDevice": [
       "notify_keyval"
+    ],
+    "Clutter.Actor": [
+      "get_actions",
+      "add_action"
     ]
   },
 
