@@ -29,6 +29,7 @@ EXTRA_SOURCES=(
     menuManager.js
     systemMenu.js
     searchButton.js
+    recentItems.js
     util.js
     icons
 )

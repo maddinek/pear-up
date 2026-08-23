@@ -4,6 +4,26 @@ Notable changes, newest first. Versions are the pair described in
 [the README](README.md#releases): the integer GNOME compares, and the name a
 human reads.
 
+## Unreleased
+
+### Changed
+
+- **The System Menu now follows the Apple menu it imitates**, group for group:
+  About, then settings, then Recent Items, then Force Quit, then the power
+  actions, then Lock Screen and Log Out — the last two naming the shortcut this
+  system has bound, read from GNOME's own settings rather than assumed. Every
+  entry carries an icon, and the account name appears in Log Out.
+- **Activities, App Grid, System Monitor and Terminal are off by default.** The
+  Apple menu has none of them and the dock reaches them; the settings remain for
+  anyone who disagrees.
+
+### Added
+
+- **Recent Items**, as Applications, Documents and Servers, with Clear Menu.
+  Applications comes from the shell's usage statistics because GNOME keeps no
+  recently-used-application list, and Clear Menu empties the recent files list —
+  the one GNOME Settings clears — which those statistics do not live in.
+
 ## 0.2.0 — `version: 2` — 2026-08-23
 
 The first release after the project became Pear Up, and mostly the result of

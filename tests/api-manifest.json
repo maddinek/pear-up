@@ -38,11 +38,21 @@
       "Icon",
       "Bin",
       "BoxLayout",
-      "ThemeContext"
+      "ThemeContext",
+      "IconTheme"
     ],
     "Shell": [
       "AppSystem",
-      "WindowTracker"
+      "WindowTracker",
+      "AppUsage"
+    ],
+    "Gio": [
+      "AppInfo",
+      "File",
+      "FileCreateFlags",
+      "Icon",
+      "Settings",
+      "SettingsSchemaSource"
     ],
     "GLib": [
       "idle_add",
@@ -51,7 +61,11 @@
       "SOURCE_REMOVE",
       "spawn_async",
       "shell_parse_argv",
-      "SpawnFlags"
+      "SpawnFlags",
+      "get_real_name",
+      "get_user_name",
+      "get_user_data_dir",
+      "build_filenamev"
     ]
   },
 
@@ -90,6 +104,21 @@
     "Clutter.Actor": [
       "get_actions",
       "add_action"
+    ],
+    "Shell.AppUsage": [
+      "get_most_used"
+    ],
+    "St.IconTheme": [
+      "has_icon"
+    ],
+    "Gio.File": [
+      "load_contents",
+      "replace_contents",
+      "query_exists",
+      "get_basename",
+      "get_parent",
+      "get_parse_name",
+      "get_uri"
     ]
   },
 
@@ -126,6 +155,10 @@
     "searchEntry",
     "extensionManager",
     "stateObj",
+    "PopupBaseMenuItem",
+    "PopupSubMenuMenuItem",
+    "label_actor",
+    "popup-menu-icon",
     "dontCreateMenu"
   ],
 

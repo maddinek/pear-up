@@ -446,7 +446,7 @@ const TopLevelMenuButton = GObject.registerClass(
         } else if (item.type === "section-header") {
           let headerItem = new PopupMenu.PopupMenuItem(item.label, { activate: false });
           headerItem.setSensitive(false);
-          headerItem.label.add_style_class_name('popup-subtitle-menu-item');
+          headerItem.label.add_style_class_name('pearup-menu-heading');
           parentMenu.addMenuItem(headerItem);
         } else if (item.type === "submenu") {
           const subMenu = new PopupMenu.PopupSubMenuMenuItem(item.label);

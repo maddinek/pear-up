@@ -18,10 +18,19 @@ The menu engine came from
 menus live in the top bar instead of inside each window. Every menu can be switched off individually.
 When no window is in front, the bar clears itself.
 
-**A system menu.** The bitten pear on the far left opens About This System, System Settings,
-Activities, the App Grid, your software centre, system monitor, terminal and extensions manager,
-Force Quit, and the power actions — each one optional. The icon can be any bundled distro logo, an
-Apple-style glyph, or your own image.
+**A system menu.** The bitten pear on the far left opens the Apple menu's arrangement, group for
+group: About This System; System Settings, your software centre and the extensions manager; Recent
+Items; Force Quit; Sleep, Restart and Shut Down; then Lock Screen and Log Out, each naming the
+shortcut this system has bound to it. Every entry has an icon and every entry is optional — Activities,
+the App Grid, a system monitor and a terminal are available too, off by default because the menu they
+imitate has none of them. The icon can be any bundled distro logo, an Apple-style glyph, or your own
+image.
+
+**Recent Items**, split into Applications, Documents and Servers as macOS splits it, filled fresh each
+time it opens. Two honest differences: Applications comes from the shell's usage statistics, so it is
+what you use most rather than what you opened last — GNOME keeps no recently-used-application list —
+and Clear Menu empties the recent *files* list, the same one GNOME Settings clears, which has no
+effect on those statistics.
 
 ![The pear system menu open](assets/screenshots/system-menu.png)
 

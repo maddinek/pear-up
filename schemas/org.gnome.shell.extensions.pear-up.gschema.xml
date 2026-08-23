@@ -120,12 +120,15 @@
     </key>
 
     <key name="show-system-settings" type="b"><default>true</default><summary>Show System Settings item in System Menu</summary></key>
-    <key name="show-app-grid" type="b"><default>true</default><summary>Show App Grid item in System Menu</summary></key>
+    <!-- Off by default: the Apple menu this one imitates has none of these, and
+         the dock and app grid already reach them. Kept as settings because a
+         GNOME desktop is not a Mac and some people want them. -->
+    <key name="show-app-grid" type="b"><default>false</default><summary>Show App Grid item in System Menu</summary></key>
     <key name="show-software-center" type="b"><default>true</default><summary>Show Software Center item</summary></key>
     <key name="software-center-command" type="s"><default>"flatpak run io.github.kolunmi.Bazaar"</default><summary>Command for Software Center</summary></key>
-    <key name="show-system-monitor" type="b"><default>true</default><summary>Show System Monitor item</summary></key>
+    <key name="show-system-monitor" type="b"><default>false</default><summary>Show System Monitor item</summary></key>
     <key name="system-monitor-command" type="s"><default>"missioncenter-helper"</default><summary>Command for System Monitor</summary></key>
-    <key name="show-terminal" type="b"><default>true</default><summary>Show Terminal item</summary></key>
+    <key name="show-terminal" type="b"><default>false</default><summary>Show Terminal item</summary></key>
     <key name="terminal-command" type="s"><default>"ptyxis"</default><summary>Command for Terminal</summary></key>
     <key name="show-extensions-app" type="b"><default>true</default><summary>Show Extensions item</summary></key>
     <key name="extensions-app-id" type="s">
@@ -137,6 +140,13 @@
     <key name="show-power-options" type="b"><default>true</default><summary>Show Sleep/Restart/Shut Down items</summary></key>
     <key name="show-lock-screen" type="b"><default>true</default><summary>Show Lock Screen item</summary></key>
     <key name="show-log-out" type="b"><default>true</default><summary>Show Log Out item</summary></key>
+    <key name="show-recent-items" type="b"><default>true</default><summary>Show the Recent Items submenu</summary></key>
+    <key name="recent-items-limit" type="i">
+      <default>5</default>
+      <range min="1" max="20"/>
+      <summary>How many entries each Recent Items section lists</summary>
+      <description>Applications, Documents and Servers are each limited to this many, as in macOS.</description>
+    </key>
 
     <key name="system-menu-custom-items" type="s">
       <default>"[]"</default>

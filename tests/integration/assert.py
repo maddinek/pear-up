@@ -248,12 +248,51 @@ if menus:
     if system_menu:
         entries = [item["label"] for item in system_menu["items"] if item["label"]]
         check("System Menu offers About and Settings",
-              {"About This System", "System Settings"} <= set(entries),
+              {"About This System", "System Settings…"} <= set(entries),
               f"found {entries}")
         # Deliberately absent: these settings belong in GNOME Settings, and
         # nothing can put them there.
         check("System Menu has no settings entry of its own",
               not any("Pear Up" in entry for entry in entries))
+
+        # The order the Apple menu uses. Checked as an order rather than a set,
+        # because the grouping is the whole point of the arrangement.
+        expected_order = ["About This System", "System Settings…", "Recent Items",
+                          "Force Quit…", "Sleep", "Restart…", "Shut Down…",
+                          "Lock Screen"]
+        present = [entry for entry in entries if entry in expected_order]
+        check("System Menu follows the macOS order",
+              present == [entry for entry in expected_order if entry in present],
+              f"found {present}")
+
+        check("Log Out names the account",
+              any(entry.startswith("Log Out ") and entry != "Log Out …"
+                  for entry in entries),
+              f"found {[e for e in entries if e.startswith('Log Out')]}")
+
+        # Separators group the menu; leading, trailing or doubled ones are the
+        # symptom of building them inline as items are added.
+        flags = [item["separator"] for item in system_menu["items"]]
+        check("System Menu separators only fall between groups",
+              flags and not flags[0] and not flags[-1]
+              and not any(a and b for a, b in zip(flags, flags[1:])),
+              f"separator positions {[i for i, f in enumerate(flags) if f]} of {len(flags)}")
+
+        recent = next((item for item in system_menu["items"]
+                       if item["label"] == "Recent Items"), None)
+        check("Recent Items is a submenu", bool(recent and recent["submenu"]))
+
+        if recent:
+            # It fills itself as it opens, so the empty state is what a shell
+            # with no recent files should report — and it must say so rather
+            # than offering an empty menu.
+            opened = json.loads(call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                                     "OpenSubMenu", ("Recent Items",),
+                                     "(s)").unpack()[0])
+            labels = [item["label"] for item in (opened or []) if item["label"]]
+            check("Recent Items fills itself when opened",
+                  labels and (labels == ["No Recent Items"] or "Clear Menu" in labels),
+                  f"found {labels}")
     else:
         check("System Menu was found", False, "no pearup-logo role")
 
