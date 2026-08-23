@@ -822,7 +822,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             settings.set_string('extensions-app-id', EXTENSIONS_APPS[extAppRow.selected][0]);
         });
 
-        const forceQuitRow = new Adw.SwitchRow({ title: 'Force Quit App' });
+        const forceQuitRow = new Adw.SwitchRow({
+            title: 'Force Quit',
+            subtitle: 'Then click the window to quit, like xkill. Esc cancels',
+        });
         itemsGroup.add(forceQuitRow);
         settings.bind('show-force-quit', forceQuitRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
@@ -939,6 +942,18 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             sizeScale.set_value(settings.get_int('logo-icon-size'));
             updatePreview();
         });
+
+        const fontRow = this._addScaleRow(group, 'Menu Text Size', {
+            lower: 10,
+            upper: 16,
+            marks: [10, 11, 12, 13, 14, 16],
+            value: settings.get_int('system-menu-font-size'),
+            unit: 'px',
+            onChange: value => settings.set_int('system-menu-font-size', value),
+        });
+        fontRow.row.set_subtitle('The pear menu only. 13 is GNOME’s own size');
+        settings.connect('changed::system-menu-font-size',
+            () => fontRow.setValue(settings.get_int('system-menu-font-size')));
 
         const flowBox = new Gtk.FlowBox({
             selection_mode: Gtk.SelectionMode.SINGLE,

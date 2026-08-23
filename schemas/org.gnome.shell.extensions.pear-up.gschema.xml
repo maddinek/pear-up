@@ -41,6 +41,12 @@
       <range min="12" max="48"/>
       <summary>Icon size in pixels for the System Menu button</summary>
     </key>
+    <key name="system-menu-font-size" type="i">
+      <default>13</default>
+      <range min="10" max="16"/>
+      <summary>Type size of the System Menu, in pixels</summary>
+      <description>The pear menu only. File, Edit and the rest of the bar stay at the shell's size. 13 is GNOME's own menu size.</description>
+    </key>
 
     <key name="hide-overview-button" type="b"><default>true</default><summary>Hide the Activities/overview button</summary></key>
 

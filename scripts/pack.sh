@@ -30,6 +30,7 @@ EXTRA_SOURCES=(
     systemMenu.js
     searchButton.js
     recentItems.js
+    forceQuit.js
     util.js
     icons
 )

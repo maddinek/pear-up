@@ -10,6 +10,7 @@ import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import { spawnCommandLine } from './util.js';
 import { recentSections, clearRecent } from './recentItems.js';
+import { ForceQuitPicker } from './forceQuit.js';
 
 // The panel role this button is registered under. Shared, because the menu bar
 // has to know where it sits in order to line up beside it.
@@ -114,6 +115,8 @@ export const SystemMenuButton = GObject.registerClass(
         });
         this.add_child(this._icon);
 
+        this._picker = new ForceQuitPicker();
+
         this._syncIcon();
         this._rebuildMenu();
 
@@ -125,7 +128,7 @@ export const SystemMenuButton = GObject.registerClass(
                         'show-software-center', 'show-system-monitor', 'show-terminal',
                         'show-extensions-app', 'show-force-quit', 'show-power-options',
                         'show-lock-screen', 'show-log-out', 'show-recent-items',
-                        'system-menu-custom-items'].includes(key)) {
+                        'system-menu-custom-items', 'system-menu-font-size'].includes(key)) {
                 this._rebuildMenu();
             }
         }, this);
@@ -254,6 +257,24 @@ export const SystemMenuButton = GObject.registerClass(
                 this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
             group.forEach(add => add());
         });
+
+        this._applyMenuSize();
+    }
+
+    // The pear menu's type size is a setting; File/Edit stay at the shell's.
+    // Applied as inline style because the amount has to change without a
+    // stylesheet reload, and because a class per size is eight classes for a
+    // slider.
+    _applyMenuSize() {
+        const px = this._settings.get_int('system-menu-font-size');
+        this.menu.box.set_style(`font-size: ${px}px;`);
+    }
+
+    // GNOME's popup-menu-icon is 16px at the default 13px type. Keep that
+    // ratio so a smaller menu does not leave oversized glyphs next to the text.
+    _menuIconSize() {
+        const px = this._settings.get_int('system-menu-font-size');
+        return Math.max(12, Math.min(20, Math.round(px * 16 / 13)));
     }
 
     // Built by hand rather than with PopupImageMenuItem, because these items
@@ -265,6 +286,7 @@ export const SystemMenuButton = GObject.registerClass(
 
         const icon = new St.Icon({
             style_class: 'popup-menu-icon',
+            icon_size: this._menuIconSize(),
             y_align: Clutter.ActorAlign.CENTER,
         });
         const iconName = this._resolveIcon(iconNames);
@@ -333,6 +355,9 @@ export const SystemMenuButton = GObject.registerClass(
         const iconName = this._resolveIcon(ICONS.recent);
         if (iconName)
             submenu.icon.icon_name = iconName;
+
+        if (submenu.icon)
+            submenu.icon.icon_size = this._menuIconSize();
 
         this._fillRecentItems(submenu.menu);
         this.menu.connectObject('open-state-changed', (_menu, isOpen) => {
@@ -495,19 +520,15 @@ export const SystemMenuButton = GObject.registerClass(
     }
 
     _forceQuit() {
-        let window = global.display.get_focus_window();
-        if (!window) {
-            Main.notify('Force Quit', 'No focused window to quit.');
-            return;
-        }
-        try {
-            window.kill();
-        } catch (e) {
-            console.error(`[pear-up] Force Quit failed: ${e}`);
-        }
+        // Close first: the picker needs the pointer, and the menu is still
+        // holding it until this activate handler returns.
+        this.menu.close();
+        this._picker.begin();
     }
 
     _onDestroy() {
+        this._picker?.destroy();
+        this._picker = null;
         this._settings = null;
         this._systemActions = null;
         this._extensionPath = null;

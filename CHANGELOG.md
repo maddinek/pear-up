@@ -8,6 +8,11 @@ human reads.
 
 ### Changed
 
+- **Force Quit picks a window**, instead of killing whatever happens to have
+  focus. Click the window after choosing the item, the way xkill does; Esc or
+  right-click cancels. Killing the focused app was the wrong default: the window
+  you want to abandon is usually the one that is not responding, and therefore
+  not the one that has focus.
 - **The System Menu now follows the Apple menu it imitates**, group for group:
   About, then settings, then Recent Items, then Force Quit, then the power
   actions, then Lock Screen and Log Out — the last two naming the shortcut this
@@ -19,6 +24,8 @@ human reads.
 
 ### Added
 
+- **System Menu text size**, 10–16px, default 13 (GNOME's own). The pear menu
+  only; File, Edit and the rest of the bar stay at the shell size.
 - **Recent Items**, as Applications, Documents and Servers, with Clear Menu.
   Applications comes from the shell's usage statistics because GNOME keeps no
   recently-used-application list, and Clear Menu empties the recent files list —

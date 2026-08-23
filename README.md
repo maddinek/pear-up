@@ -20,7 +20,7 @@ When no window is in front, the bar clears itself.
 
 **A system menu.** The bitten pear on the far left opens the Apple menu's arrangement, group for
 group: About This System; System Settings, your software centre and the extensions manager; Recent
-Items; Force Quit; Sleep, Restart and Shut Down; then Lock Screen and Log Out, each naming the
+Items; Force Quit (click the window, like xkill); Sleep, Restart and Shut Down; then Lock Screen and Log Out, each naming the
 shortcut this system has bound to it. Every entry has an icon and every entry is optional — Activities,
 the App Grid, a system monitor and a terminal are available too, off by default because the menu they
 imitate has none of them. The icon can be any bundled distro logo, an Apple-style glyph, or your own

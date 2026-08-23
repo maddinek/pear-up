@@ -18,6 +18,8 @@
 
   "introspected": {
     "Clutter": [
+      "KEY_Escape",
+      "EventType",
       "KEY_Control_L",
       "KEY_Shift_L",
       "KEY_Alt_L",
@@ -81,7 +83,8 @@
       "",
       "Reported per version rather than asserted, so the split stays visible."
     ],
-    "Clutter": ["ClickGesture"]
+    "Clutter": ["ClickGesture", "CursorType"],
+    "Meta": ["Cursor"]
   },
 
   "methods": {
@@ -95,6 +98,7 @@
       "get_window_type",
       "get_id",
       "showing_on_its_workspace",
+      "get_frame_rect",
       "unmaximize",
       "maximize"
     ],
@@ -159,7 +163,13 @@
     "PopupSubMenuMenuItem",
     "label_actor",
     "popup-menu-icon",
-    "dontCreateMenu"
+    "dontCreateMenu",
+    "pushModal",
+    "popModal",
+    "uiGroup",
+    "get_window_actors",
+    "set_cursor",
+    "captured-event"
   ],
 
   "absent": {
