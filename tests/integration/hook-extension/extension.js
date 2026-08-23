@@ -42,10 +42,40 @@ const IFACE = `
     <method name="LeftBoxOrder">
       <arg type="s" direction="out" name="roles"/>
     </method>
+    <method name="OpenSubMenu">
+      <arg type="s" direction="in" name="label"/>
+      <arg type="s" direction="out" name="items"/>
+    </method>
   </interface>
 </node>`;
 
 const PATH = '/io/github/maddinek/PearUpTestHook';
+
+// Items built by hand carry their label in a child actor rather than in
+// `label`, so fall back to the first label found among the children.
+function labelOf(item) {
+    const own = item.label?.text ?? item.label;
+    if (typeof own === 'string')
+        return own;
+
+    const child = item.get_children?.()
+        .find(actor => typeof actor.text === 'string' && actor.text !== '');
+    return child?.text ?? null;
+}
+
+// One level deep: nothing in these menus nests further than Recent Items, and
+// that one is opened explicitly because it fills itself on the way open.
+function describeItem(item, withChildren = true) {
+    return {
+        label: labelOf(item),
+        sensitive: item.sensitive ?? null,
+        separator: item.constructor?.name?.includes('Separator') ?? false,
+        submenu: !!item.menu,
+        items: withChildren && item.menu
+            ? (item.menu._getMenuItems?.() ?? []).map(child => describeItem(child, false))
+            : null,
+    };
+}
 
 // Pear Up names its panel buttons after its own UUID, plus the System Menu.
 const PEAR_UP_UUID = 'pear-up@maddinek.github.io';
@@ -199,20 +229,27 @@ export default class TestHookExtension extends Extension {
         return JSON.stringify(roles);
     }
 
+    // Opens a submenu by label and reports what appeared in it. Submenus whose
+    // contents depend on the state of the system are filled as they open, so
+    // reading them without opening one reports an empty menu.
+    OpenSubMenu(label) {
+        for (const role of this._pearUpRoles()) {
+            const items = Main.panel.statusArea[role]?.menu?._getMenuItems?.() ?? [];
+            const found = items.find(item => item.menu && labelOf(item) === label);
+            if (!found)
+                continue;
+
+            found.menu.open(false);
+            return JSON.stringify((found.menu._getMenuItems?.() ?? [])
+                .map(item => describeItem(item, false)));
+        }
+
+        return JSON.stringify(null);
+    }
+
     // The label on each panel button, and the items inside its menu. Enough to
     // assert that a menu offers what it should without simulating a pointer.
     GetMenuTree() {
-        const describeItem = item => {
-            // Separators carry no label; submenus have a menu of their own.
-            const label = item.label?.text ?? item.label ?? null;
-            return {
-                label: typeof label === 'string' ? label : null,
-                sensitive: item.sensitive ?? null,
-                separator: item.constructor?.name?.includes('Separator') ?? false,
-                submenu: !!item.menu,
-            };
-        };
-
         const menus = this._pearUpRoles().map(role => {
             const button = Main.panel.statusArea[role];
             const items = button?.menu?._getMenuItems?.() ?? [];

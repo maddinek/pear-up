@@ -2,12 +2,14 @@ import GObject from 'gi://GObject';
 import St from 'gi://St';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import { spawnCommandLine } from './util.js';
+import { recentSections, clearRecent } from './recentItems.js';
 
 // The panel role this button is registered under. Shared, because the menu bar
 // has to know where it sits in order to line up beside it.
@@ -32,6 +34,70 @@ function findAvailableCommand(preferred, fallbacks) {
 const TERMINAL_FALLBACKS = ['ptyxis', 'gnome-terminal', 'kgx', 'konsole', 'kitty', 'alacritty', 'tilix', 'terminator', 'xterm'];
 const SOFTWARE_CENTER_FALLBACKS = ['flatpak run io.github.kolunmi.Bazaar', 'gnome-software', 'plasma-discover', 'pamac-manager', 'snap-store'];
 const SYSTEM_MONITOR_FALLBACKS = ['missioncenter-helper', 'gnome-system-monitor', 'resources', 'ksysguard', 'xfce4-taskmanager'];
+
+// Icon names in preference order. Adwaita has dropped and renamed a great many
+// legacy names across these releases, and a name that is not in the theme draws
+// as a missing-image glyph, so every item names alternatives and the first one
+// actually present wins.
+const ICONS = {
+    about: ['computer-symbolic', 'help-about-symbolic'],
+    settings: ['preferences-system-symbolic', 'emblem-system-symbolic'],
+    software: ['system-software-install-symbolic', 'shop-symbolic', 'org.gnome.Software-symbolic'],
+    extensions: ['application-x-addon-symbolic', 'org.gnome.Extensions-symbolic', 'preferences-desktop-apps-symbolic'],
+    activities: ['view-grid-symbolic', 'focus-windows-symbolic'],
+    appGrid: ['view-app-grid-symbolic', 'view-grid-symbolic'],
+    monitor: ['utilities-system-monitor-symbolic', 'speedometer-symbolic'],
+    terminal: ['utilities-terminal-symbolic', 'terminal-symbolic'],
+    recent: ['document-open-recent-symbolic', 'clock-symbolic'],
+    clear: ['user-trash-symbolic', 'edit-clear-symbolic'],
+    forceQuit: ['process-stop-symbolic', 'window-close-symbolic'],
+    sleep: ['weather-clear-night-symbolic', 'night-light-symbolic', 'system-suspend-symbolic'],
+    restart: ['system-reboot-symbolic', 'view-refresh-symbolic'],
+    shutDown: ['system-shutdown-symbolic'],
+    lock: ['system-lock-screen-symbolic', 'changes-prevent-symbolic'],
+    logOut: ['system-log-out-symbolic', 'go-previous-symbolic'],
+    custom: ['application-x-executable-symbolic', 'system-run-symbolic'],
+};
+
+// Where GNOME keeps the bindings macOS prints beside these same items. Read
+// rather than hardcoded, so the menu shows the shortcut this system has.
+const MEDIA_KEYS_SCHEMA = 'org.gnome.settings-daemon.plugins.media-keys';
+
+const MODIFIER_LABELS = [
+    [/<(Control|Primary|Ctrl)>/g, 'Ctrl+'],
+    [/<Shift>/g, 'Shift+'],
+    [/<Alt>/g, 'Alt+'],
+    [/<Super>/g, 'Super+'],
+];
+
+const KEY_LABELS = {
+    Delete: 'Del',
+    Escape: 'Esc',
+    Return: 'Enter',
+    space: 'Space',
+};
+
+// "<Super>l" is what the setting holds; "Super+L" is what a menu should say.
+function formatAccelerator(accel) {
+    if (!accel)
+        return null;
+
+    let text = accel;
+    for (const [pattern, label] of MODIFIER_LABELS)
+        text = text.replace(pattern, label);
+
+    // Anything left in angle brackets is a modifier this does not know; drop
+    // the brackets rather than printing them.
+    text = text.replace(/<([^>]*)>/g, '$1+');
+
+    const key = text.split('+').pop();
+    const shown = KEY_LABELS[key] ?? (key.length === 1 ? key.toUpperCase() : key);
+    return text.slice(0, text.length - key.length) + shown;
+}
+
+function schemaExists(id) {
+    return !!Gio.SettingsSchemaSource.get_default()?.lookup(id, true);
+}
 
 export const SystemMenuButton = GObject.registerClass(
   class SystemMenuButton extends PanelMenu.Button {
@@ -58,7 +124,8 @@ export const SystemMenuButton = GObject.registerClass(
             } else if (['hide-overview-button', 'show-system-settings', 'show-app-grid',
                         'show-software-center', 'show-system-monitor', 'show-terminal',
                         'show-extensions-app', 'show-force-quit', 'show-power-options',
-                        'show-lock-screen', 'show-log-out', 'system-menu-custom-items'].includes(key)) {
+                        'show-lock-screen', 'show-log-out', 'show-recent-items',
+                        'system-menu-custom-items'].includes(key)) {
                 this._rebuildMenu();
             }
         }, this);
@@ -101,114 +168,263 @@ export const SystemMenuButton = GObject.registerClass(
         this._icon.icon_name = iconName;
     }
 
+    // The macOS Apple menu, group for group: what the system is, where it is
+    // configured, what was open recently, how to abandon a hung application,
+    // the power actions, and the two ways to leave the session.
+    //
+    // Groups are collected before anything is added so the separators fall
+    // between the groups that survived. Building them inline instead is how a
+    // menu ends up opening with a separator on top, or two in a row, whenever
+    // a setting is turned off.
     _rebuildMenu() {
         this.menu.removeAll();
+        this._iconTheme = this._newIconTheme();
 
-        const hideOverview = this._settings.get_boolean('hide-overview-button');
-        const showSystemSettings = this._settings.get_boolean('show-system-settings');
-        const showAppGrid = this._settings.get_boolean('show-app-grid');
-        const showSoftwareCenter = this._settings.get_boolean('show-software-center');
-        const showSystemMonitor = this._settings.get_boolean('show-system-monitor');
-        const showTerminal = this._settings.get_boolean('show-terminal');
-        const showExtensionsApp = this._settings.get_boolean('show-extensions-app');
-        const showForceQuit = this._settings.get_boolean('show-force-quit');
-        const showPowerOptions = this._settings.get_boolean('show-power-options');
-        const showLockScreen = this._settings.get_boolean('show-lock-screen');
-        const showLogOut = this._settings.get_boolean('show-log-out');
+        const setting = key => this._settings.get_boolean(key);
 
-        this._addItem('About This System', () => this._aboutThisSystem());
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        // Settings sits directly below About, where macOS keeps it.
-        //
+        const settingsGroup = [];
         // This extension's own preferences are deliberately not listed here.
         // They belong in GNOME Settings beside Appearance, but nothing can put
         // them there: gnome-control-center compiles every panel in and has no
-        // plugin interface. Rather than invent a second settings entry in this
-        // menu, use the Extensions item below, which is where GNOME expects
-        // extension preferences to be reached.
-        if (showSystemSettings)
-            this._addItem('System Settings', () => this._openSystemSettings());
+        // plugin interface. The Extensions item is where GNOME expects
+        // extension preferences to be reached, so it is the entry point.
+        if (setting('show-system-settings'))
+            settingsGroup.push(() => this._addItem('System Settings…', ICONS.settings, () => this._openSystemSettings()));
+        if (setting('show-software-center'))
+            settingsGroup.push(() => this._addItem('Software Center', ICONS.software, () => this._launchOrNotify('software-center-command', SOFTWARE_CENTER_FALLBACKS, 'Software Center')));
+        if (setting('show-extensions-app'))
+            settingsGroup.push(() => this._addItem('Extensions', ICONS.extensions, () => this._openExtensionsApp()));
+        // Only offer an "Activities" entry when the real panel button is
+        // hidden, so overview access is never lost entirely.
+        if (setting('hide-overview-button'))
+            settingsGroup.push(() => this._addItem('Activities', ICONS.activities, () => Main.overview.toggle()));
+        if (setting('show-app-grid'))
+            settingsGroup.push(() => this._addItem('App Grid', ICONS.appGrid, () => this._showAppGrid()));
+        if (setting('show-system-monitor'))
+            settingsGroup.push(() => this._addItem('System Monitor', ICONS.monitor, () => this._launchOrNotify('system-monitor-command', SYSTEM_MONITOR_FALLBACKS, 'System Monitor')));
+        if (setting('show-terminal'))
+            settingsGroup.push(() => this._addItem('Terminal', ICONS.terminal, () => this._launchOrNotify('terminal-command', TERMINAL_FALLBACKS, 'Terminal')));
 
-        // Only offer an "Activities" menu entry when the real panel button
-        // is hidden, so overview access is never lost entirely.
-        if (hideOverview)
-            this._addItem('Activities', () => Main.overview.toggle());
+        const recentGroup = setting('show-recent-items')
+            ? [() => this._addRecentItems()]
+            : [];
 
-        if (showAppGrid)
-            this._addItem('App Grid', () => this._showAppGrid());
+        const forceQuitGroup = setting('show-force-quit')
+            ? [() => this._addItem('Force Quit…', ICONS.forceQuit, () => this._forceQuit())]
+            : [];
 
-        if (showSystemSettings || hideOverview || showAppGrid)
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        if (showSoftwareCenter)
-            this._addItem('Software Center', () => this._launchOrNotify('software-center-command', SOFTWARE_CENTER_FALLBACKS, 'Software Center'));
-        if (showSystemMonitor)
-            this._addItem('System Monitor', () => this._launchOrNotify('system-monitor-command', SYSTEM_MONITOR_FALLBACKS, 'System Monitor'));
-        if (showTerminal)
-            this._addItem('Terminal', () => this._launchOrNotify('terminal-command', TERMINAL_FALLBACKS, 'Terminal'));
-        if (showExtensionsApp)
-            this._addItem('Extensions', () => this._openExtensionsApp());
-
-        if (showForceQuit) {
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            this._addItem('Force Quit App', () => this._forceQuit());
-        }
-
-        let customItems = this._loadCustomItems();
-        if (customItems.length > 0) {
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            customItems.forEach(item => {
-                this._addItem(item.label || '(untitled)', () => spawnCommandLine(item.value));
-            });
-        }
-
-        if (showPowerOptions || showLockScreen || showLogOut)
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        const customGroup = this._loadCustomItems().map(item =>
+            () => this._addItem(item.label || '(untitled)', ICONS.custom, () => spawnCommandLine(item.value)));
 
         // These throw outright when the action is unavailable — restricted by
-        // lockdown, or no suspend support — so check first and grey the item
-        // out rather than offering something that fails on click.
-        if (showPowerOptions) {
-            this._addSystemAction('Sleep', 'canSuspend', 'activateSuspend');
-            this._addSystemAction('Restart...', 'canRestart', 'activateRestart');
-            this._addSystemAction('Shut Down...', 'canPowerOff', 'activatePowerOff');
+        // lockdown, or no suspend support — so ask first and grey the item out
+        // rather than offering something that fails on click.
+        const powerGroup = setting('show-power-options') ? [
+            () => this._addSystemAction('Sleep', ICONS.sleep, 'canSuspend', 'activateSuspend'),
+            () => this._addSystemAction('Restart…', ICONS.restart, 'canRestart', 'activateRestart'),
+            () => this._addSystemAction('Shut Down…', ICONS.shutDown, 'canPowerOff', 'activatePowerOff'),
+        ] : [];
+
+        const sessionGroup = [];
+        if (setting('show-lock-screen')) {
+            sessionGroup.push(() => this._addSystemAction(
+                'Lock Screen', ICONS.lock, 'canLockScreen', 'activateLockScreen',
+                this._acceleratorFor('screensaver')));
+        }
+        if (setting('show-log-out')) {
+            const name = this._userName();
+            sessionGroup.push(() => this._addSystemAction(
+                name ? `Log Out ${name}…` : 'Log Out…',
+                ICONS.logOut, 'canLogout', 'activateLogout',
+                this._acceleratorFor('logout')));
         }
 
-        if (showLockScreen)
-            this._addSystemAction('Lock Screen', 'canLockScreen', 'activateLockScreen');
+        const groups = [
+            [() => this._addItem('About This System', ICONS.about, () => this._aboutThisSystem())],
+            settingsGroup,
+            recentGroup,
+            forceQuitGroup,
+            customGroup,
+            powerGroup,
+            sessionGroup,
+        ].filter(group => group.length > 0);
 
-        if (showLogOut)
-            this._addSystemAction('Log Out...', 'canLogout', 'activateLogout');
+        groups.forEach((group, index) => {
+            if (index > 0)
+                this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            group.forEach(add => add());
+        });
     }
 
-    _addItem(label, activateFunction) {
-        let item = new PopupMenu.PopupMenuItem(label);
-        item.connect('activate', activateFunction);
+    // Built by hand rather than with PopupImageMenuItem, because these items
+    // carry a third child — the shortcut, right-aligned — and because an item
+    // with no icon still needs the icon's width, or its label would not line up
+    // with the ones above it.
+    _makeItem(label, iconNames, onActivate, accelerator = null) {
+        const item = new PopupMenu.PopupBaseMenuItem();
+
+        const icon = new St.Icon({
+            style_class: 'popup-menu-icon',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        const iconName = this._resolveIcon(iconNames);
+        if (iconName)
+            icon.icon_name = iconName;
+        else if (iconNames instanceof Gio.Icon)
+            icon.gicon = iconNames;
+        item.add_child(icon);
+
+        const text = new St.Label({
+            text: label,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        item.add_child(text);
+        item.label_actor = text;
+
+        if (accelerator) {
+            item.add_child(new St.Label({
+                text: accelerator,
+                style_class: 'pearup-menu-accel',
+                x_expand: true,
+                x_align: Clutter.ActorAlign.END,
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
+        }
+
+        if (onActivate)
+            item.connect('activate', onActivate);
+
+        return item;
+    }
+
+    _addItem(label, iconNames, activateFunction, accelerator = null) {
+        const item = this._makeItem(label, iconNames, activateFunction, accelerator);
         this.menu.addMenuItem(item);
         return item;
+    }
+
+    // A theme handle per rebuild: checking icon names one at a time against a
+    // freshly constructed theme would re-read the icon caches for every item.
+    _newIconTheme() {
+        try {
+            return St.IconTheme ? new St.IconTheme() : null;
+        } catch {
+            return null;
+        }
+    }
+
+    _resolveIcon(iconNames) {
+        if (!Array.isArray(iconNames))
+            return null;
+        if (!this._iconTheme)
+            return iconNames[0] ?? null;
+
+        return iconNames.find(name => this._iconTheme.has_icon(name)) ?? null;
+    }
+
+    // The list changes with every file opened anywhere on the system, so it is
+    // rebuilt each time the menu around it opens.
+    //
+    // Not when the submenu itself opens, which is the obvious place for it:
+    // PopupSubMenu.open() returns early for an empty menu, so a submenu that
+    // fills itself on the way open stays empty and therefore never opens.
+    _addRecentItems() {
+        const submenu = new PopupMenu.PopupSubMenuMenuItem('Recent Items', true);
+        const iconName = this._resolveIcon(ICONS.recent);
+        if (iconName)
+            submenu.icon.icon_name = iconName;
+
+        this._fillRecentItems(submenu.menu);
+        this.menu.connectObject('open-state-changed', (_menu, isOpen) => {
+            if (isOpen)
+                this._fillRecentItems(submenu.menu);
+        }, submenu);
+
+        this.menu.addMenuItem(submenu);
+        return submenu;
+    }
+
+    _fillRecentItems(menu) {
+        menu.removeAll();
+
+        const limit = this._settings.get_int('recent-items-limit');
+        const sections = recentSections(limit);
+
+        if (sections.length === 0) {
+            const empty = new PopupMenu.PopupMenuItem('No Recent Items', { activate: false });
+            empty.setSensitive(false);
+            menu.addMenuItem(empty);
+            return;
+        }
+
+        for (const section of sections) {
+            const heading = new PopupMenu.PopupMenuItem(section.heading, { activate: false });
+            heading.setSensitive(false);
+            heading.label.add_style_class_name('pearup-menu-heading');
+            menu.addMenuItem(heading);
+
+            for (const entry of section.items) {
+                menu.addMenuItem(this._makeItem(
+                    entry.label,
+                    entry.gicon ?? [entry.iconName],
+                    entry.activate));
+            }
+        }
+
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        menu.addMenuItem(this._makeItem('Clear Menu', ICONS.clear, () => clearRecent()));
     }
 
     // `available` is the SystemActions property that says whether the action can
     // run; when it cannot, show the item disabled instead of letting the call
     // throw out of the click handler.
-    _addSystemAction(label, available, method) {
+    _addSystemAction(label, iconNames, available, method, accelerator = null) {
         let actions = this._systemActions;
         let usable = actions?.[available] !== false;
 
-        let item = this._addItem(label, () => {
+        let item = this._addItem(label, iconNames, () => {
             try {
                 actions[method]();
             } catch (e) {
-                Main.notify('Pear Up', `${label.replace(/\.\.\.$/, '')} is not available.`);
+                Main.notify('Pear Up', `${label.replace(/…$/, '')} is not available.`);
                 console.warn(`[pear-up] ${method} failed: ${e}`);
             }
-        });
+        }, accelerator);
 
         if (!usable)
             item.setSensitive(false);
 
         return item;
+    }
+
+    // macOS names the account in the item — "Log Out Martin…" — which is also
+    // the only way to tell which session you are ending on a shared machine.
+    _userName() {
+        const real = GLib.get_real_name();
+        if (real && real !== 'Unknown')
+            return real;
+
+        // No full name recorded, so the account name has to do — capitalised,
+        // because "Log Out martin…" reads like a typo.
+        const account = GLib.get_user_name() ?? '';
+        return account ? account[0].toUpperCase() + account.slice(1) : '';
+    }
+
+    // The bindings for these live in GNOME's media-keys settings, as string
+    // lists that are empty when nothing is bound.
+    _acceleratorFor(key) {
+        if (!schemaExists(MEDIA_KEYS_SCHEMA))
+            return null;
+
+        try {
+            const settings = new Gio.Settings({ schema_id: MEDIA_KEYS_SCHEMA });
+            if (!settings.settings_schema.has_key(key))
+                return null;
+
+            return formatAccelerator(settings.get_strv(key).find(Boolean));
+        } catch {
+            return null;
+        }
     }
 
     _loadCustomItems() {
@@ -296,6 +512,7 @@ export const SystemMenuButton = GObject.registerClass(
         this._systemActions = null;
         this._extensionPath = null;
         this._icon = null;
+        this._iconTheme = null;
     }
   }
 );

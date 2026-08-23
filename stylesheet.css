@@ -24,6 +24,23 @@
   padding: 0 4px 0 8px;
 }
 
+/* Section headings inside our menus — "Open Windows", "Applications". GNOME's
+   own popup-subtitle-menu-item is a GNOME 3 leftover that is in neither the
+   shell nor its theme any more, so adding it styled nothing at all. */
+.pearup-menu-heading {
+  font-size: 0.85em;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* The shortcut printed at the right of a menu item, as macOS does. Dimmed so
+   the label stays the thing you read, and spaced so it never touches it. */
+.pearup-menu-accel {
+  padding-left: 24px;
+  color: rgba(255, 255, 255, 0.5);
+  font-feature-settings: "tnum";
+}
+
 #panel.pearup-panel .pearup-logo-icon {
   icon-size: 14px;
 }

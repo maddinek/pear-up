@@ -826,6 +826,22 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         itemsGroup.add(forceQuitRow);
         settings.bind('show-force-quit', forceQuitRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
+        const recentRow = new Adw.SwitchRow({
+            title: 'Recent Items',
+            subtitle: 'Applications, documents and the places you connected to',
+        });
+        itemsGroup.add(recentRow);
+        settings.bind('show-recent-items', recentRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const recentLimit = this._addScaleRow(itemsGroup, 'Entries per Section', {
+            lower: 1,
+            upper: 20,
+            marks: [1, 5, 10, 15, 20],
+            value: settings.get_int('recent-items-limit'),
+            onChange: value => settings.set_int('recent-items-limit', value),
+        });
+        settings.bind('show-recent-items', recentLimit.row, 'sensitive', Gio.SettingsBindFlags.GET);
+
         this._buildSystemMenuCustomItems(page, settings);
 
         const powerGroup = new Adw.PreferencesGroup({ title: 'Power' });
