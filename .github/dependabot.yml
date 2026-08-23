@@ -1,0 +1,21 @@
+version: 2
+
+# The workflow pins actions to commits, which is the safe way to depend on
+# someone else's code and also the way to never hear about a fix again. This is
+# the other half of that: something has to raise the pin when it moves.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'ci:'
+
+  # eslint and its config only run in CI and on a developer's machine; nothing
+  # here ships to a user.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: 'lint:'

@@ -209,7 +209,20 @@ matrix is not grounds on its own for widening `shell-version` — behaviour has 
 
 ## Releases
 
-Two version fields, because they answer different questions:
+Build the distributable zip with:
+
+```bash
+scripts/pack.sh          # dist/pear-up@maddinek.github.io.shell-extension.zip
+```
+
+`gnome-extensions pack` ships only `extension.js`, `prefs.js`, `metadata.json`,
+`stylesheet.css` and the schemas, so every other runtime file has to be named — the script holds
+that list, because getting it wrong produces a zip that installs and then fails on a machine that
+is not this one. Tests, screenshots, the contrib patch and the lint tooling are all deliberately
+left out.
+
+[The changelog](CHANGELOG.md) records what each version contains. Two version fields, because they
+answer different questions:
 
 | Field | | |
 | --- | --- | --- |

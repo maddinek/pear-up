@@ -2,3 +2,4 @@ vm-screenshot*.png
 *.ppm
 tests/integration/artifacts/
 node_modules/
+dist/
