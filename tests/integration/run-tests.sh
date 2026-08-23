@@ -69,6 +69,16 @@ dbus-run-session -- bash -c '
     gsettings set org.gnome.shell disable-user-extensions false
     gsettings set org.gnome.shell enabled-extensions "[\"$UUID\", \"pear-up-test-hook@localhost\"]"
 
+    # The search button is off by default. Turning it on before the shell starts
+    # means it is built during enable(), the same as it would be at login, which
+    # is the ordering that catches a panel item being added before the thing it
+    # sits next to exists.
+    SCHEMAS="$HOME/.local/share/gnome-shell/extensions/$UUID/schemas"
+    GSETTINGS_SCHEMA_DIR="$SCHEMAS" \
+        gsettings set org.gnome.shell.extensions.pear-up show-search-icon true
+    GSETTINGS_SCHEMA_DIR="$SCHEMAS" \
+        gsettings set org.gnome.shell.extensions.pear-up search-opens overview
+
     # The question here is whether the code works on this release, which is
     # separate from whether metadata.json claims it. Without this the shell
     # refuses to load anything not claiming its version, and the answer would

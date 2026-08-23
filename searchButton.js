@@ -28,13 +28,16 @@ class SearchButton extends PanelMenu.Button {
         });
         this.add_child(this._icon);
 
-        // One or the other, never both. GNOME 50 drives every button of its own
-        // through a ClickGesture, and a button-press handler that answers
-        // EVENT_STOP on the same actor cuts the event out from under that
-        // gesture mid-recognition — which aborts the shell on the same assertion
-        // this button exists to avoid. Older versions have no gesture class and
-        // the press handler is all there is.
-        if (Clutter.ClickGesture) {
+        // However this shell delivers a click to its own panel buttons, take the
+        // same route — asking the base class rather than the version, since the
+        // class existing says nothing about presses arriving that way. GNOME 50
+        // fits PanelMenu.Button with a ClickGesture (disabled for a button with
+        // no menu, as here); before that the press came through as an event.
+        //
+        // One route only. A press handler answering EVENT_STOP alongside a live
+        // gesture takes the event out from under it mid-recognition, which aborts
+        // the shell on the very assertion this button was written to avoid.
+        if (this._shellDeliversClicksByGesture()) {
             const gesture = new Clutter.ClickGesture();
             gesture.connect('recognize', () => this._activate());
             this.add_action(gesture);
@@ -59,6 +62,17 @@ class SearchButton extends PanelMenu.Button {
             });
         }
         return Clutter.EVENT_STOP;
+    }
+
+    // PanelMenu.Button attaches its own click gesture where the shell works that
+    // way, so its presence on this very actor is the answer, whatever the
+    // version happens to be.
+    _shellDeliversClicksByGesture() {
+        if (!Clutter.ClickGesture)
+            return false;
+
+        return (this.get_actions?.() ?? [])
+            .some(action => action instanceof Clutter.ClickGesture);
     }
 
     _cancelPending() {

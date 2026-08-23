@@ -9,6 +9,7 @@
 // It knows nothing about Pear Up's internals: it reads the panel the same way
 // anything else would, so it stays useful even as Pear Up changes.
 import Gio from 'gi://Gio';
+import Clutter from 'gi://Clutter';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -24,6 +25,12 @@ const IFACE = `
     <method name="FocusFirstWindow">
       <arg type="b" direction="out" name="focused"/>
     </method>
+    <method name="HideOverview">
+      <arg type="b" direction="out" name="hidden"/>
+    </method>
+    <method name="ActivateSearch">
+      <arg type="b" direction="out" name="activated"/>
+    </method>
   </interface>
 </node>`;
 
@@ -32,6 +39,7 @@ const PATH = '/io/github/maddinek/PearUpTestHook';
 // Pear Up names its panel buttons after its own UUID, plus the System Menu.
 const PEAR_UP_UUID = 'pear-up@maddinek.github.io';
 const LOGO_ROLE = 'pearup-logo';
+const SEARCH_ROLE = 'pearup-search';
 
 export default class TestHookExtension extends Extension {
     enable() {
@@ -50,6 +58,19 @@ export default class TestHookExtension extends Extension {
             .sort();
     }
 
+    // null only when there is no button to ask about. A release without the
+    // gesture class answers false, which is the true answer to "does this
+    // button take clicks through a gesture" rather than a missing one.
+    _usesClickGesture(button) {
+        if (!button)
+            return null;
+        if (!Clutter.ClickGesture)
+            return false;
+
+        return (button.get_actions?.() ?? [])
+            .some(action => action instanceof Clutter.ClickGesture && action.enabled);
+    }
+
     GetPanelState() {
         const roles = Object.keys(Main.panel.statusArea);
         const layout = Main.sessionMode?.panel ?? {};
@@ -57,6 +78,7 @@ export default class TestHookExtension extends Extension {
         const powerIcon = system?._indicator ?? system;
         const activities = Main.panel.statusArea['activities'];
         const activitiesActor = activities?.container ?? activities;
+        const search = Main.panel.statusArea[SEARCH_ROLE];
 
         // What the shell thinks is in front, which is what decides whether Pear
         // Up builds any application menus at all.
@@ -81,6 +103,18 @@ export default class TestHookExtension extends Extension {
             powerIconFound: !!powerIcon,
             powerIconVisible: powerIcon ? powerIcon.visible : null,
             activitiesVisible: activitiesActor ? activitiesActor.visible : null,
+            hasSearchButton: !!search,
+            searchButtonVisible: search ? search.visible : null,
+            overviewVisible: Main.overview.visible,
+            // Which way the button is wired for clicks. Calling the handler
+            // proves what a click does but not that a click can reach it, and
+            // the answer differs by release: GNOME 50 recognises presses through
+            // a gesture, older versions deliver an event. Reported so the suite
+            // can check the wiring suits the shell it is running on.
+            clutterHasClickGesture: !!Clutter.ClickGesture,
+            // Ground truth: how the shell wires a panel button of its own.
+            shellUsesClickGesture: this._usesClickGesture(Main.panel.statusArea.dateMenu),
+            searchUsesClickGesture: this._usesClickGesture(search),
         });
     }
 
@@ -96,6 +130,26 @@ export default class TestHookExtension extends Extension {
             return false;
 
         actor.meta_window.activate(global.get_current_time());
+        return true;
+    }
+
+    HideOverview() {
+        Main.overview.hide();
+        return true;
+    }
+
+    // The one place this reaches into Pear Up, and only because there is no way
+    // around it: a headless shell has no pointer, and on GNOME 50 the button is
+    // driven by a ClickGesture, which cannot be made to recognise without one.
+    // Calling the handler tests what a click does — the dispatch it defers, the
+    // backend it picks, the search it opens — but not Clutter's recognition of
+    // the click itself, which belongs to the shell and not to this extension.
+    ActivateSearch() {
+        const button = Main.panel.statusArea[SEARCH_ROLE];
+        if (typeof button?._activate !== 'function')
+            return false;
+
+        button._activate();
         return true;
     }
 

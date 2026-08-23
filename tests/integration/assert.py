@@ -86,6 +86,9 @@ if state:
     check("Activities button is hidden", state["activitiesVisible"] is False,
           f"visible={state['activitiesVisible']}")
 
+    check("search button is on the panel", state.get("hasSearchButton"),
+          f"roles={state['panelRoles']}")
+
     # The regression that shipped twice: the icon existed, and was visible.
     if state["powerIconFound"]:
         check("power icon is hidden", state["powerIconVisible"] is False,
@@ -104,6 +107,42 @@ try:
           len(app_menus) == 0, f"found {app_menus}")
 except GLib.Error as exc:
     check("menu structure could be read", False, exc.message.splitlines()[0])
+
+# ------------------------------------------------------- what the search does
+# The click itself cannot be delivered here — no pointer, and GNOME 50 drives
+# the button with a gesture that needs one — so the handler is called and its
+# effect is what gets asserted: the work is deferred by an idle tick precisely
+# so it lands after the dispatch, and it should end with GNOME's own search open.
+if state:
+    try:
+        call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "HideOverview")
+        GLib.usleep(1000 * 1000)
+        before = panel_state()["overviewVisible"]
+
+        activated = call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                         "ActivateSearch").unpack()[0]
+        # Long enough for the idle tick and the overview's animation.
+        GLib.usleep(2 * 1000 * 1000)
+        opened = panel_state()["overviewVisible"]
+
+        check("search button reachable", activated)
+        check("search opens GNOME's search", before is False and opened is True,
+              f"overview before={before} after={opened}")
+
+        # The wiring, which the call above deliberately bypasses: it proves what a
+        # click does, not that one can arrive. The button has to be reachable the
+        # same way the shell's own panel buttons are, or on a gesture-driven shell
+        # a real press would never reach it at all — and the class merely existing
+        # does not mean presses come that way.
+        shell_gesture = state.get("shellUsesClickGesture")
+        ours_gesture = state.get("searchUsesClickGesture")
+        check("click arrives the same way the shell's own buttons receive it",
+              shell_gesture is not None and shell_gesture == ours_gesture,
+              f"shell={'gesture' if shell_gesture else 'event'} "
+              f"ours={'gesture' if ours_gesture else 'event'}")
+    except GLib.Error as exc:
+        check("search button could be activated", False,
+              exc.message.splitlines()[0])
 
 # --------------------------------------------------------- what the menus hold
 # Asserting the built menus rather than clicking them: this exercises the real
@@ -258,6 +297,7 @@ try:
     check("no menu buttons left on the panel", after_state["menuButtons"] == 0,
           f"{after_state['menuButtons']} left")
     check("System Menu removed", not after_state["hasSystemMenu"])
+    check("search button removed", not after_state.get("hasSearchButton"))
     check("panel style class removed", not after_state["panelStyled"])
     check("clock returned to the centre", after_state["clockInCentre"],
           f"right={after_state['clockInRight']}")
