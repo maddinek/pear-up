@@ -27,9 +27,11 @@ fi
 # none of it runs on a user's machine.
 EXTRA_SOURCES=(
     menuManager.js
+    menuTemplates.js
     systemMenu.js
     searchButton.js
     recentItems.js
+    forceQuit.js
     util.js
     icons
 )

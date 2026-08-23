@@ -46,6 +46,9 @@ const IFACE = `
       <arg type="s" direction="in" name="label"/>
       <arg type="s" direction="out" name="items"/>
     </method>
+    <method name="MeasureSystemMenu">
+      <arg type="s" direction="out" name="metrics"/>
+    </method>
   </interface>
 </node>`;
 
@@ -227,6 +230,49 @@ export default class TestHookExtension extends Extension {
             return role ?? 'unknown';
         });
         return JSON.stringify(roles);
+    }
+
+    // The computed type size of the System Menu, after the theme and any
+    // inline style have been applied. A test that only round-trips the
+    // setting would stay green even if the labels never changed size.
+    MeasureSystemMenu() {
+        const button = Main.panel.statusArea[LOGO_ROLE];
+        if (!button?.menu)
+            return JSON.stringify(null);
+
+        // The items have to be on stage for the theme node to exist, so the
+        // font size is the one actually drawn rather than a style string that
+        // might never have been applied.
+        button.menu.open(false);
+
+        const labels = [];
+        const collect = actor => {
+            if (actor instanceof St.Label && actor.text)
+                labels.push(actor);
+            for (const child of actor.get_children?.() ?? [])
+                collect(child);
+        };
+        for (const item of button.menu._getMenuItems?.() ?? [])
+            collect(item);
+
+        const items = labels.slice(0, 6).map(label => {
+            let pangoSize = 0;
+            try {
+                const font = label.get_theme_node()?.get_font();
+                pangoSize = font?.get_size() ?? 0;
+            } catch {
+                // Unmapped actors have no theme node; treat as unreadable.
+            }
+            return {
+                label: label.text,
+                pangoSize,
+                height: label.height,
+                itemHeight: label.get_parent?.()?.height ?? 0,
+            };
+        });
+
+        button.menu.close();
+        return JSON.stringify({ items });
     }
 
     // Opens a submenu by label and reports what appeared in it. Submenus whose

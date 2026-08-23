@@ -25,4 +25,5 @@ export LD_LIBRARY_PATH="$typelibs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 echo "  typelibs: ${typelibs:-<none found>}"
 
 gjs -m tests/check-api.js tests/api-manifest.json
+gjs -m tests/check-menu-templates.js
 python3 tests/check-shell-internals.py tests/api-manifest.json

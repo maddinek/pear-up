@@ -20,7 +20,7 @@ When no window is in front, the bar clears itself.
 
 **A system menu.** The bitten pear on the far left opens the Apple menu's arrangement, group for
 group: About This System; System Settings, your software centre and the extensions manager; Recent
-Items; Force Quit; Sleep, Restart and Shut Down; then Lock Screen and Log Out, each naming the
+Items; Force Quit (click the window, like xkill); Sleep, Restart and Shut Down; then Lock Screen and Log Out, each naming the
 shortcut this system has bound to it. Every entry has an icon and every entry is optional — Activities,
 the App Grid, a system monitor and a terminal are available too, off by default because the menu they
 imitate has none of them. The icon can be any bundled distro logo, an Apple-style glyph, or your own
@@ -141,8 +141,8 @@ desktop you are using.
 **Does it still behave?** Boots a real GNOME Shell headless against a virtual monitor, loads the
 extension the way a login would, and checks what it actually did to the panel: the clock moved, the
 System Menu appeared with its entries, the power icon is hidden, the bar stays bare while nothing is
-in front, the File, Edit, View, Go, Window and Help menus appear once a window is focused and hold
-the items they should — and disabling it leaves nothing behind.
+in front, the File, Edit, View, Go, Window and Help menus appear once a window is focused, File and
+Go stay generic unless a file manager is in front, and disabling it leaves nothing behind.
 
 The menus are asserted rather than clicked. Activating them through the structure runs the same code
 a click would, without depending on pixel coordinates or animation timing, which is where interface
@@ -282,6 +282,7 @@ separate project, not a continuation of that one.
 
 The rest of the project is not theirs and should not be read as such:
 
+- **`menuTemplates.js`** — which items File, Edit, View, Go, Window and Help show
 - **`extension.js`** — panel arrangement, the clock, indicator handling, lifecycle
 - **`stylesheet.css`** — all of the macOS styling
 - The Dock, Keyboard and window-button integration, which drive settings outside this extension

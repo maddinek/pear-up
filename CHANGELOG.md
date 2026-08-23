@@ -8,6 +8,16 @@ human reads.
 
 ### Changed
 
+- **File and Go follow the focused app.** New Folder, Open With, Get Info,
+  Trash and the folder shortcuts belong to a file manager; they no longer
+  appear on Firefox, the test window, or anything else. Items that were only
+  ever greyed out — Compress, Duplicate, View as Icons / as List — are omitted
+  rather than shown disabled.
+- **Force Quit picks a window**, instead of killing whatever happens to have
+  focus. Click the window after choosing the item, the way xkill does; Esc or
+  right-click cancels. Killing the focused app was the wrong default: the window
+  you want to abandon is usually the one that is not responding, and therefore
+  not the one that has focus.
 - **The System Menu now follows the Apple menu it imitates**, group for group:
   About, then settings, then Recent Items, then Force Quit, then the power
   actions, then Lock Screen and Log Out — the last two naming the shortcut this
@@ -19,6 +29,10 @@ human reads.
 
 ### Added
 
+- **System Menu text size**, 10–16px, default 13 (GNOME's own). The pear menu
+  only; File, Edit and the rest of the bar have their own size.
+- **Menu bar title size and padding**, so File, Edit and the menus they open
+  can be sized without changing the pear menu.
 - **Recent Items**, as Applications, Documents and Servers, with Clear Menu.
   Applications comes from the shell's usage statistics because GNOME keeps no
   recently-used-application list, and Clear Menu empties the recent files list —
