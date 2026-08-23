@@ -10,6 +10,16 @@ import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { LOGO_ROLE } from './systemMenu.js';
+import {
+    isFileManager,
+    compactMenuItems,
+    fileMenu,
+    editMenu,
+    viewMenu,
+    goMenu,
+    windowMenu,
+    helpMenu,
+} from './menuTemplates.js';
 
 // Error logging is gated behind the "debug-logging" setting (off by
 // default) so the extension doesn't spam the journal in normal use.
@@ -440,7 +450,7 @@ const TopLevelMenuButton = GObject.registerClass(
     }
 
     _buildSubMenu(menuItems, parentMenu) {
-      for (const item of menuItems) {
+      for (const item of compactMenuItems(menuItems)) {
         if (item.type === "separator") {
           parentMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         } else if (item.type === "section-header") {
@@ -455,7 +465,6 @@ const TopLevelMenuButton = GObject.registerClass(
         } else {
           const menuItem = new PopupMenu.PopupMenuItem(item.label);
           if (item.enabled === false) {
-            // Unimplemented placeholder item.
             menuItem.setSensitive(false);
           } else if (item.action) {
             menuItem.connect("activate", () => {
@@ -483,6 +492,10 @@ export class MenuManager {
         this._debugLoggingChangedId = settings.connect('changed::debug-logging', () => {
             debugLoggingEnabled = settings.get_boolean('debug-logging');
         });
+        this._barChromeIds = [
+            settings.connect('changed::menu-bar-font-size', () => this._applyBarChrome()),
+            settings.connect('changed::menu-bar-padding', () => this._applyBarChrome()),
+        ];
     }
 
     // True when a normal window is actually in front, not minimized to
@@ -511,6 +524,7 @@ export class MenuManager {
         let isAppFocused = false;
         let desktopId = "";
         let detectedApp = null;
+        let wmClass = "";
 
         if (this._isFrontmostWindow(window)) {
             let windowType = window.get_window_type();
@@ -521,7 +535,7 @@ export class MenuManager {
 
                 let checkId = detectedApp ? (detectedApp.get_id() || "") : "";
                 let checkName = detectedApp ? (detectedApp.get_name() || "") : "";
-                let wmClass = window.get_wm_class() || "";
+                wmClass = window.get_wm_class() || "";
                 let title = window.get_title() || "";
 
                 let combinedIdentifiers = `${checkId} ${checkName} ${wmClass} ${title}`.toLowerCase();
@@ -546,7 +560,8 @@ export class MenuManager {
             }
         }
 
-        let desktopAppName = this._settings.get_string('desktop-app-name') || 'Nautilus';
+        let fileManagerName = this._settings.get_string('desktop-app-name') || 'Nautilus';
+        let isFiles = isFileManager(desktopId, wmClass);
 
         // Nothing in front: keep the System Menu (pear) and any custom
         // menus, but do not pretend Nautilus/Finder is the focused app.
@@ -557,6 +572,7 @@ export class MenuManager {
                 Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, this._slotFor(index), 'left');
                 this._buttons.push(btn);
             });
+            this._applyBarChrome();
             return;
         }
 
@@ -564,102 +580,24 @@ export class MenuManager {
             this._appMenuChildren(detectedApp, appName, desktopId);
         let firstMenuChildren = appMenuChildren();
 
-        const fileMenu = {
-            type: "submenu",
-            label: "File",
-            children: [
-                { label: `New ${desktopAppName} Window`, action: "new-file-manager-win" },
-                { label: "New Folder", action: "new-folder" },
-                { label: "New Tab", action: "new-tab" },
-                { label: "Open", action: "virtual-open" },
-                { label: "Open With", action: "native-open-with" },
-                { label: "Print", action: "print" },
-                { type: "separator" },
-                { label: "Get Info", action: "properties" },
-                { label: "Compress", enabled: false },
-                { label: "Duplicate", enabled: false },
-                { type: "separator" },
-                { label: "Move to Trash", action: "delete-item" },
-                { type: "separator" },
-                { label: "Close Window", action: "close" }
-            ]
-        };
-
-        const editMenu = {
-            type: "submenu",
-            label: "Edit",
-            children: [
-                { label: "Undo", action: "undo" },
-                { label: "Redo", action: "redo" },
-                { type: "separator" },
-                { label: "Cut", action: "cut" },
-                { label: "Copy", action: "copy" },
-                { label: "Paste", action: "paste" },
-                { label: "Delete", action: "delete-item" },
-                { type: "separator" },
-                { label: "Select All", action: "select-all" },
-                { type: "separator" },
-                { label: "Emoji & Symbols", action: "emoji-picker" }
-            ]
-        };
-
-        const viewMenu = {
-            type: "submenu",
-            label: "View",
-            children: [
-                { label: "as Icons", enabled: false },
-                { label: "as List", enabled: false },
-                { type: "separator" },
-                { label: "Enter Full Screen", action: "toggle-fullscreen" }
-            ]
-        };
-
-        const goMenu = {
-            type: "submenu",
-            label: "Go",
-            children: [
-                { label: "Back", action: "go-back" },
-                { label: "Forward", action: "go-forward" },
-                { type: "separator" },
-                { label: "Recents", action: "go-recents" },
-                { label: "Documents", action: "go-documents" },
-                { label: "Desktop", action: "go-desktop" },
-                { label: "Downloads", action: "go-downloads" },
-                { label: "Home", action: "go-home" }
-            ]
-        };
-
-        const windowMenu = {
-            type: "submenu",
-            label: "Window",
-            children: [
-                { label: "Minimize", action: "minimize" },
-                { label: "Maximize", action: "maximize" },
-                { type: "separator" },
-                { label: "Close", action: "close" }
-            ]
-        };
-
-        const helpMenu = {
-            type: "submenu",
-            label: "Help",
-            children: [
-                { label: "GNOME Help", action: "open-system-help" }
-            ]
-        };
-
         let menuData = [];
 
         if (this._settings.get_boolean('menu-app-enabled')) {
             menuData.push({ type: "submenu", label: appName, children: firstMenuChildren });
         }
 
-        if (this._settings.get_boolean('menu-file-enabled')) menuData.push(fileMenu);
-        if (this._settings.get_boolean('menu-edit-enabled')) menuData.push(editMenu);
-        if (this._settings.get_boolean('menu-view-enabled')) menuData.push(viewMenu);
-        if (this._settings.get_boolean('menu-go-enabled')) menuData.push(goMenu);
-        if (this._settings.get_boolean('menu-window-enabled')) menuData.push(windowMenu);
-        if (this._settings.get_boolean('menu-help-enabled')) menuData.push(helpMenu);
+        if (this._settings.get_boolean('menu-file-enabled'))
+            menuData.push(fileMenu(isFiles, fileManagerName));
+        if (this._settings.get_boolean('menu-edit-enabled'))
+            menuData.push(editMenu());
+        if (this._settings.get_boolean('menu-view-enabled'))
+            menuData.push(viewMenu());
+        if (this._settings.get_boolean('menu-go-enabled'))
+            menuData.push(goMenu(isFiles));
+        if (this._settings.get_boolean('menu-window-enabled'))
+            menuData.push(windowMenu());
+        if (this._settings.get_boolean('menu-help-enabled'))
+            menuData.push(helpMenu());
 
         menuData.push(...this._buildCustomMenus());
 
@@ -672,6 +610,21 @@ export class MenuManager {
             Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, this._slotFor(index), 'left');
             this._buttons.push(btn);
         });
+        this._applyBarChrome();
+    }
+
+    // Type size and title padding are settings. Applied as inline style
+    // because they have to change with the slider, not on a stylesheet reload.
+    _applyBarChrome() {
+        const px = this._settings.get_int('menu-bar-font-size');
+        const pad = this._settings.get_int('menu-bar-padding');
+        for (const btn of this._buttons) {
+            btn.set_style(
+                `padding: 0 ${pad}px; -natural-hpadding: 0px; -minimum-hpadding: 0px;`);
+            btn.label?.set_style(`font-size: ${px}px;`);
+            if (btn.menu?.box)
+                btn.menu.box.set_style(`font-size: ${px}px;`);
+        }
     }
 
     // Where the nth menu goes: immediately after the System Menu button,
@@ -743,7 +696,11 @@ export class MenuManager {
                     }));
 
                 if (children.length === 0) {
-                    children.push({ label: 'No items configured', enabled: false });
+                    children.push({
+                        label: 'No items configured',
+                        enabled: false,
+                        placeholder: true,
+                    });
                 }
 
                 return { type: "submenu", label: section.label || 'Custom', children };
@@ -798,6 +755,11 @@ export class MenuManager {
         if (this._settings && this._debugLoggingChangedId) {
             this._settings.disconnect(this._debugLoggingChangedId);
             this._debugLoggingChangedId = null;
+        }
+        if (this._settings && this._barChromeIds) {
+            for (const id of this._barChromeIds)
+                this._settings.disconnect(id);
+            this._barChromeIds = [];
         }
         this.clear();
     }

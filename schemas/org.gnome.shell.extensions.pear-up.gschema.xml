@@ -45,7 +45,19 @@
       <default>13</default>
       <range min="10" max="16"/>
       <summary>Type size of the System Menu, in pixels</summary>
-      <description>The pear menu only. File, Edit and the rest of the bar stay at the shell's size. 13 is GNOME's own menu size.</description>
+      <description>The pear menu only. File, Edit and the rest of the bar have their own size. 13 is GNOME's own menu size.</description>
+    </key>
+    <key name="menu-bar-font-size" type="i">
+      <default>13</default>
+      <range min="10" max="16"/>
+      <summary>Type size of File, Edit and the other bar menus, in pixels</summary>
+      <description>The titles in the bar, and the menus they open. The pear menu has its own size. 13 is GNOME's own.</description>
+    </key>
+    <key name="menu-bar-padding" type="i">
+      <default>10</default>
+      <range min="0" max="20"/>
+      <summary>Horizontal padding of each File/Edit title, in pixels</summary>
+      <description>Room on each side of a title. Zero packs them against each other. 10 is what the stylesheet used to hard-code.</description>
     </key>
 
     <key name="hide-overview-button" type="b"><default>true</default><summary>Hide the Activities/overview button</summary></key>

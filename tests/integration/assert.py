@@ -197,14 +197,31 @@ if menus:
         return []
 
     for menu_label, expected in [
-        ("File", {"New Folder", "New Tab", "Close Window"}),
+        ("File", {"New Window", "New Tab", "Close Window"}),
         ("Edit", {"Copy", "Paste", "Select All"}),
+        ("View", {"Enter Full Screen"}),
         ("Window", {"Minimize", "Maximize", "Close"}),
-        ("Go", {"Home", "Documents", "Downloads"}),
+        ("Go", {"Back", "Forward"}),
     ]:
         found = set(items_of(menu_label))
         check(f"{menu_label} menu offers its entries", expected <= found,
               f"missing {sorted(expected - found)}" if not expected <= found else "")
+
+    # The GTK test window is not a file manager. Nautilus items on it is the
+    # leak that made every app look like Files.
+    file_leaks = {"New Folder", "Open With", "Get Info", "Move to Trash",
+                  "New Nautilus Window", "Compress", "Duplicate"}
+    go_leaks = {"Recents", "Documents", "Desktop", "Downloads", "Home"}
+    view_stubs = {"as Icons", "as List"}
+    leaked_file = file_leaks & set(items_of("File"))
+    leaked_go = go_leaks & set(items_of("Go"))
+    leaked_view = view_stubs & set(items_of("View"))
+    check("File menu does not leak file-manager actions onto other apps",
+          not leaked_file, f"leaked {sorted(leaked_file)}")
+    check("Go menu does not leak folder shortcuts onto other apps",
+          not leaked_go, f"leaked {sorted(leaked_go)}")
+    check("View menu omits unimplemented layout items",
+          not leaked_view, f"still showing {sorted(leaked_view)}")
 
     # ------------------------------------------ sharing the bar with a stranger
     # Found on Bazzite, whose distro logo menu owns the left edge: the menu bar
@@ -293,6 +310,38 @@ if menus:
             check("Recent Items fills itself when opened",
                   labels and (labels == ["No Recent Items"] or "Clear Menu" in labels),
                   f"found {labels}")
+
+        # The slider writes system-menu-font-size. Assert the labels actually
+        # drew at that size — not that the key was stored, and not that a
+        # style string was set on a parent that the theme might ignore.
+        def measure_menu_type():
+            raw = call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                       "MeasureSystemMenu").unpack()[0]
+            data = json.loads(raw) if raw else None
+            if not data or not data.get("items"):
+                return None
+            return next((item for item in data["items"]
+                         if item.get("label") == "About This System"),
+                        data["items"][0])
+
+        def type_size(sample):
+            if not sample:
+                return 0
+            return sample.get("pangoSize") or sample.get("height") or 0
+
+        at_default = measure_menu_type()
+        pear_up_setting("system-menu-font-size", "10")
+        GLib.usleep(800 * 1000)
+        at_small = measure_menu_type()
+        pear_up_setting("system-menu-font-size", "16")
+        GLib.usleep(800 * 1000)
+        at_large = measure_menu_type()
+        pear_up_setting("system-menu-font-size", "13")
+
+        small, large = type_size(at_small), type_size(at_large)
+        check("Menu Text Size actually changes the type on the System Menu",
+              small and large and small < large,
+              f"10px={at_small} default={at_default} 16px={at_large}")
     else:
         check("System Menu was found", False, "no pearup-logo role")
 

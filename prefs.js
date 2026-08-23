@@ -951,7 +951,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             unit: 'px',
             onChange: value => settings.set_int('system-menu-font-size', value),
         });
-        fontRow.row.set_subtitle('The pear menu only. 13 is GNOME’s own size');
+        fontRow.row.set_subtitle('The pear menu only. File, Edit and the rest have their own size under Menus');
         settings.connect('changed::system-menu-font-size',
             () => fontRow.setValue(settings.get_int('system-menu-font-size')));
 
@@ -1237,7 +1237,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         const page = new Adw.PreferencesPage({ title: 'Menus', icon_name: 'view-list-symbolic' });
         const group = new Adw.PreferencesGroup({
             title: 'Built-in Menus',
-            description: 'Choose which generic menus appear in the bar.',
+            description: 'File and Go only include Nautilus-style items when a file manager is in front.',
         });
         page.add(group);
 
@@ -1256,6 +1256,36 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             group.add(row);
             settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
         }
+
+        const lookGroup = new Adw.PreferencesGroup({
+            title: 'Menu Bar',
+            description: 'Type size of File, Edit and the rest, and the space between those titles',
+        });
+        page.add(lookGroup);
+
+        const barFontRow = this._addScaleRow(lookGroup, 'Title Size', {
+            lower: 10,
+            upper: 16,
+            marks: [10, 11, 12, 13, 14, 16],
+            value: settings.get_int('menu-bar-font-size'),
+            unit: 'px',
+            onChange: value => settings.set_int('menu-bar-font-size', value),
+        });
+        barFontRow.row.set_subtitle('The titles and the menus they open. The pear menu has its own size');
+        settings.connect('changed::menu-bar-font-size',
+            () => barFontRow.setValue(settings.get_int('menu-bar-font-size')));
+
+        const barPadRow = this._addScaleRow(lookGroup, 'Title Padding', {
+            lower: 0,
+            upper: 20,
+            marks: [0, 4, 8, 10, 16, 20],
+            value: settings.get_int('menu-bar-padding'),
+            unit: 'px',
+            onChange: value => settings.set_int('menu-bar-padding', value),
+        });
+        barPadRow.row.set_subtitle('Room on each side of File, Edit, View. Zero packs them together');
+        settings.connect('changed::menu-bar-padding',
+            () => barPadRow.setValue(settings.get_int('menu-bar-padding')));
 
         return page;
     }

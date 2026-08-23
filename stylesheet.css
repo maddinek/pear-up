@@ -5,9 +5,12 @@
   font-weight: 400;
 }
 
-/* Menu titles: File, Edit, View, … */
+/* Menu titles: File, Edit, View, … Horizontal padding and type size
+   come from settings (menu-bar-padding, menu-bar-font-size), applied as
+   inline style so a slider can change them without a stylesheet reload.
+   These are the floor the setting adds to. */
 #panel.pearup-panel .pearup-menu-button {
-  padding: 0 10px;
+  padding: 0;
 }
 
 #panel.pearup-panel .pearup-menu-button .panel-button-label {
@@ -80,8 +83,9 @@
   margin: 0;
 }
 
-/* The menu buttons on the left are not touched by that setting, so they keep a
-   fixed value of their own. */
+/* Status-area padding is a setting; File/Edit padding is a different one
+   (menu-bar-padding). This only floors GNOME's own hpadding so that setting
+   is the remaining source of space between titles. */
 #panel.pearup-panel .panel-button {
   -natural-hpadding: 3px;
   -minimum-hpadding: 0px;
