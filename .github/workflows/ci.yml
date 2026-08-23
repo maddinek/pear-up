@@ -1,8 +1,9 @@
 name: CI
 
-# What runs here is what runs locally: the same scripts, told to use docker
-# because that is what a runner has. Nothing is duplicated in YAML, so a check
-# cannot pass in CI and fail on a desktop.
+# The checks themselves live in tests/lib/check-*-here.sh, which run against
+# whatever GNOME is on the machine they are invoked on. Locally that machine is a
+# container started by tests/run-*.sh; here it is the job container. One
+# implementation either way, so a check cannot pass in CI and fail on a desktop.
 #
 # The integration suite is deliberately absent. It boots systemd inside a
 # privileged container to get logind, which needs podman's --systemd=always, and
@@ -33,31 +34,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install glib tools
-        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev-bin
-      - name: Compile the settings schemas
-        run: glib-compile-schemas --strict --dry-run schemas/
+      - run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev-bin
+      - run: glib-compile-schemas --strict --dry-run schemas/
 
   api:
-    name: APIs exist on GNOME ${{ matrix.gnome }}
+    name: APIs on GNOME ${{ matrix.gnome }}
     runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
     strategy:
       fail-fast: false
       matrix:
-        gnome: [45, 46, 47, 48, 49, 50]
+        include:
+          - {gnome: 45, image: 'fedora:39'}
+          - {gnome: 46, image: 'fedora:40'}
+          - {gnome: 47, image: 'fedora:41'}
+          - {gnome: 48, image: 'fedora:42'}
+          - {gnome: 49, image: 'fedora:43'}
+          - {gnome: 50, image: 'fedora:44'}
     steps:
+      # Before checkout: a bare Fedora image has neither, and the action needs
+      # them to fetch the tree.
+      - run: dnf install -q -y git tar
       - uses: actions/checkout@v4
-      - name: Check the API manifest against that release
-        run: CONTAINER_RUNTIME=docker bash tests/run-api-matrix.sh ${{ matrix.gnome }}
+      - run: bash tests/lib/check-apis-here.sh "$PWD"
 
   prefs:
-    name: Preferences build on GNOME ${{ matrix.gnome }}
+    name: Preferences on GNOME ${{ matrix.gnome }}
     runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
     strategy:
       fail-fast: false
       matrix:
-        gnome: [45, 46, 47, 48, 49, 50]
+        include:
+          - {gnome: 45, image: 'fedora:39'}
+          - {gnome: 46, image: 'fedora:40'}
+          - {gnome: 47, image: 'fedora:41'}
+          - {gnome: 48, image: 'fedora:42'}
+          - {gnome: 49, image: 'fedora:43'}
+          - {gnome: 50, image: 'fedora:44'}
     steps:
+      - run: dnf install -q -y git tar
       - uses: actions/checkout@v4
-      - name: Open every preferences page headlessly
-        run: CONTAINER_RUNTIME=docker bash tests/run-prefs-smoke.sh ${{ matrix.gnome }}
+      - run: bash tests/lib/check-prefs-here.sh "$PWD"

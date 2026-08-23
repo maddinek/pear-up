@@ -188,10 +188,21 @@ nothing stylistic, so the signal stays the class of mistake that reads fine and 
 npm ci && npx eslint .
 ```
 
-Everything except the integration suite also runs in
-[CI](.github/workflows/ci.yml) on every push, using these same scripts rather than a
-reimplementation in YAML. The integration suite stays local: it boots systemd in a privileged
-container to get logind, and a runner is the wrong place to find out that has broken.
+Everything except the integration suite also runs in [CI](.github/workflows/ci.yml) on every push.
+The checks themselves live in `tests/lib/check-*-here.sh` and run against whatever GNOME is on the
+machine that invokes them — locally that machine is a container started by the scripts above, in CI it
+is the job container. One implementation either way, so a check cannot pass in CI and fail on a
+desktop.
+
+The integration suite stays local: it boots systemd in a privileged container to get logind, and a
+runner is the wrong place to find out that has broken.
+
+The workflow itself is verifiable without pushing, which is worth doing before trusting a green tick:
+
+```bash
+act --list                      # does it parse, and what would run
+act -j api --matrix gnome:50    # run one job here
+```
 
 Neither suite replaces reading GNOME's porting notes when a new release lands, and a passing API
 matrix is not grounds on its own for widening `shell-version` — behaviour has to be checked too.

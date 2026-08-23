@@ -61,31 +61,7 @@ for version in "${VERSIONS[@]}"; do
         -v "$REPO_DIR:/src:$MOUNT" \
         -w /src \
         "$image" \
-        bash -c '
-            set -e
-            dnf install -q -y gjs gnome-shell python3 >/dev/null 2>&1
-
-            installed=$(rpm -q --qf "%{VERSION}" gnome-shell | cut -d. -f1)
-            echo "  gnome-shell present: $installed"
-
-            # Clutter and Meta live in mutter private directories that vary by
-            # release, so point the loader at whichever is here.
-            # Clutter and Meta ship in mutter'"'"'s private directory, St and Shell
-            # in gnome-shell'"'"'s; both are versioned and neither is on the default
-            # search path.
-            typelibs=$(find /usr/lib64 /usr/lib -maxdepth 2 \
-                \( -name "Meta-*.typelib" -o -name "St-*.typelib" \
-                   -o -name "Shell-*.typelib" \) \
-                -printf "%h\n" 2>/dev/null | sort -u | paste -sd:)
-            export GI_TYPELIB_PATH="$typelibs"
-            # The typelibs name libmutter-*.so, which lives beside them rather
-            # than on the default loader path.
-            export LD_LIBRARY_PATH="$typelibs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-            echo "  typelibs: ${typelibs:-<none found>}"
-
-            gjs -m tests/check-api.js tests/api-manifest.json
-            python3 tests/check-shell-internals.py tests/api-manifest.json
-        '
+        bash /src/tests/lib/check-apis-here.sh /src
     then
         failed+=("$version")
     fi
