@@ -1,0 +1,156 @@
+From aa3d9f31a2291fcf1f23ffb4c918a22dcd9c10fa Mon Sep 17 00:00:00 2001
+From: maddinek <maddinek@users.noreply.github.com>
+Date: Sun, 23 Aug 2026 17:06:32 +0200
+Subject: [PATCH] Defer actor work out of input dispatch (GNOME 50 / Clutter
+ 18)
+
+Clutter 18 refuses to let the actor tree change while an input, gesture or
+signal is still being dispatched, and aborts the process when it happens. On
+Wayland that ends the session, and two in quick succession trip GNOME's crash
+protection, which disables every extension the user has.
+
+show()/hide()/_acquire_ui()/_release_ui() reparent the search entry, move key
+focus and connect stage signals, and they are called straight from the panel
+button's press handler, both keyboard accelerators, and the key-focus, Escape
+and fullscreen handlers. Each of those is a dispatch.
+
+Every one of those entry points now defers by a single idle tick, so the actor
+work runs after the dispatch unwinds. Two further point fixes that the same
+aborts need: hide() guards against re-entry, because releasing the UI moves key
+focus and re-enters it mid-unmap, and _release_ui() unmaps the entry before
+detaching it, which clutter 18's unrealize asserts on.
+
+Covers the sites listed in #166, and supersedes #164 and #165.
+
+Tested on GNOME Shell 50.3 (Wayland, Fedora 44): the panel icon, Super+Space,
+Escape, focus loss to another window and a fullscreen window all leave the shell
+running, where each of them ended the session before.
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ extension.js | 49 ++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 42 insertions(+), 7 deletions(-)
+
+diff --git a/extension.js b/extension.js
+index 81d5e0f..14a22c3 100644
+--- a/extension.js
++++ b/extension.js
+@@ -44,6 +44,22 @@ import {
+   gettext as _,
+ } from 'resource:///org/gnome/shell/extensions/extension.js';
+ 
++// Clutter 18 refuses actor surgery while an input, gesture or signal is still
++// being dispatched, and aborts the process over it — on Wayland that ends the
++// session. show()/hide() reparent the entry, move key focus and connect stage
++// signals, so every one of them that starts inside a handler is deferred by a
++// tick and runs after the dispatch unwinds. See #166.
++const afterDispatch = (fn) => {
++  GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
++    try {
++      fn();
++    } catch (err) {
++      // The extension may have been disabled before the tick arrived.
++    }
++    return GLib.SOURCE_REMOVE;
++  });
++};
++
+ var SearchLight = GObject.registerClass(
+   {},
+   class SearchLight extends St.Widget {
+@@ -281,7 +297,10 @@ export default class SearchLightExt extends Extension {
+     this._indicator.set_child(icon);
+     this._indicator.connectObject(
+       'button-press-event',
+-      this._toggle_search_light.bind(this),
++      () => {
++        afterDispatch(() => this._toggle_search_light());
++        return Clutter.EVENT_STOP;
++      },
+       this,
+     );
+     try {
+@@ -491,9 +510,17 @@ export default class SearchLightExt extends Extension {
+     if (this._isDraggingIcon()) {
+       return;
+     }
++    // _release_ui() hides the entry, which flips the stage key-focus ->
++    // _onKeyFocusChanged -> hide() again, re-entering teardown while the first
++    // pass is still mid-unmap. Clutter aborts on that.
++    if (this._hiding) {
++      return;
++    }
++    this._hiding = true;
+ 
+     this._release_ui();
+     this._remove_events();
++    this._hiding = false;
+ 
+     if (this._useAnimations) {
+       this.mainContainer.ease({
+@@ -618,7 +645,9 @@ export default class SearchLightExt extends Extension {
+     }
+ 
+     if (!disable) {
+-      this.accel.listenFor(shortcut, this._toggle_search_light.bind(this));
++      this.accel.listenFor(shortcut, () =>
++        afterDispatch(() => this._toggle_search_light()),
++      );
+     }
+   }
+ 
+@@ -636,7 +665,9 @@ export default class SearchLightExt extends Extension {
+     }
+ 
+     if (!disable) {
+-      this.accel2.listenFor(shortcut, this._toggle_search_light.bind(this));
++      this.accel2.listenFor(shortcut, () =>
++        afterDispatch(() => this._toggle_search_light()),
++      );
+     }
+   }
+ 
+@@ -752,6 +783,9 @@ export default class SearchLightExt extends Extension {
+   _release_ui() {
+     if (this._entry) {
+       if (this._entry.get_parent()) {
++        // Unmap before detaching: clutter 18's unrealize asserts on a mapped
++        // actor being removed.
++        this._entry.hide();
+         this._entry.get_parent().remove_child(this._entry);
+       }
+       this._entryParent.add_child(this._entry);
+@@ -1006,10 +1040,11 @@ export default class SearchLightExt extends Extension {
+         focus.style_class.includes('popup-menu')
+       ) {
+         this._lastPopup = focus;
+-        this._hidePopups();
++        afterDispatch(() => this._hidePopups());
+       }
+ 
+-      this.hide();
++      // Reached from notify::key-focus, so the teardown cannot run here.
++      afterDispatch(() => this.hide());
+     }
+ 
+     // hide window immediately when activated
+@@ -1029,7 +1064,7 @@ export default class SearchLightExt extends Extension {
+     let focus = global.stage.get_key_focus();
+     if (!focus || !this._entry.contains(focus)) {
+       if (evt.get_key_symbol() === Clutter.KEY_Escape) {
+-        this.hide();
++        afterDispatch(() => this.hide());
+         return Clutter.EVENT_STOP;
+       }
+       this._search._text.get_parent().grab_key_focus();
+@@ -1039,6 +1074,6 @@ export default class SearchLightExt extends Extension {
+   }
+ 
+   _onFullScreen() {
+-    this.hide();
++    afterDispatch(() => this.hide());
+   }
+ }
+-- 
+2.55.0
+

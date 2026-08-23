@@ -98,7 +98,11 @@ no extension can add one. Installing puts a **Pear Up Settings** application ent
 - GNOME Shell 45 – 50, under Wayland. Every release in that range is checked by the
   [test suite](#testing) rather than assumed; 50 is also what it is used on daily.
 - Optional: [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) for the Dock page
-- Optional: [Search Light](https://extensions.gnome.org/extension/5489/search-light/) for Spotlight-style search
+- Optional: [Search Light](https://extensions.gnome.org/extension/5489/search-light/) for
+  Spotlight-style search — but note it **ends a Wayland session on GNOME 50** when its icon is
+  clicked, until the fix in [`contrib/`](contrib/README.md) is applied. The search button here
+  defaults to GNOME's own search, which needs nothing installed and cannot be broken by a third
+  party.
 
 Applications are opened through their desktop files where possible, with fallbacks, so the menu
 entries work across distributions rather than assuming GNOME's defaults.

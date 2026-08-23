@@ -3,6 +3,40 @@
 Fixes for other people's code that Pear Up sits next to. Nothing here is part of
 the extension, and nothing here is needed to run it.
 
+Neither patch is a dependency. Nothing in Pear Up needs Search Light: its search
+button defaults to GNOME's own search, which no third party can break. These
+exist so that *if* you run Search Light, it does not end your session.
+
+## Two patches, for two different trees
+
+| File | Applies to | For |
+|---|---|---|
+| `search-light-gnome50.patch` | the released **v101**, as distributions ship it | fixing the copy on your machine |
+| `search-light-gnome50-upstream.patch` | upstream **main** | sending the fix upstream |
+
+The first is the practical one. The second is the same idea rebased onto
+upstream's tree and shaped as a commit, so it can go to the project without
+anyone having to reconstruct it — deliberately a file here rather than a fork
+kept alive somewhere, because a patch costs nothing to carry and a fork has to
+be maintained.
+
+Apply it with `git am` in a checkout of upstream, which keeps the commit message
+and its reasoning:
+
+```bash
+git clone https://github.com/icedman/search-light.git
+cd search-light
+git am /path/to/contrib/search-light-gnome50-upstream.patch
+```
+
+It covers every site listed in
+[#166](https://github.com/icedman/search-light/issues/166) and supersedes
+[#164](https://github.com/icedman/search-light/pull/164) and
+[#165](https://github.com/icedman/search-light/pull/165). Tested on GNOME Shell
+50.3 (Wayland, Fedora 44): the panel icon, Super+Space, Escape, focus loss and a
+fullscreen window all leave the shell running, where each of them ended the
+session before.
+
 ## search-light-gnome50.patch
 
 [Search Light](https://github.com/icedman/search-light) crashes GNOME Shell 50
