@@ -28,19 +28,19 @@ class SearchButton extends PanelMenu.Button {
         });
         this.add_child(this._icon);
 
-        // GNOME 50 drives its own panel buttons with Clutter.ClickGesture;
-        // earlier versions have no such class and deliver button-press-event.
-        // Both are connected rather than one or the other, because which of them
-        // a press arrives as depends on the input device as well as the version.
-        // Activating twice is not a risk: the first press schedules the work and
-        // the second finds it already pending.
+        // One or the other, never both. GNOME 50 drives every button of its own
+        // through a ClickGesture, and a button-press handler that answers
+        // EVENT_STOP on the same actor cuts the event out from under that
+        // gesture mid-recognition — which aborts the shell on the same assertion
+        // this button exists to avoid. Older versions have no gesture class and
+        // the press handler is all there is.
         if (Clutter.ClickGesture) {
             const gesture = new Clutter.ClickGesture();
-            gesture.set_recognize_on_press(true);
             gesture.connect('recognize', () => this._activate());
             this.add_action(gesture);
+        } else {
+            this.connect('button-press-event', () => this._activate());
         }
-        this.connect('button-press-event', () => this._activate());
 
         this.connect('destroy', () => this._cancelPending());
     }
