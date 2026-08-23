@@ -7,8 +7,10 @@ left, and one settings window that also drives your dock.
 > Not affiliated with Apple. The pear is the joke.
 
 The menu engine came from
-[global-menu-for-gnome](https://github.com/ShiroOSL/global-menu-for-gnome); see
-[Credits](#credits). Not published on extensions.gnome.org, and not supported by its author.
+[Global Menu for GNOME](https://github.com/ShiroOSL/global-menu-for-gnome) by
+ShiroOSL — published on
+[extensions.gnome.org](https://extensions.gnome.org/extension/10288/global-menu-for-gnome/)
+and actively maintained there; see [Credits](#credits).
 
 ![The focused app's menus in the top bar](assets/screenshots/global-menu.png)
 
