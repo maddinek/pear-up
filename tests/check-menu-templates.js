@@ -7,6 +7,7 @@ import {
     fileMenu,
     goMenu,
     viewMenu,
+    windowMenu,
     compactMenuItems,
 } from '../menuTemplates.js';
 
@@ -56,6 +57,21 @@ check('View has Full Screen and nothing greyed out',
     viewMenu().children.length === 1 &&
     viewMenu().children[0].label === 'Enter Full Screen');
 
+// Close Window / Close must not be the Quit action. Sharing "close" with
+// Quit made File and Window take down every window of the focused app.
+function actionOf(menu, label) {
+    return menu.children.find(item => item.label === label)?.action;
+}
+check('File Close Window closes one window',
+    actionOf(fileMenu(false, 'Nautilus'), 'Close Window') === 'close');
+check('file-manager File Close Window closes one window',
+    actionOf(fileMenu(true, 'Nautilus'), 'Close Window') === 'close');
+check('Window Close closes one window',
+    actionOf(windowMenu(), 'Close') === 'close');
+check('File and Window have no Quit action',
+    !fileMenu(false, 'Nautilus').children.some(item => item.action === 'quit') &&
+    !windowMenu().children.some(item => item.action === 'quit'));
+
 const compacted = compactMenuItems([
     { label: 'Keep', action: 'keep' },
     { label: 'Stub', enabled: false },
@@ -92,8 +108,6 @@ check('mutating a built subtree does not reach the template',
 const second = compactMenuItems(sample);
 check('a fresh build is unaffected by an earlier mutation',
     second[0].label === 'Leaf' && second[2].children[0].label === 'Inner');
-
-if (failed === 0)
 
 if (failed === 0)
     print('menu templates: all checks passed');

@@ -6,6 +6,12 @@ human reads.
 
 ## Unreleased
 
+### Fixed
+
+- **Close Window closes one window.** Quit had been wired to the same action,
+  so File → Close Window and Window → Close took down every window of the
+  focused app. Quit still quits; Close does not.
+
 ### Changed
 
 - **File and Go follow the focused app.** New Folder, Open With, Get Info,

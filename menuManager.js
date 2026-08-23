@@ -170,10 +170,13 @@ const TopLevelMenuButton = GObject.registerClass(
         let window = display.get_focus_window();
 
         if (action === "close") {
-            // "Quit <app>" has to end the whole application, not just the
-            // window that happens to hold focus. When a tracked app exists,
-            // take down all of its windows; otherwise fall back to the one
-            // with focus.
+            // File → Close Window and Window → Close. One window, the focused
+            // one. Quit is a different action; it used to share this id, which
+            // took every window of the app with it.
+            if (window)
+                window.delete(global.get_current_time());
+            return true;
+        } else if (action === "quit") {
             if (this._appInstance) {
                 for (const win of this._appInstance.get_windows()) {
                     try {
@@ -692,7 +695,7 @@ export class MenuManager {
             { type: "separator" },
             { label: "App Details", action: `app-details:${desktopId}` },
             { type: "separator" },
-            { label: `Quit ${appName}`, action: "close" }
+            { label: `Quit ${appName}`, action: "quit" }
         );
 
         return children;

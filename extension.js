@@ -813,6 +813,7 @@ export default class GlobalMenuExtension extends Extension {
             this._watchMinimized(activeWindow);
             this._menuManager.updateMenuForWindow(activeWindow);
         } else {
+            this._unwatchMinimized();
             this._menuManager.clear();
         }
     }
