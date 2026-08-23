@@ -234,7 +234,10 @@ const TopLevelMenuButton = GObject.registerClass(
 
         if (action.startsWith("app-details:")) {
             let appId = action.split(":")[1];
-            if (appId && Gio.DesktopAppInfo.lookup(appId)) {
+            // The shell's app database is the one source of "is this
+            // installed" that exists on every supported release —
+            // DesktopAppInfo's statics were split off to GioUnix.
+            if (appId && Shell.AppSystem.get_default().lookup_app(appId)) {
                 spawnCommand(['gnome-software', `--details=${appId}`]);
                 return true;
             }

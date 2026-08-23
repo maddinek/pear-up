@@ -98,6 +98,7 @@
       "get_window_type",
       "get_id",
       "showing_on_its_workspace",
+      "located_on_workspace",
       "get_frame_rect",
       "unmaximize",
       "maximize"
@@ -112,6 +113,9 @@
     "Shell.AppUsage": [
       "get_most_used"
     ],
+    "Shell.AppSystem": [
+      "lookup_app"
+    ],
     "St.IconTheme": [
       "has_icon"
     ],
@@ -123,6 +127,14 @@
       "get_parent",
       "get_parse_name",
       "get_uri"
+    ]
+  },
+
+  "properties": {
+    "comment": "GObject properties the code reads directly; accessors live on the prototype.",
+    "Meta.Window": [
+      "minimized",
+      "on_all_workspaces"
     ]
   },
 
@@ -140,6 +152,7 @@
     "_rightBox",
     "_centerBox",
     "addToStatusArea",
+    "get_current_time",
     "statusArea",
     "quickSettings",
     "_indicator",

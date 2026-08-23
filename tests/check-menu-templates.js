@@ -73,6 +73,27 @@ check('extra separators are squeezed',
     compacted[0].label === 'Keep' &&
     compacted[1].type === 'separator' &&
     compacted[2].label === 'Also');
+// Built menus must be safe to mutate: everything compactMenuItems hands back
+// is a copy, so a tweak to a live menu can never reach the shared template
+// constants underneath.
+const sample = [
+    { label: 'Leaf', action: 'leaf' },
+    { type: 'separator' },
+    { label: 'Branch', children: [{ label: 'Inner', action: 'inner' }] },
+];
+const first = compactMenuItems(sample);
+first[0].label = 'MUTATED';
+first[0].extra = true;
+first[2].children[0].label = 'MUTATED';
+check('mutating a built leaf does not reach the template',
+    sample[0].label === 'Leaf' && sample[0].extra === undefined);
+check('mutating a built subtree does not reach the template',
+    sample[2].children[0].label === 'Inner');
+const second = compactMenuItems(sample);
+check('a fresh build is unaffected by an earlier mutation',
+    second[0].label === 'Leaf' && second[2].children[0].label === 'Inner');
+
+if (failed === 0)
 
 if (failed === 0)
     print('menu templates: all checks passed');

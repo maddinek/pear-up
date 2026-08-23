@@ -42,6 +42,12 @@ update-desktop-database "$APPS_DIR" 2>/dev/null || true
 # user's own. Values it overwrites outright (Dash to Dock conflicts, button
 # layout) are only reset when they still hold the exact value prefs writes;
 # anything else means the user has touched them since, and we leave them alone.
+#
+# The helpers live in their own file so tests/check-uninstall.sh can exercise
+# them against a fake gsettings without running any of this script.
+
+DIR_OF_THIS_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$DIR_OF_THIS_SCRIPT/scripts/lib/gsettings-undo.sh"
 
 D2D_SCHEMA="org.gnome.shell.extensions.dash-to-dock"
 D2D_UUID="dash-to-dock@micxgx.gmail.com"
@@ -56,38 +62,6 @@ if [[ ! -d "$D2D_SCHEMAS" ]]; then
 fi
 
 RESTORED=()
-
-# Remove one accelerator from a strv key if present, leaving everything else.
-# The printed form is ['a', 'b']; strip the entry with either trailing or
-# leading separator, collapsing the now-empty list back to [].
-remove_accel() {
-    local schema="$1" key="$2" accel="$3"
-    shift 3
-    local current updated
-    current="$(gsettings get "$@" "$schema" "$key")" || return 0
-    [[ "$current" == *"'$accel'"* ]] || return 0
-    updated="${current//"$accel", /}"
-    updated="${updated//, "$accel"/}"
-    updated="${updated//"$accel"/}"
-    [[ "$updated" == "['']" ]] && updated="[]"
-    gsettings set "$@" "$schema" "$key" "$updated"
-    RESTORED+=("$schema $key: removed '$accel'")
-}
-
-# Reset a key only while it still holds the value prefs.js writes.
-reset_if_matches() {
-    local schema="$1" key="$2" expected="$3"
-    shift 3
-    local current
-    current="$(gsettings get "$@" "$schema" "$key")" || return 0
-    if [[ "$current" == "$expected" || "$current" == "@as $expected" ]]; then
-        # An empty strv prints as "@as []", so accept the type-annotated form too.
-        gsettings reset "$@" "$schema" "$key"
-        RESTORED+=("$schema $key: reset to default")
-    else
-        RESTORED+=("$schema $key: left alone (not the value this extension wrote)")
-    fi
-}
 
 if $RESET_SETTINGS; then
     # Appended accelerators: the macOS screenshot, window and dock sets.

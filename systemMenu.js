@@ -32,11 +32,14 @@ function findAvailableCommand(preferred, fallbacks) {
             // cannot verify keeps the plain argv[0] check.
             let appId = flatpakRunAppId(argv);
             if (appId) {
+                // The shell's app database is the one source of "is this
+                // installed" that exists on every supported release —
+                // DesktopAppInfo's statics were split off to GioUnix.
                 try {
-                    if (!Gio.DesktopAppInfo.new(`${appId}.desktop`))
+                    if (!Shell.AppSystem.get_default().lookup_app(`${appId}.desktop`))
                         continue;
                 } catch {
-                    // Desktop file lookup unavailable; assume it is there.
+                    // App database unavailable; assume it is there.
                 }
             } else if (!GLib.find_program_in_path(argv[0])) {
                 continue;
