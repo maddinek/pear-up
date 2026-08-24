@@ -184,25 +184,30 @@ const TopLevelMenuButton = GObject.registerClass(
       });
     }
 
-    // GNOME centred the dropdown on the button; undo that so its left edge
-    // sits under the title's left edge, the way macOS draws it. The offset
-    // depends on the menu's width, which settles only after allocation —
-    // hence the re-pin on every allocation change while the menu is open.
+    // Put the dropdown's left edge under the title's. Do not assume GNOME
+    // centred it: near a monitor edge the box pointer already clamps the
+    // actor to the workarea, so (menuWidth - buttonWidth) / 2 is the delta
+    // from a position it is no longer in. File and Files sit there. Measure
+    // where the actor actually is, then translate by the remaining gap.
     _pinMenuOffset() {
-        if (!this.menu?.actor || !this.menu.isOpen)
+        if (!this.menu?.actor || !this.menu.isOpen || this._pinning)
             return;
+        this._pinning = true;
         try {
-            let buttonWidth = Math.round(this.get_width() || 0);
-            let menuWidth = Math.round(this.menu.actor.get_width() || 0);
-            if (buttonWidth <= 0 || menuWidth <= 0)
+            const actor = this.menu._boxPointer ?? this.menu.actor;
+            const menuWidth = Math.round(actor.get_width() || 0);
+            if (menuWidth <= 0)
                 return;
 
-            // GNOME centred the actor; the delta from that origin to the
-            // left edge of the title is (menuWidth - buttonWidth) / 2.
-            let [buttonX] = this.get_transformed_position();
+            actor.remove_transition('translation-x');
+            if (actor.translation_x !== 0)
+                actor.translation_x = 0;
+
+            const [buttonX] = this.get_transformed_position();
+            const [menuX] = actor.get_transformed_position();
             let desiredLeft = buttonX;
-            let monitor = Main.layoutManager.findMonitorForActor(this) ||
-                          Main.layoutManager.primaryMonitor;
+            const monitor = Main.layoutManager.findMonitorForActor(this) ||
+                            Main.layoutManager.primaryMonitor;
             if (monitor) {
                 const monitorLeft = monitor.x;
                 const monitorRight = monitor.x + monitor.width;
@@ -211,15 +216,14 @@ const TopLevelMenuButton = GObject.registerClass(
                 if (desiredLeft < monitorLeft)
                     desiredLeft = monitorLeft;
             }
-            const centeredLeft = buttonX - (menuWidth - buttonWidth) / 2;
-            const offset = Math.round(desiredLeft - centeredLeft);
-            if (Math.round(this.menu.actor.translation_x) === offset)
-                return;
 
-            this.menu.actor.remove_transition('translation-x');
-            this.menu.actor.translation_x = offset;
+            const offset = Math.round(desiredLeft - menuX);
+            if (offset !== 0)
+                actor.translation_x = offset;
         } catch (e) {
             logError(`[pear-up] Error aligning menu: ${e}`);
+        } finally {
+            this._pinning = false;
         }
     }
 
