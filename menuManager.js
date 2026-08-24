@@ -646,14 +646,18 @@ export class MenuManager {
         this._applyBarChrome();
     }
 
-    // Type size and title padding are settings. Applied as inline style
+    // Type size and title spacing are settings. Applied as inline style
     // because they have to change with the slider, not on a stylesheet reload.
+    //
+    // Spacing has to go through -minimum/-natural-hpadding: PanelMenu's
+    // ButtonBox measures its own width and places its child from those two
+    // theme properties alone, and never consults CSS padding — setting
+    // `padding` here looks right and does nothing.
     _applyBarChrome() {
         const px = this._settings.get_int('menu-bar-font-size');
         const pad = this._settings.get_int('menu-bar-padding');
         for (const btn of this._buttons) {
-            btn.set_style(
-                `padding: 0 ${pad}px; -natural-hpadding: 0px; -minimum-hpadding: 0px;`);
+            btn.set_style(`-natural-hpadding: ${pad}px; -minimum-hpadding: ${pad}px;`);
             btn.label?.set_style(`font-size: ${px}px;`);
             if (btn.menu?.box)
                 btn.menu.box.set_style(`font-size: ${px}px;`);

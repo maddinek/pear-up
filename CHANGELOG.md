@@ -8,6 +8,13 @@ human reads.
 
 ### Fixed
 
+- **Title Size and Title Padding follow their sliders.** GNOME's own button
+  code lays the bar titles out from two hpadding properties and never reads
+  CSS padding, so the old style string zeroed what little spacing remained —
+  packing File, Edit and the rest into one long word — while the slider
+  changed a property nothing read. The sliders now drive the properties that
+  actually draw.
+
 - **Close Window closes one window.** Quit had been wired to the same action,
   so File → Close Window and Window → Close took down every window of the
   focused app. Quit still quits; Close does not.
