@@ -342,6 +342,47 @@ if menus:
         check("Menu Text Size actually changes the type on the System Menu",
               small and large and small < large,
               f"10px={at_small} default={at_default} 16px={at_large}")
+
+        # The bar's own two sliders. Same discipline as above: read what the
+        # buttons actually computed, because ButtonBox derives its spacing from
+        # the hpadding theme properties and ignores CSS padding entirely — a
+        # style string that sets `padding` round-trips the setting and still
+        # changes nothing on screen, which is exactly how this broke once.
+        def measure_bar_titles():
+            raw = call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                       "MeasureBarTitles").unpack()[0]
+            return json.loads(raw) if raw else []
+
+        at_rest = measure_bar_titles()
+        pear_up_setting("menu-bar-padding", "18")
+        pear_up_setting("menu-bar-font-size", "16")
+        GLib.usleep(800 * 1000)
+        at_wide = measure_bar_titles()
+        pear_up_setting("menu-bar-padding", "0")
+        GLib.usleep(800 * 1000)
+        at_tight = measure_bar_titles()
+        pear_up_setting("menu-bar-padding", "10")
+        pear_up_setting("menu-bar-font-size", "13")
+
+        def by_role(samples, field):
+            return {m["role"]: m[field] for m in samples}
+
+        if at_rest:
+            rest_pad, wide_pad = by_role(at_rest, "natHPadding"), by_role(at_wide, "natHPadding")
+            tight_pad = by_role(at_tight, "natHPadding")
+            check("Title Padding actually spaces the bar titles",
+                  wide_pad and all(
+                      wide_pad[r] > tight_pad.get(r, 0) and wide_pad[r] >= rest_pad.get(r, 0)
+                      for r in wide_pad),
+                  f"rest={rest_pad} 18px={wide_pad} 0px={tight_pad}")
+
+            rest_type, wide_type = by_role(at_rest, "labelPangoSize"), by_role(at_wide, "labelPangoSize")
+            check("Title Size actually changes the type on the bar titles",
+                  wide_type and all(
+                      wide_type[r] > rest_type.get(r, 0) for r in wide_type),
+                  f"default={rest_type} 16px={wide_type}")
+        else:
+            check("Bar titles were found to measure", False, "no pearup menu-button roles")
     else:
         check("System Menu was found", False, "no pearup-logo role")
 

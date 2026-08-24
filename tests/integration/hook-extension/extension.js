@@ -49,6 +49,9 @@ const IFACE = `
     <method name="MeasureSystemMenu">
       <arg type="s" direction="out" name="metrics"/>
     </method>
+    <method name="MeasureBarTitles">
+      <arg type="s" direction="out" name="metrics"/>
+    </method>
   </interface>
 </node>`;
 
@@ -273,6 +276,38 @@ export default class TestHookExtension extends Extension {
 
         button.menu.close();
         return JSON.stringify({ items });
+    }
+
+    // The computed spacing and type of each menu-bar title, after the theme
+    // and any inline style have been applied. ButtonBox derives its layout
+    // from the two hpadding theme properties, so those — not a style string —
+    // are what a test has to see change.
+    MeasureBarTitles() {
+        const titles = this._pearUpRoles()
+            .filter(role => role.startsWith(PEAR_UP_UUID))
+            .map(role => {
+                const button = Main.panel.statusArea[role];
+                if (!button)
+                    return null;
+
+                let labelPangoSize = 0;
+                try {
+                    labelPangoSize = button.label?.get_theme_node()
+                        ?.get_font()?.get_size() ?? 0;
+                } catch {
+                    // Unmapped labels have no theme node; treat as unreadable.
+                }
+
+                const node = button.get_theme_node();
+                return {
+                    role,
+                    natHPadding: node.get_length('-natural-hpadding'),
+                    minHPadding: node.get_length('-minimum-hpadding'),
+                    labelPangoSize,
+                };
+            })
+            .filter(Boolean);
+        return JSON.stringify(titles);
     }
 
     // Opens a submenu by label and reports what appeared in it. Submenus whose

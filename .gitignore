@@ -3,3 +3,4 @@ vm-screenshot*.png
 tests/integration/artifacts/
 node_modules/
 dist/
+__pycache__/
