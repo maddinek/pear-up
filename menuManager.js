@@ -118,30 +118,45 @@ const TopLevelMenuButton = GObject.registerClass(
           // after the box pointer has laid the menu out, and the app menu
           // refills its items as it opens, changing it again.
           //
-          // Fade rather than slide: the slide eases translation_x back toward
-          // centre, fighting the offset for the whole animation. Instant
-          // opens (false / NONE) stay instant — the wrap used to swallow
-          // that flag and fade anyway.
+          // BoxPointer.open() always eases translation_x to 0. FADE still
+          // has duration (FULL is ~0 so the bit test passes), so that tween
+          // overwrites the pin — and it shows most on short titles with
+          // wide menus (Files, File). Open the pointer with NONE, pin, then
+          // fade opacity ourselves. Instant opens stay instant.
           //
           // The signature changed between releases: older shells take
           // open(animate) as plain flags, newer ones open(params) — and a
           // default parameter drops out of .length, which is the tell.
           const openProto = PopupMenu.PopupMenu.prototype.open;
-          const fade = BoxPointer.PopupAnimation.FADE;
           const none = BoxPointer.PopupAnimation.NONE;
-          const toFade = animate =>
-              (animate === false || animate === none) ? none : fade;
+          const fadeMs = BoxPointer.POPUP_ANIMATION_TIME || 150;
+          const isInstant = animate =>
+              animate === false || animate === none;
+          const openAndPin = animate => {
+              openProto.call(this.menu, none);
+              this._pinMenuOffset();
+              if (isInstant(animate) || !this.menu.actor)
+                  return;
+              this.menu.actor.opacity = 0;
+              try {
+                  this.menu.actor.ease({
+                      opacity: 255,
+                      duration: fadeMs,
+                      mode: Clutter.AnimationMode.LINEAR,
+                  });
+              } catch {
+                  this.menu.actor.opacity = 255;
+              }
+          };
           this.menu.open = openProto.length === 0
-              ? (params = {}) => openProto.call(this.menu, {
-                  ...params,
-                  animate: params.animate === undefined
-                      ? fade : toFade(params.animate),
-              })
-              : (animate) => openProto.call(
-                  this.menu,
-                  animate === undefined ? fade : toFade(animate));
-          this.menu.actor.connectObject('notify::allocation',
-              () => this._pinMenuOffset(), this.menu);
+              ? (params = {}) => openAndPin(
+                  params.animate === undefined ? true : params.animate)
+              : (animate) => openAndPin(
+                  animate === undefined ? true : animate);
+          this.menu.actor.connectObject(
+              'notify::allocation', () => this._pinMenuOffset(),
+              'notify::translation-x', () => this._pinMenuOffset(),
+              this.menu);
           this.menu.connectObject('open-state-changed', (menu, isOpen) => {
               if (!isOpen)
                   return;
@@ -198,12 +213,9 @@ const TopLevelMenuButton = GObject.registerClass(
             }
             const centeredLeft = buttonX - (menuWidth - buttonWidth) / 2;
             const offset = Math.round(desiredLeft - centeredLeft);
+            if (Math.round(this.menu.actor.translation_x) === offset)
+                return;
 
-            // BoxPointer.open() eases translation_x to 0 even for a fade
-            // (FADE still has duration, and FULL is ~0 so the bit test
-            // passes). Drop that tween and keep opacity's. Setting the
-            // property while the tween is in flight would retarget it,
-            // not cancel it.
             this.menu.actor.remove_transition('translation-x');
             this.menu.actor.translation_x = offset;
         } catch (e) {
