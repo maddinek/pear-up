@@ -361,7 +361,7 @@ if menus:
         pear_up_setting("menu-bar-padding", "0")
         GLib.usleep(800 * 1000)
         at_tight = measure_bar_titles()
-        pear_up_setting("menu-bar-padding", "10")
+        pear_up_setting("menu-bar-padding", "6")
         pear_up_setting("menu-bar-font-size", "13")
 
         def by_role(samples, field):
