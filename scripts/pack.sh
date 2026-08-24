@@ -24,8 +24,11 @@ fi
 
 # The modules and data the extension needs at runtime. Tests, screenshots, the
 # contrib patch, the lint config and node_modules are all deliberately absent:
-# none of it runs on a user's machine.
+# none of it runs on a user's machine. LICENSE ships because the menu engine
+# came from another GPL-3 project, and its terms require the licence — plus
+# attribution to its author — to travel with the code that carries it.
 EXTRA_SOURCES=(
+    LICENSE
     menuManager.js
     menuTemplates.js
     systemMenu.js

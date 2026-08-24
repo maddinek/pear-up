@@ -1,3 +1,7 @@
+// Pear Up carries parts of these preferences from Global Menu for GNOME by
+// ShiroOSL (https://github.com/ShiroOSL/global-menu-for-gnome),
+// GPL-3.0-or-later. Heavily modified here; see the project README's Credits
+// for what remains theirs and what changed.
 import Adw from 'gi://Adw';
 import Gdk from 'gi://Gdk';
 import Gio from 'gi://Gio';

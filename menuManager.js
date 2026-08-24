@@ -1,3 +1,7 @@
+// Pear Up carries parts of this menu engine from Global Menu for GNOME by
+// ShiroOSL (https://github.com/ShiroOSL/global-menu-for-gnome),
+// GPL-3.0-or-later. Heavily modified here; see the project README's Credits
+// for what remains theirs and what changed.
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
