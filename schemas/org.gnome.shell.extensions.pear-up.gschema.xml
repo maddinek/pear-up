@@ -60,10 +60,10 @@
       <description>The titles in the bar, and the menus they open. The pear menu has its own size. 13 is GNOME's own.</description>
     </key>
     <key name="menu-bar-padding" type="i">
-      <default>10</default>
+      <default>6</default>
       <range min="0" max="20"/>
       <summary>Horizontal padding of each File/Edit title, in pixels</summary>
-      <description>Room on each side of a title. Zero packs them against each other. 10 is what the stylesheet used to hard-code.</description>
+      <description>Room on each side of a title. Zero packs them against each other.</description>
     </key>
 
     <key name="hide-overview-button" type="b"><default>true</default><summary>Hide the Activities/overview button</summary></key>

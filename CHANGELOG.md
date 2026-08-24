@@ -8,6 +8,18 @@ human reads.
 
 ### Fixed
 
+- **Clicking File no longer takes down the desktop.** Pinning the dropdown
+  wrote `translation-x: nan` when the actor had no stage position yet, and
+  did it from `notify::allocation` — which is while Clutter is walking the
+  actor graph. The pin now waits for idle, and a non-finite offset is never
+  written.
+
+- **Dropdowns sit under their titles again.** GNOME centres each dropdown on
+  its button and offers no alignment knob, so the left edge used to drift
+  right on the widest menus. The dropdowns are now pinned to the title's left
+  edge on every relayout, and open with a fade — the slide animation fought
+  the offset the whole way out.
+
 - **Title Size and Title Padding follow their sliders.** GNOME's own button
   code lays the bar titles out from two hpadding properties and never reads
   CSS padding, so the old style string zeroed what little spacing remained —
@@ -20,6 +32,9 @@ human reads.
   focused app. Quit still quits; Close does not.
 
 ### Changed
+
+- **Title Padding defaults to 6px**, between the old default and the packed
+  look, now that the slider moves the spacing it claims to.
 
 - **File and Go follow the focused app.** New Folder, Open With, Get Info,
   Trash and the folder shortcuts belong to a file manager; they no longer

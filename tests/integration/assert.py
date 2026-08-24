@@ -11,6 +11,7 @@ Looking Glass, and Eval refuses to run without the unsafe mode that only Looking
 Glass can enable, so there is no other way in.
 """
 import json
+import math
 import os
 import subprocess
 import sys
@@ -361,7 +362,7 @@ if menus:
         pear_up_setting("menu-bar-padding", "0")
         GLib.usleep(800 * 1000)
         at_tight = measure_bar_titles()
-        pear_up_setting("menu-bar-padding", "10")
+        pear_up_setting("menu-bar-padding", "6")
         pear_up_setting("menu-bar-font-size", "13")
 
         def by_role(samples, field):
@@ -383,6 +384,62 @@ if menus:
                   f"default={rest_type} 16px={wide_type}")
         else:
             check("Bar titles were found to measure", False, "no pearup menu-button roles")
+
+        # macOS alignment: each dropdown's left edge sits under its title's
+        # left edge. This regressed into a rightward drift on the widest menus
+        # when the offset was hand-computed from a width read before the menu
+        # was allocated, so assert on real stage coordinates while open.
+        #
+        # A non-finite offset is the File-click crash: Clutter was given
+        # translation-x: nan and the shell went with it. Dropping nulls used
+        # to let the other titles carry the check.
+        tree = json.loads(call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                               "GetMenuTree").unpack()[0])
+        titles = [m["label"] for m in tree if m.get("label")][:4]
+        offsets = {}
+        translations = {}
+        for label in titles:
+            try:
+                call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                     "OpenTopMenu", (label,), "(s)")
+                # The box pointer places itself on a later frame of the shell's
+                # loop; sleeping here (not inside the shell) gives it that frame.
+                GLib.usleep(600 * 1000)
+                raw = call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                           "MeasureMenuGeometry", (label,), "(s)").unpack()[0]
+                call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                     "CloseTopMenu", (label,), "(s)")
+            except GLib.Error as exc:
+                check(f"Opening {label} did not crash the shell", False,
+                      exc.message.splitlines()[0])
+                offsets[label] = None
+                translations[label] = None
+                continue
+            geometry = json.loads(raw) if raw else None
+            offsets[label] = geometry.get("offset") if geometry else None
+            translations[label] = geometry.get("translationX") if geometry else None
+
+        def finite_number(value):
+            return isinstance(value, (int, float)) and math.isfinite(value)
+
+        nonfinite = [label for label, value in offsets.items()
+                     if not finite_number(value)]
+        check("Every opened dropdown reports a finite offset, never NaN",
+              bool(titles) and not nonfinite,
+              f"non-finite {nonfinite} offsets {offsets}")
+        nan_tx = [label for label, value in translations.items()
+                  if not finite_number(value)]
+        check("translation-x on an open dropdown is a finite number",
+              bool(titles) and not nan_tx,
+              f"non-finite {nan_tx} translationX {translations}")
+        if "File" in offsets:
+            check("File dropdown reports a finite offset",
+                  finite_number(offsets["File"]),
+                  f"offset={offsets['File']} translationX={translations.get('File')}")
+        check("Dropdowns open left-aligned under their titles",
+              len(offsets) >= 3 and not nonfinite and
+              all(abs(value) <= 3 for value in offsets.values()),
+              f"offsets {offsets}")
     else:
         check("System Menu was found", False, "no pearup-logo role")
 

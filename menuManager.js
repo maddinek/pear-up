@@ -12,8 +12,10 @@ import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
+import * as BoxPointer from "resource:///org/gnome/shell/ui/boxpointer.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { LOGO_ROLE } from './systemMenu.js';
+import { pinTranslationX } from './menuPin.js';
 import {
     isFileManager,
     compactMenuItems,
@@ -84,6 +86,8 @@ const TopLevelMenuButton = GObject.registerClass(
       this._appInstance = appInstance;
       this._refreshChildren = refreshChildren;
       this._timeoutIds = [];
+      this._pinIdle = 0;
+      this._pinning = false;
       this._virtualDevice = null;
 
       this.add_style_class_name('pearup-menu-button');
@@ -110,16 +114,67 @@ const TopLevelMenuButton = GObject.registerClass(
       this._buildSubMenu(children, this.menu);
 
       if (this.menu) {
+          // macOS puts the dropdown's left edge under the title's left edge;
+          // GNOME centres the dropdown on the button and offers no alignment
+          // knob. Nudge the opened menu by the width difference instead, and
+          // re-pin it whenever its allocation moves — the width is only known
+          // after the box pointer has laid the menu out, and the app menu
+          // refills its items as it opens, changing it again.
+          //
+          // BoxPointer.open() always eases translation_x to 0. FADE still
+          // has duration (FULL is ~0 so the bit test passes), so that tween
+          // overwrites the pin — and it shows most on short titles with
+          // wide menus (Files, File). Open the pointer with NONE, pin, then
+          // fade opacity ourselves. Instant opens stay instant.
+          //
+          // The signature changed between releases: older shells take
+          // open(animate) as plain flags, newer ones open(params) — and a
+          // default parameter drops out of .length, which is the tell.
+          const openProto = PopupMenu.PopupMenu.prototype.open;
+          const none = BoxPointer.PopupAnimation.NONE;
+          const fadeMs = BoxPointer.POPUP_ANIMATION_TIME || 150;
+          const isInstant = animate =>
+              animate === false || animate === none;
+          const openAndPin = animate => {
+              openProto.call(this.menu, none);
+              this._queuePin();
+              if (isInstant(animate) || !this.menu.actor)
+                  return;
+              this.menu.actor.opacity = 0;
+              try {
+                  this.menu.actor.ease({
+                      opacity: 255,
+                      duration: fadeMs,
+                      mode: Clutter.AnimationMode.LINEAR,
+                  });
+              } catch {
+                  this.menu.actor.opacity = 255;
+              }
+          };
+          this.menu.open = openProto.length === 0
+              ? (params = {}) => openAndPin(
+                  params.animate === undefined ? true : params.animate)
+              : (animate) => openAndPin(
+                  animate === undefined ? true : animate);
+          // Pin after the current allocation finishes. Mutating translation-x
+          // from notify::allocation is what tripped clutter_actor_iter_next
+          // (the actor graph changing while Clutter was walking it) and, when
+          // the stage x was still NaN, wrote translation-x: nan — the File
+          // click crash.
+          this.menu.actor.connectObject(
+              'notify::allocation', () => this._queuePin(), this.menu);
           this.menu.connectObject('open-state-changed', (menu, isOpen) => {
+              if (!isOpen)
+                  return;
               // The menu bar is rebuilt when the focused app changes, so items
               // derived from window state — the list of open windows and their
               // titles — are otherwise a snapshot from whenever that happened.
               // Titles change constantly, so refresh them on the way open.
-              if (isOpen && this._refreshChildren) {
+              if (this._refreshChildren) {
                   menu.removeAll();
                   this._buildSubMenu(this._refreshChildren(), menu);
               }
-              this._alignMenuToLeft();
+              this._queuePin();
           }, this);
       }
 
@@ -128,6 +183,10 @@ const TopLevelMenuButton = GObject.registerClass(
       // the shell shuts down, and that path never calls the JS method. A timer
       // outliving the button would type into whatever has focus by then.
       this.connect('destroy', () => {
+          if (this._pinIdle) {
+              GLib.source_remove(this._pinIdle);
+              this._pinIdle = 0;
+          }
           for (const id of this._timeoutIds)
               GLib.source_remove(id);
           this._timeoutIds = [];
@@ -135,37 +194,51 @@ const TopLevelMenuButton = GObject.registerClass(
       });
     }
 
-    _alignMenuToLeft() {
-        if (!this.menu || !this.menu.actor) return;
+    _queuePin() {
+        if (this._pinIdle)
+            return;
+        this._pinIdle = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._pinIdle = 0;
+            this._pinMenuOffset();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Put the dropdown's left edge under the title's. Do not assume GNOME
+    // centred it: near a monitor edge the box pointer already clamps the
+    // actor to the workarea. Measure where it actually is, then translate
+    // by the remaining gap. Never write a non-finite translation-x — Clutter
+    // treats NaN as a programming error and the shell goes with it.
+    _pinMenuOffset() {
+        if (!this.menu?.actor || !this.menu.isOpen || this._pinning)
+            return;
+        this._pinning = true;
         try {
-            let buttonWidth = Math.round(this.get_width() || 0);
-            let menuWidth = Math.round(this.menu.actor.get_width() || 0);
-            if (buttonWidth <= 0 || menuWidth <= 0) return;
-
-            // GNOME centres the menu under the button; macOS aligns its left
-            // edge with the button's, which this offset undoes.
-            let offset = Math.round((menuWidth - buttonWidth) / 2);
-
-            // Clamp so the menu never gets pushed off-screen near a
-            // monitor edge (matters most on smaller/secondary displays).
-            let [buttonX] = this.get_transformed_position();
-            let monitor = Main.layoutManager.findMonitorForActor(this) ||
-                          Main.layoutManager.primaryMonitor;
-            if (monitor) {
-                // Measure from where the menu will actually sit once the offset
-                // is applied, which for a left-aligned menu is the button's own
-                // left edge.
-                let menuLeft = buttonX;
-                let menuRight = menuLeft + menuWidth;
-                if (menuLeft < monitor.x)
-                    offset -= (monitor.x - menuLeft);
-                else if (menuRight > monitor.x + monitor.width)
-                    offset += (menuRight - (monitor.x + monitor.width));
-            }
-
-            this.menu.actor.translation_x = offset;
+            const actor = this.menu._boxPointer ?? this.menu.actor;
+            const menuWidth = actor.get_width() || 0;
+            const [buttonX] = this.get_transformed_position();
+            const [menuX] = actor.get_transformed_position();
+            const currentTx = Number(actor.translation_x);
+            const monitor = Main.layoutManager.findMonitorForActor(this) ||
+                            Main.layoutManager.primaryMonitor;
+            const offset = pinTranslationX({
+                buttonX,
+                menuX,
+                menuWidth,
+                translationX: Number.isFinite(currentTx) ? currentTx : 0,
+                monitorLeft: monitor?.x,
+                monitorRight: monitor ? monitor.x + monitor.width : undefined,
+            });
+            if (offset === null)
+                return;
+            if (Number.isFinite(currentTx) && Math.round(currentTx) === offset)
+                return;
+            actor.remove_transition('translation-x');
+            actor.translation_x = offset;
         } catch (e) {
             logError(`[pear-up] Error aligning menu: ${e}`);
+        } finally {
+            this._pinning = false;
         }
     }
 
