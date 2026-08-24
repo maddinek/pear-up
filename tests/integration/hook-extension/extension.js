@@ -52,6 +52,18 @@ const IFACE = `
     <method name="MeasureBarTitles">
       <arg type="s" direction="out" name="metrics"/>
     </method>
+    <method name="MeasureMenuGeometry">
+      <arg type="s" direction="in" name="label"/>
+      <arg type="s" direction="out" name="geometry"/>
+    </method>
+    <method name="OpenTopMenu">
+      <arg type="s" direction="in" name="label"/>
+      <arg type="s" direction="out" name="opened"/>
+    </method>
+    <method name="CloseTopMenu">
+      <arg type="s" direction="in" name="label"/>
+      <arg type="s" direction="out" name="closed"/>
+    </method>
   </interface>
 </node>`;
 
@@ -308,6 +320,61 @@ export default class TestHookExtension extends Extension {
             })
             .filter(Boolean);
         return JSON.stringify(titles);
+    }
+
+    // Opens a top-level dropdown by title, for a follow-up geometry read.
+    // The box pointer places itself on a later frame, so the suite sleeps
+    // between opening and measuring - a blocking sleep here would freeze the
+    // very loop that has to do the placing.
+    OpenTopMenu(label) {
+        for (const role of this._pearUpRoles()) {
+            const button = Main.panel.statusArea[role];
+            if ((button?.label?.text ?? null) !== label || !button?.menu)
+                continue;
+            button.menu.open(false);
+            return JSON.stringify({ role });
+        }
+        return JSON.stringify(null);
+    }
+
+    CloseTopMenu(label) {
+        for (const role of this._pearUpRoles()) {
+            const button = Main.panel.statusArea[role];
+            if ((button?.label?.text ?? null) !== label || !button?.menu)
+                continue;
+            button.menu.close();
+            return JSON.stringify({ closed: true });
+        }
+        return JSON.stringify(null);
+    }
+
+    // Stage coordinates of a top-level dropdown and its source button, taken
+    // while the dropdown is open. A left-aligned menu puts the two left edges
+    // together; this is the comparison an alignment test has to make.
+    MeasureMenuGeometry(label) {
+        for (const role of this._pearUpRoles()) {
+            const button = Main.panel.statusArea[role];
+            const title = button?.label?.text ?? null;
+            if (title !== label || !button?.menu)
+                continue;
+
+            if (!button.menu.isOpen)
+                return JSON.stringify(null);
+
+            const [menuX] = button.menu.actor.get_transformed_position();
+            const [buttonX] = button.get_transformed_position();
+            const finite = v => typeof v === 'number' && Number.isFinite(v);
+            const geometry = {
+                role,
+                menuX: finite(menuX) ? Math.round(menuX) : null,
+                buttonX: finite(buttonX) ? Math.round(buttonX) : null,
+                menuWidth: button.menu.actor.get_width(),
+                offset: finite(menuX) && finite(buttonX)
+                    ? Math.round(menuX - buttonX) : null,
+            };
+            return JSON.stringify(geometry);
+        }
+        return JSON.stringify(null);
     }
 
     // Opens a submenu by label and reports what appeared in it. Submenus whose

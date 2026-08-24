@@ -1351,7 +1351,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         const barPadRow = this._addScaleRow(lookGroup, 'Title Padding', {
             lower: 0,
             upper: 20,
-            marks: [0, 4, 8, 10, 16, 20],
+            marks: [0, 4, 6, 10, 16, 20],
             value: settings.get_int('menu-bar-padding'),
             unit: 'px',
             onChange: value => settings.set_int('menu-bar-padding', value),

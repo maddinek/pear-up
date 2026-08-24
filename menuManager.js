@@ -12,6 +12,7 @@ import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
+import * as BoxPointer from "resource:///org/gnome/shell/ui/boxpointer.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { LOGO_ROLE } from './systemMenu.js';
 import {
@@ -110,16 +111,38 @@ const TopLevelMenuButton = GObject.registerClass(
       this._buildSubMenu(children, this.menu);
 
       if (this.menu) {
+          // macOS puts the dropdown's left edge under the title's left edge;
+          // GNOME centres the dropdown on the button and offers no alignment
+          // knob. Nudge the opened menu by the width difference instead, and
+          // re-pin it whenever its allocation moves — the width is only known
+          // after the box pointer has laid the menu out, and the app menu
+          // refills its items as it opens, changing it again.
+          //
+          // Fade rather than slide: the slide eases translation_x back toward
+          // centre, fighting the offset for the whole animation.
+          //
+          // The signature changed between releases: older shells take
+          // open(animate) as plain flags, newer ones open(params) — and a
+          // default parameter drops out of .length, which is the tell.
+          const openProto = PopupMenu.PopupMenu.prototype.open;
+          const fade = BoxPointer.PopupAnimation.FADE;
+          this.menu.open = openProto.length === 0
+              ? () => openProto.call(this.menu, { animate: fade })
+              : () => openProto.call(this.menu, fade);
+          this.menu.actor.connectObject('notify::allocation',
+              () => this._pinMenuOffset(), this.menu);
           this.menu.connectObject('open-state-changed', (menu, isOpen) => {
+              if (!isOpen)
+                  return;
               // The menu bar is rebuilt when the focused app changes, so items
               // derived from window state — the list of open windows and their
               // titles — are otherwise a snapshot from whenever that happened.
               // Titles change constantly, so refresh them on the way open.
-              if (isOpen && this._refreshChildren) {
+              if (this._refreshChildren) {
                   menu.removeAll();
                   this._buildSubMenu(this._refreshChildren(), menu);
               }
-              this._alignMenuToLeft();
+              this._pinMenuOffset();
           }, this);
       }
 
@@ -135,32 +158,30 @@ const TopLevelMenuButton = GObject.registerClass(
       });
     }
 
-    _alignMenuToLeft() {
-        if (!this.menu || !this.menu.actor) return;
+    // GNOME centred the dropdown on the button; undo that so its left edge
+    // sits under the title's left edge, the way macOS draws it. The offset
+    // depends on the menu's width, which settles only after allocation —
+    // hence the re-pin on every allocation change while the menu is open.
+    _pinMenuOffset() {
+        if (!this.menu?.actor || !this.menu.isOpen)
+            return;
         try {
             let buttonWidth = Math.round(this.get_width() || 0);
             let menuWidth = Math.round(this.menu.actor.get_width() || 0);
-            if (buttonWidth <= 0 || menuWidth <= 0) return;
+            if (buttonWidth <= 0 || menuWidth <= 0)
+                return;
 
-            // GNOME centres the menu under the button; macOS aligns its left
-            // edge with the button's, which this offset undoes.
             let offset = Math.round((menuWidth - buttonWidth) / 2);
 
-            // Clamp so the menu never gets pushed off-screen near a
-            // monitor edge (matters most on smaller/secondary displays).
+            // Keep the shifted menu inside its monitor, the way GNOME's own
+            // placement did before we moved it.
             let [buttonX] = this.get_transformed_position();
             let monitor = Main.layoutManager.findMonitorForActor(this) ||
                           Main.layoutManager.primaryMonitor;
             if (monitor) {
-                // Measure from where the menu will actually sit once the offset
-                // is applied, which for a left-aligned menu is the button's own
-                // left edge.
-                let menuLeft = buttonX;
-                let menuRight = menuLeft + menuWidth;
-                if (menuLeft < monitor.x)
-                    offset -= (monitor.x - menuLeft);
-                else if (menuRight > monitor.x + monitor.width)
-                    offset += (menuRight - (monitor.x + monitor.width));
+                let menuRight = buttonX + menuWidth;
+                if (menuRight > monitor.x + monitor.width)
+                    offset += menuRight - (monitor.x + monitor.width);
             }
 
             this.menu.actor.translation_x = offset;

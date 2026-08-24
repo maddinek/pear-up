@@ -383,6 +383,32 @@ if menus:
                   f"default={rest_type} 16px={wide_type}")
         else:
             check("Bar titles were found to measure", False, "no pearup menu-button roles")
+
+        # macOS alignment: each dropdown's left edge sits under its title's
+        # left edge. This regressed into a rightward drift on the widest menus
+        # when the offset was hand-computed from a width read before the menu
+        # was allocated, so assert on real stage coordinates while open.
+        tree = json.loads(call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                               "GetMenuTree").unpack()[0])
+        titles = [m["label"] for m in tree if m.get("label")][:4]
+        offsets = {}
+        for label in titles:
+            call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                 "OpenTopMenu", (label,), "(s)")
+            # The box pointer places itself on a later frame of the shell's
+            # loop; sleeping here (not inside the shell) gives it that frame.
+            GLib.usleep(600 * 1000)
+            raw = call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                       "MeasureMenuGeometry", (label,), "(s)").unpack()[0]
+            call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                 "CloseTopMenu", (label,), "(s)")
+            geometry = json.loads(raw) if raw else None
+            if geometry:
+                offsets[label] = geometry["offset"]
+        placed = {k: v for k, v in offsets.items() if isinstance(v, (int, float))}
+        check("Dropdowns open left-aligned under their titles",
+              len(placed) >= 3 and all(abs(o) <= 3 for o in placed.values()),
+              f"offsets {offsets}")
     else:
         check("System Menu was found", False, "no pearup-logo role")
 
