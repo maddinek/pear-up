@@ -15,6 +15,7 @@ import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as BoxPointer from "resource:///org/gnome/shell/ui/boxpointer.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { LOGO_ROLE } from './systemMenu.js';
+import { pinTranslationX } from './menuPin.js';
 import {
     isFileManager,
     compactMenuItems,
@@ -85,6 +86,8 @@ const TopLevelMenuButton = GObject.registerClass(
       this._appInstance = appInstance;
       this._refreshChildren = refreshChildren;
       this._timeoutIds = [];
+      this._pinIdle = 0;
+      this._pinning = false;
       this._virtualDevice = null;
 
       this.add_style_class_name('pearup-menu-button');
@@ -134,7 +137,7 @@ const TopLevelMenuButton = GObject.registerClass(
               animate === false || animate === none;
           const openAndPin = animate => {
               openProto.call(this.menu, none);
-              this._pinMenuOffset();
+              this._queuePin();
               if (isInstant(animate) || !this.menu.actor)
                   return;
               this.menu.actor.opacity = 0;
@@ -153,10 +156,13 @@ const TopLevelMenuButton = GObject.registerClass(
                   params.animate === undefined ? true : params.animate)
               : (animate) => openAndPin(
                   animate === undefined ? true : animate);
+          // Pin after the current allocation finishes. Mutating translation-x
+          // from notify::allocation is what tripped clutter_actor_iter_next
+          // (the actor graph changing while Clutter was walking it) and, when
+          // the stage x was still NaN, wrote translation-x: nan — the File
+          // click crash.
           this.menu.actor.connectObject(
-              'notify::allocation', () => this._pinMenuOffset(),
-              'notify::translation-x', () => this._pinMenuOffset(),
-              this.menu);
+              'notify::allocation', () => this._queuePin(), this.menu);
           this.menu.connectObject('open-state-changed', (menu, isOpen) => {
               if (!isOpen)
                   return;
@@ -168,7 +174,7 @@ const TopLevelMenuButton = GObject.registerClass(
                   menu.removeAll();
                   this._buildSubMenu(this._refreshChildren(), menu);
               }
-              this._pinMenuOffset();
+              this._queuePin();
           }, this);
       }
 
@@ -177,6 +183,10 @@ const TopLevelMenuButton = GObject.registerClass(
       // the shell shuts down, and that path never calls the JS method. A timer
       // outliving the button would type into whatever has focus by then.
       this.connect('destroy', () => {
+          if (this._pinIdle) {
+              GLib.source_remove(this._pinIdle);
+              this._pinIdle = 0;
+          }
           for (const id of this._timeoutIds)
               GLib.source_remove(id);
           this._timeoutIds = [];
@@ -184,42 +194,47 @@ const TopLevelMenuButton = GObject.registerClass(
       });
     }
 
+    _queuePin() {
+        if (this._pinIdle)
+            return;
+        this._pinIdle = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._pinIdle = 0;
+            this._pinMenuOffset();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     // Put the dropdown's left edge under the title's. Do not assume GNOME
     // centred it: near a monitor edge the box pointer already clamps the
-    // actor to the workarea, so (menuWidth - buttonWidth) / 2 is the delta
-    // from a position it is no longer in. File and Files sit there. Measure
-    // where the actor actually is, then translate by the remaining gap.
+    // actor to the workarea. Measure where it actually is, then translate
+    // by the remaining gap. Never write a non-finite translation-x — Clutter
+    // treats NaN as a programming error and the shell goes with it.
     _pinMenuOffset() {
         if (!this.menu?.actor || !this.menu.isOpen || this._pinning)
             return;
         this._pinning = true;
         try {
             const actor = this.menu._boxPointer ?? this.menu.actor;
-            const menuWidth = Math.round(actor.get_width() || 0);
-            if (menuWidth <= 0)
-                return;
-
-            actor.remove_transition('translation-x');
-            if (actor.translation_x !== 0)
-                actor.translation_x = 0;
-
+            const menuWidth = actor.get_width() || 0;
             const [buttonX] = this.get_transformed_position();
             const [menuX] = actor.get_transformed_position();
-            let desiredLeft = buttonX;
+            const currentTx = Number(actor.translation_x);
             const monitor = Main.layoutManager.findMonitorForActor(this) ||
                             Main.layoutManager.primaryMonitor;
-            if (monitor) {
-                const monitorLeft = monitor.x;
-                const monitorRight = monitor.x + monitor.width;
-                if (desiredLeft + menuWidth > monitorRight)
-                    desiredLeft = monitorRight - menuWidth;
-                if (desiredLeft < monitorLeft)
-                    desiredLeft = monitorLeft;
-            }
-
-            const offset = Math.round(desiredLeft - menuX);
-            if (offset !== 0)
-                actor.translation_x = offset;
+            const offset = pinTranslationX({
+                buttonX,
+                menuX,
+                menuWidth,
+                translationX: Number.isFinite(currentTx) ? currentTx : 0,
+                monitorLeft: monitor?.x,
+                monitorRight: monitor ? monitor.x + monitor.width : undefined,
+            });
+            if (offset === null)
+                return;
+            if (Number.isFinite(currentTx) && Math.round(currentTx) === offset)
+                return;
+            actor.remove_transition('translation-x');
+            actor.translation_x = offset;
         } catch (e) {
             logError(`[pear-up] Error aligning menu: ${e}`);
         } finally {

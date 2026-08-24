@@ -30,6 +30,7 @@ fi
 EXTRA_SOURCES=(
     LICENSE
     menuManager.js
+    menuPin.js
     menuTemplates.js
     systemMenu.js
     searchButton.js

@@ -26,4 +26,5 @@ echo "  typelibs: ${typelibs:-<none found>}"
 
 gjs -m tests/check-api.js tests/api-manifest.json
 gjs -m tests/check-menu-templates.js
+gjs -m tests/check-menu-pin.js
 python3 tests/check-shell-internals.py tests/api-manifest.json

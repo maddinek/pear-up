@@ -361,14 +361,17 @@ export default class TestHookExtension extends Extension {
             if (!button.menu.isOpen)
                 return JSON.stringify(null);
 
-            const [menuX] = button.menu.actor.get_transformed_position();
+            const actor = button.menu._boxPointer ?? button.menu.actor;
+            const [menuX] = actor.get_transformed_position();
             const [buttonX] = button.get_transformed_position();
+            const translationX = actor.translation_x;
             const finite = v => typeof v === 'number' && Number.isFinite(v);
             const geometry = {
                 role,
                 menuX: finite(menuX) ? Math.round(menuX) : null,
                 buttonX: finite(buttonX) ? Math.round(buttonX) : null,
-                menuWidth: button.menu.actor.get_width(),
+                menuWidth: actor.get_width(),
+                translationX: finite(translationX) ? Math.round(translationX) : null,
                 offset: finite(menuX) && finite(buttonX)
                     ? Math.round(menuX - buttonX) : null,
             };

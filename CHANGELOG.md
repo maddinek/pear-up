@@ -8,6 +8,12 @@ human reads.
 
 ### Fixed
 
+- **Clicking File no longer takes down the desktop.** Pinning the dropdown
+  wrote `translation-x: nan` when the actor had no stage position yet, and
+  did it from `notify::allocation` — which is while Clutter is walking the
+  actor graph. The pin now waits for idle, and a non-finite offset is never
+  written.
+
 - **Dropdowns sit under their titles again.** GNOME centres each dropdown on
   its button and offers no alignment knob, so the left edge used to drift
   right on the widest menus. The dropdowns are now pinned to the title's left
