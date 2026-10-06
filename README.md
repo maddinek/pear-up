@@ -54,7 +54,8 @@ search when that thing is unavailable, so the button is never a dead end.
 **Dock control.** [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) is
 configured from the same window: which screen edge it sits on, icon size, how much of the edge it may
 use, whether it is always visible, hides when a window is in the way, or only appears when you point
-at the edge — and which display it belongs to.
+at the edge, how running apps are marked — one dot like macOS, GNOME's own, or none — and which
+display it belongs to.
 
 | Right edge, always visible | Bottom edge, larger icons |
 | --- | --- |

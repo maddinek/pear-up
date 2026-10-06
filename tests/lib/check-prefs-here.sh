@@ -30,4 +30,14 @@ sed -i "s|resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js|file://$
 export GSETTINGS_BACKEND=memory
 export G_DEBUG=fatal-criticals
 
+echo "  without Dash to Dock:"
 xvfb-run -a gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
+
+# Then again with this release's packaged Dash to Dock, whose schema turns the
+# Dock page from a notice into rows that write its keys. Its version differs
+# per release, which is the point: the rows have to cope with what is there.
+dnf install -q -y gnome-shell-extension-dash-to-dock >/dev/null 2>&1
+# Its warnings are about other packages' schema paths, and noise here.
+glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null
+echo "  with Dash to Dock $(rpm -q --qf '%{VERSION}' gnome-shell-extension-dash-to-dock):"
+PREFS_SMOKE_DOCK=1 xvfb-run -a gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"

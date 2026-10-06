@@ -124,6 +124,45 @@ const DOCK_VISIBILITY = [
     },
 ];
 
+// How Dash to Dock marks a running app. It has no style that draws nothing:
+// show-running only drops unpinned running apps from the dock, and pinned ones
+// keep their dots. So "None" is the single dot drawn fully transparent — the
+// dot style already hides GNOME's own, and a zero border leaves nothing to see.
+const RUNNING_DOT_KEYS = [
+    'running-indicator-style',
+    'custom-theme-customize-running-dots',
+    'custom-theme-running-dots-color',
+    'custom-theme-running-dots-border-width',
+];
+const RUNNING_DOT_INVISIBLE = 'rgba(255,255,255,0)';
+const RUNNING_INDICATORS = [
+    {
+        title: 'One Dot, Like macOS',
+        apply: dock => {
+            dock.set_string('running-indicator-style', 'DOT');
+            dock.set_boolean('custom-theme-customize-running-dots', true);
+            dock.set_string('custom-theme-running-dots-color', '#ffffff');
+            dock.set_int('custom-theme-running-dots-border-width', 0);
+        },
+    },
+    {
+        title: 'GNOME Default',
+        apply: dock => {
+            dock.set_string('running-indicator-style', 'DEFAULT');
+            dock.set_boolean('custom-theme-customize-running-dots', false);
+        },
+    },
+    {
+        title: 'None',
+        apply: dock => {
+            dock.set_string('running-indicator-style', 'DOT');
+            dock.set_boolean('custom-theme-customize-running-dots', true);
+            dock.set_string('custom-theme-running-dots-color', RUNNING_DOT_INVISIBLE);
+            dock.set_int('custom-theme-running-dots-border-width', 0);
+        },
+    },
+];
+
 const DISTRO_ICONS = [
     ['pear', 'Bitten Pear'],
     ['apple', 'Apple'],
@@ -344,6 +383,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             });
         }
 
+        this._buildDockIndicatorGroup(page, dock);
         this._buildDockDisplayGroup(page, dock);
 
         return page;
@@ -622,6 +662,65 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         if (dock.get_boolean('dock-fixed'))
             return 0;
         return dock.get_boolean('intellihide') ? 1 : 2;
+    }
+
+    // Which of RUNNING_INDICATORS the stored keys amount to, or -1 for a style
+    // chosen in Dash to Dock's own settings that none of them describes.
+    _currentRunningIndicator(dock) {
+        const style = dock.get_string('running-indicator-style');
+        if (style === 'DEFAULT')
+            return 1;
+        if (style !== 'DOT' || !dock.get_boolean('custom-theme-customize-running-dots'))
+            return -1;
+        return dock.get_string('custom-theme-running-dots-color') === RUNNING_DOT_INVISIBLE ? 2 : 0;
+    }
+
+    _buildDockIndicatorGroup(page, dock) {
+        // The single dot is a newer style than the keys themselves, and writing
+        // a value an enum does not list is as fatal as writing a missing key.
+        if (!RUNNING_DOT_KEYS.every(key => this._schemaHasKey(dock, key)) ||
+            !dock.settings_schema.get_key('running-indicator-style')
+                .range_check(GLib.Variant.new_string('DOT')))
+            return;
+
+        const group = new Adw.PreferencesGroup({ title: 'Running Apps' });
+        page.add(group);
+
+        // A style set elsewhere gets an entry of its own rather than reading as
+        // one of ours, which would misreport what is actually saved.
+        const labels = RUNNING_INDICATORS.map(indicator => indicator.title);
+        let current = this._currentRunningIndicator(dock);
+        if (current < 0) {
+            labels.push('Set in Dash to Dock');
+            current = labels.length - 1;
+        }
+
+        const subtitle = 'Shown only for apps with an open window, so tray-only apps such as Steam get none';
+        const row = new Adw.ComboRow({
+            title: 'Indicator',
+            subtitle,
+            model: Gtk.StringList.new(labels),
+            selected: current,
+        });
+        group.add(row);
+
+        row.connect('notify::selected', () => {
+            RUNNING_INDICATORS[row.selected]?.apply(dock);
+        });
+
+        // Dash to Dock's built-in theme forces its own dots and ignores all of
+        // the above, so say so instead of offering a choice that does nothing.
+        if (this._schemaHasKey(dock, 'apply-custom-theme')) {
+            const syncThemeOverride = () => {
+                const overridden = dock.get_boolean('apply-custom-theme');
+                row.set_sensitive(!overridden);
+                row.set_subtitle(overridden
+                    ? 'Dash to Dock’s built-in theme draws its own; turn it off there to choose'
+                    : subtitle);
+            };
+            syncThemeOverride();
+            dock.connect('changed::apply-custom-theme', syncThemeOverride);
+        }
     }
 
     // Which display the dock lives on. Dash to Dock stores a connector name,

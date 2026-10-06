@@ -71,6 +71,61 @@ for (const [index, title] of titles.entries()) {
         problems.push(`page ${index} has no title, so its tab would be blank`);
 }
 
+// With Dash to Dock installed, the Dock page is its settings rather than the
+// "not installed" notice, and the running indicator row is the one place these
+// pages write several of its keys at once. Pick every choice and read back what
+// was stored — the backend is in memory, so nothing outlives the run.
+if (GLib.getenv('PREFS_SMOKE_DOCK')) {
+    const findRow = (widget, title) => {
+        if (widget instanceof Adw.ComboRow && widget.title === title)
+            return widget;
+        for (let child = widget.get_first_child(); child; child = child.get_next_sibling()) {
+            const found = findRow(child, title);
+            if (found)
+                return found;
+        }
+        return null;
+    };
+
+    const dockPage = pages.find(page => page.title === 'Dock');
+    const dock = preferences._dashToDockSettings();
+    const key = dock?.settings_schema.get_key('running-indicator-style');
+    const row = dockPage && findRow(dockPage, 'Indicator');
+
+    if (!dock) {
+        problems.push('PREFS_SMOKE_DOCK is set but the Dash to Dock schema was not found');
+    } else if (!key.range_check(GLib.Variant.new_string('DOT'))) {
+        print('  running indicator: this Dash to Dock has no single-dot style; row correctly absent');
+        if (row)
+            problems.push('running indicator row shown although this Dash to Dock cannot store DOT');
+    } else if (!row) {
+        problems.push('Dash to Dock is installed but the Dock page has no running indicator row');
+    } else {
+        const expected = [
+            ['DOT', true, '#ffffff'],
+            ['DEFAULT', false, null],
+            ['DOT', true, 'rgba(255,255,255,0)'],
+        ];
+        // Start from the last choice so that selecting the first one is a change.
+        for (const index of [2, 0, 1, 2]) {
+            row.selected = index;
+            const [style, customize, color] = expected[index];
+            const got = [
+                dock.get_string('running-indicator-style'),
+                dock.get_boolean('custom-theme-customize-running-dots'),
+                dock.get_string('custom-theme-running-dots-color'),
+            ];
+            if (got[0] !== style || got[1] !== customize || (color !== null && got[2] !== color))
+                problems.push(`indicator choice ${index} stored ${JSON.stringify(got)}`);
+            else if (preferences._currentRunningIndicator(dock) !== index)
+                problems.push(`indicator choice ${index} reads back as ${preferences._currentRunningIndicator(dock)}`);
+        }
+        if (dock.get_int('custom-theme-running-dots-border-width') !== 0)
+            problems.push('the dot keeps a border, so None would still draw a ring');
+        print('  running indicator: every choice stored and read back');
+    }
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);

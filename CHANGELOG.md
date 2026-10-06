@@ -57,6 +57,16 @@ human reads.
 
 ### Added
 
+- **Running app indicator on the Dock page**: one dot under each running app
+  like macOS, GNOME's default, or none. Dash to Dock has no style that draws
+  nothing — hiding running apps only drops the unpinned ones from the dock — so
+  None is the single dot drawn transparent. Dash to Dock marks an app only once
+  it has a window, so apps living in the tray, like Steam, get no dot. The row
+  steps aside when Dash to Dock's built-in theme is on, since that draws its own,
+  and is absent on releases older than the single-dot style.
+- **The preferences smoke test builds the Dock page with Dash to Dock**, the
+  packaged one for each GNOME release, and checks every indicator choice is
+  stored and read back.
 - **System Menu text size**, 10–16px, default 13 (GNOME's own). The pear menu
   only; File, Edit and the rest of the bar have their own size.
 - **Menu bar title size and padding**, so File, Edit and the menus they open
