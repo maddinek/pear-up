@@ -71,21 +71,25 @@ for (const [index, title] of titles.entries()) {
         problems.push(`page ${index} has no title, so its tab would be blank`);
 }
 
+// The pages hand out no references to their rows, so look them up in the tree.
+const findWidget = (widget, matches) => {
+    if (matches(widget))
+        return widget;
+    for (let child = widget.get_first_child(); child; child = child.get_next_sibling()) {
+        const found = findWidget(child, matches);
+        if (found)
+            return found;
+    }
+    return null;
+};
+
 // With Dash to Dock installed, the Dock page is its settings rather than the
 // "not installed" notice, and the running indicator row is the one place these
 // pages write several of its keys at once. Pick every choice and read back what
 // was stored — the backend is in memory, so nothing outlives the run.
 if (GLib.getenv('PREFS_SMOKE_DOCK')) {
-    const findRow = (widget, title) => {
-        if (widget instanceof Adw.ComboRow && widget.title === title)
-            return widget;
-        for (let child = widget.get_first_child(); child; child = child.get_next_sibling()) {
-            const found = findRow(child, title);
-            if (found)
-                return found;
-        }
-        return null;
-    };
+    const findRow = (widget, title) =>
+        findWidget(widget, found => found instanceof Adw.ComboRow && found.title === title);
 
     const dockPage = pages.find(page => page.title === 'Dock');
     const dock = preferences._dashToDockSettings();
@@ -123,6 +127,71 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         if (dock.get_int('custom-theme-running-dots-border-width') !== 0)
             problems.push('the dot keeps a border, so None would still draw a ring');
         print('  running indicator: every choice stored and read back');
+    }
+}
+
+// Magnification is Pear Up's own setting, but it only means something over a
+// dock, so the Dock page offers it when Dash to Dock is there and not otherwise.
+// Driving the rows writes settings, which only the container run makes safe by
+// pointing GSETTINGS_BACKEND at memory — hence the same switch as above.
+{
+    const dockPage = pages.find(page => page.title === 'Dock');
+    const titled = (type, title) => widget => widget instanceof type && widget.title === title;
+    const enabledRow = dockPage && findWidget(dockPage, titled(Adw.SwitchRow, 'Magnification'));
+    const strengthRow = dockPage && findWidget(dockPage, titled(Adw.ActionRow, 'Strength'));
+    const scale = strengthRow && findWidget(strengthRow, widget => widget instanceof Gtk.Scale);
+
+    if (!preferences._dashToDockSettings()) {
+        if (enabledRow || strengthRow)
+            problems.push('the Dock page offers magnification although Dash to Dock is not installed');
+    } else if (GLib.getenv('PREFS_SMOKE_DOCK')) {
+        if (!enabledRow || !strengthRow || !scale) {
+            problems.push('Dash to Dock is installed but the Dock page lacks the magnification ' +
+                `switch (${!!enabledRow}), strength row (${!!strengthRow}) or its slider (${!!scale})`);
+        } else {
+            const settings = preferences.getSettings();
+            const problemsBefore = problems.length;
+            const sizeKey = settings.settings_schema.get_key('dock-magnification-size');
+            const [min, max] = sizeKey.get_range().deep_unpack()[1].deep_unpack();
+            const expect = (label, got, wanted) => {
+                if (got !== wanted)
+                    problems.push(`magnification: ${label} is ${got}, expected ${wanted}`);
+            };
+
+            // Off out of the box, and the slider has nothing to say until it is on.
+            expect('the switch at first', enabledRow.active, false);
+            expect('the slider sensitive at first', strengthRow.sensitive, false);
+            expect('the slider start', scale.get_value(), settings.get_int('dock-magnification-size'));
+            const adjustment = scale.get_adjustment();
+            expect('the slider lower bound', adjustment.lower, min);
+            expect('the slider upper bound', adjustment.upper, max);
+
+            enabledRow.active = true;
+            expect('dock-magnification after switching on', settings.get_boolean('dock-magnification'), true);
+            expect('the slider sensitive when on', strengthRow.sensitive, true);
+
+            for (const size of [max, min, 260]) {
+                scale.set_value(size);
+                expect(`dock-magnification-size after the slider moved to ${size}`,
+                    settings.get_int('dock-magnification-size'), size);
+            }
+            expect('the value label', scale.get_layout()?.get_text(), '260%');
+
+            // A change made outside the window moves the controls rather than
+            // being overwritten by them.
+            settings.set_int('dock-magnification-size', 130);
+            expect('the slider after an outside change', scale.get_value(), 130);
+            expect('dock-magnification-size after syncing the slider', settings.get_int('dock-magnification-size'), 130);
+
+            enabledRow.active = false;
+            expect('dock-magnification after switching off', settings.get_boolean('dock-magnification'), false);
+            expect('the slider sensitive when off', strengthRow.sensitive, false);
+            settings.set_boolean('dock-magnification', true);
+            expect('the switch after an outside change', enabledRow.active, true);
+            expect('the slider sensitive after an outside change', strengthRow.sensitive, true);
+            if (problems.length === problemsBefore)
+                print('  magnification: switch and slider write their keys and follow outside changes');
+        }
     }
 }
 

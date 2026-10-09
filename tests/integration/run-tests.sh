@@ -79,6 +79,16 @@ dbus-run-session -- bash -c '
     GSETTINGS_SCHEMA_DIR="$SCHEMAS" \
         gsettings set org.gnome.shell.extensions.pear-up search-opens overview
 
+    # Dock magnification is on from the start, so the magnifier is built during
+    # enable() with no dock to find — the order at a login where Dash to Dock
+    # comes up after Pear Up. The suite enables Dash to Dock itself later, once
+    # the panel checks are done. The applications only give that dock something
+    # to show; they launch nothing.
+    GSETTINGS_SCHEMA_DIR="$SCHEMAS" \
+        gsettings set org.gnome.shell.extensions.pear-up dock-magnification true
+    gsettings set org.gnome.shell favorite-apps \
+        "$(python3 /src/tests/integration/make-test-apps.py)"
+
     # The question here is whether the code works on this release, which is
     # separate from whether metadata.json claims it. Without this the shell
     # refuses to load anything not claiming its version, and the answer would

@@ -29,7 +29,10 @@
       "ActorAlign",
       "Orientation",
       "EVENT_STOP",
-      "get_default_backend"
+      "get_default_backend",
+      "Actor",
+      "Clone",
+      "Timeline"
     ],
     "Meta": [
       "WindowType",
@@ -41,12 +44,18 @@
       "Bin",
       "BoxLayout",
       "ThemeContext",
-      "IconTheme"
+      "IconTheme",
+      "Widget",
+      "Side",
+      "Settings"
     ],
     "Shell": [
       "AppSystem",
       "WindowTracker",
       "AppUsage"
+    ],
+    "GObject": [
+      "signal_lookup"
     ],
     "Gio": [
       "AppInfo",
@@ -67,7 +76,8 @@
       "get_real_name",
       "get_user_name",
       "get_user_data_dir",
-      "build_filenamev"
+      "build_filenamev",
+      "get_monotonic_time"
     ]
   },
 
@@ -108,7 +118,33 @@
     ],
     "Clutter.Actor": [
       "get_actions",
-      "add_action"
+      "add_action",
+      "get_transformed_position",
+      "get_transformed_size",
+      "get_allocation_box",
+      "get_pivot_point",
+      "set_pivot_point",
+      "set_scale",
+      "insert_child_above",
+      "set_child_above_sibling",
+      "get_next_sibling",
+      "get_paint_opacity",
+      "get_preferred_width",
+      "get_preferred_height",
+      "get_first_child"
+    ],
+    "Clutter.Timeline": [
+      "start",
+      "stop"
+    ],
+    "St.Widget": [
+      "get_theme_node"
+    ],
+    "St.ThemeNode": [
+      "get_foreground_color"
+    ],
+    "Shell.Global": [
+      "get_pointer"
     ],
     "Shell.AppUsage": [
       "get_most_used"
@@ -135,6 +171,27 @@
     "Meta.Window": [
       "minimized",
       "on_all_workspaces"
+    ],
+    "Clutter.Actor": [
+      "mapped",
+      "opacity",
+      "rotation_angle_z",
+      "translation_x",
+      "translation_y",
+      "scale_x",
+      "scale_y"
+    ],
+    "St.Widget": [
+      "hover",
+      "style_class"
+    ],
+    "St.Icon": [
+      "gicon",
+      "fallback_gicon",
+      "icon_size"
+    ],
+    "St.Settings": [
+      "enable_animations"
     ]
   },
 
@@ -182,7 +239,19 @@
     "uiGroup",
     "get_window_actors",
     "set_cursor",
-    "captured-event"
+    "captured-event",
+    "findIndexForActor",
+    "getWorkAreaForMonitor",
+    "monitors-changed",
+    "extension-state-changed",
+    "isLocked",
+    "item-drag-begin",
+    "item-drag-end",
+    "item-drag-cancelled",
+    "window-drag-begin",
+    "window-drag-end",
+    "window-drag-cancelled",
+    "xdndHandler"
   ],
 
   "absent": {

@@ -9,8 +9,10 @@
 // It knows nothing about Pear Up's internals: it reads the panel the same way
 // anything else would, so it stays useful even as Pear Up changes.
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
+import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
@@ -64,10 +66,39 @@ const IFACE = `
       <arg type="s" direction="in" name="label"/>
       <arg type="s" direction="out" name="closed"/>
     </method>
+    <method name="MovePointer">
+      <arg type="d" direction="in" name="x"/>
+      <arg type="d" direction="in" name="y"/>
+      <arg type="b" direction="out" name="moved"/>
+    </method>
+    <method name="GetDockState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="OpenDockMenu">
+      <arg type="s" direction="in" name="appId"/>
+      <arg type="b" direction="out" name="opened"/>
+    </method>
+    <method name="CloseDockMenu">
+      <arg type="s" direction="in" name="appId"/>
+      <arg type="b" direction="out" name="closed"/>
+    </method>
+    <method name="SignalItemDrag">
+      <arg type="b" direction="in" name="begin"/>
+      <arg type="b" direction="out" name="signalled"/>
+    </method>
+    <method name="SaveStage">
+      <arg type="s" direction="in" name="path"/>
+      <arg type="b" direction="out" name="saved"/>
+    </method>
   </interface>
 </node>`;
 
 const PATH = '/io/github/maddinek/PearUpTestHook';
+
+// The shell promisifies these itself in screenshot.js; repeated here so the hook
+// does not depend on that module having been loaded first.
+Gio._promisify(Shell.Screenshot.prototype, 'screenshot_stage_to_content');
+Gio._promisify(Shell.Screenshot, 'composite_to_stream');
 
 // Items built by hand carry their label in a child actor rather than in
 // `label`, so fall back to the first label found among the children.
@@ -101,6 +132,16 @@ const LOGO_ROLE = 'pearup-logo';
 const SEARCH_ROLE = 'pearup-search';
 const DECOY_ROLE = 'pear-up-test-decoy';
 
+// The overlay Pear Up draws magnified dock icons into. Found by name, the same
+// way Looking Glass would find it.
+const MAGNIFIER_NAME = 'pearup-dock-magnifier';
+
+function stageBox(actor) {
+    const [x, y] = actor.get_transformed_position();
+    const [width, height] = actor.get_transformed_size();
+    return [x, y, width, height];
+}
+
 export default class TestHookExtension extends Extension {
     enable() {
         this._export = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
@@ -109,6 +150,7 @@ export default class TestHookExtension extends Extension {
 
     disable() {
         this.ReleaseLeftEdge();
+        this._pointer = null;
         this._export?.unexport();
         this._export = null;
     }
@@ -378,6 +420,167 @@ export default class TestHookExtension extends Extension {
             return JSON.stringify(geometry);
         }
         return JSON.stringify(null);
+    }
+
+    // A pointer of the shell's own, moved through the same input path a mouse
+    // takes, so hover and crossing events reach the dock exactly as they would
+    // on a desktop. A headless shell has no pointer otherwise.
+    MovePointer(x, y) {
+        if (!this._pointer) {
+            const seat = Clutter.get_default_backend().get_default_seat();
+            this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+        }
+        this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), x, y);
+        return true;
+    }
+
+    // The right-click menu of a dock icon, opened the way Dash to Dock opens it
+    // for a long press. A synthetic right click would need a pointer button the
+    // shell's gestures accept, which is more than this needs to prove.
+    _dockAppIcon(appId) {
+        for (const dock of Main.layoutManager.uiGroup.get_children()) {
+            if (dock.name !== 'dashtodockContainer' || !dock.dash?._box)
+                continue;
+            const item = dock.dash._box.get_children()
+                .find(slot => slot.child?.app?.get_id?.() === appId);
+            if (item)
+                return item.child;
+        }
+        return null;
+    }
+
+    OpenDockMenu(appId) {
+        const icon = this._dockAppIcon(appId);
+        if (typeof icon?.popupMenu !== 'function')
+            return false;
+        icon.popupMenu();
+        return true;
+    }
+
+    CloseDockMenu(appId) {
+        const menu = this._dockAppIcon(appId)?._menu;
+        if (!menu?.isOpen)
+            return false;
+        menu.close();
+        return true;
+    }
+
+    // What the overview announces when an app icon starts or stops being
+    // dragged — a dock icon being reordered, say — without a drag to go with
+    // it, which would need a pointer button held down through the DND grab.
+    SignalItemDrag(begin) {
+        if (begin)
+            Main.overview.beginItemDrag(this);
+        else
+            Main.overview.endItemDrag(this);
+        return true;
+    }
+
+    // A picture of the stage, painted straight into an offscreen buffer. The
+    // screencast route in assert.py needs PipeWire to agree a format with an
+    // encoder, which some releases' media stacks never manage; painting the
+    // stage needs nothing but the compositor, so it works wherever the shell
+    // does. Answers once the file is written.
+    SaveStageAsync([path], invocation) {
+        this._saveStage(path).then(
+            saved => invocation.return_value(new GLib.Variant('(b)', [saved])),
+            e => {
+                console.warn('[pear-up-test-hook] stage capture failed:', e);
+                invocation.return_value(new GLib.Variant('(b)', [false]));
+            });
+    }
+
+    async _saveStage(path) {
+        const shooter = new Shell.Screenshot();
+        const [content, scale] = await shooter.screenshot_stage_to_content();
+        const stream = Gio.File.new_for_path(path)
+            .replace(null, false, Gio.FileCreateFlags.NONE, null);
+        await Shell.Screenshot.composite_to_stream(content.get_texture(),
+            0, 0, -1, -1, scale, null, 0, 0, 1, stream);
+        stream.close(null);
+        return true;
+    }
+
+    // Dash to Dock's docks and what is drawn over them, in stage coordinates.
+    // Reads Dash to Dock's actor tree the way Pear Up's magnifier does — its
+    // dash items, each one's BaseIcon and the St.Icon inside it — but nothing
+    // of Pear Up's beyond the overlay's name, so the suite compares what is on
+    // screen rather than what the magnifier believes.
+    GetDockState() {
+        const children = Main.layoutManager.uiGroup.get_children();
+
+        const docks = children
+            .filter(actor => actor.name === 'dashtodockContainer' && actor.dash?._box)
+            .map(dock => {
+                const { dash } = dock;
+                const slots = [...dash._box.get_children(), dash._showAppsIcon]
+                    .filter(slot => slot?.visible && slot.mapped);
+                const items = slots.map(slot => {
+                    const base = slot.child?.icon ?? slot.icon;
+                    const icon = base?.icon instanceof St.Icon ? base.icon : null;
+                    const siblings = icon
+                        ? base.get_parent().get_children().filter(child => child !== base)
+                        : [];
+                    return {
+                        kind: icon ? 'icon' : 'other',
+                        id: slot === dash._showAppsIcon
+                            ? 'show-apps'
+                            : slot.child?.app?.get_id?.() ?? null,
+                        slot: stageBox(slot),
+                        icon: icon ? stageBox(icon) : null,
+                        opacity: icon ? base.opacity : slot.opacity,
+                        siblingOpacities: siblings.map(child => child.opacity),
+                        label: slot.label ? {
+                            visible: slot.label.visible,
+                            translation: [slot.label.translation_x, slot.label.translation_y],
+                        } : null,
+                    };
+                });
+                const next = children[children.indexOf(dock) + 1];
+                return {
+                    position: dock._position,
+                    box: stageBox(dock),
+                    background: dash._background ? stageBox(dash._background) : null,
+                    backgroundOpacity: dash._background?.opacity ?? null,
+                    hover: dock._box?.hover ?? null,
+                    nextSibling: next?.name ?? null,
+                    items,
+                };
+            });
+
+        const overlays = children
+            .filter(actor => actor.name === MAGNIFIER_NAME)
+            .map(overlay => ({
+                children: overlay.get_children().map(child => ({
+                    type: child instanceof St.Icon ? 'icon'
+                        : child instanceof Clutter.Clone ? 'clone' : 'other',
+                    box: stageBox(child),
+                    scale: [child.scale_x, child.scale_y],
+                    clip: child.has_clip ? child.get_clip() : null,
+                    opacity: child.opacity,
+                    visible: child.visible,
+                    iconSize: child instanceof St.Icon ? child.icon_size : null,
+                    // What the icon actually loaded, for when a copy is there
+                    // but draws nothing.
+                    gicon: child.gicon?.to_string?.() ?? null,
+                    fallback: child.fallback_gicon?.to_string?.() ?? null,
+                    style: child.get_style?.() ?? null,
+                    texture: child instanceof St.Icon && child.get_first_child() ? {
+                        opacity: child.get_first_child().opacity,
+                        size: [child.get_first_child().width, child.get_first_child().height],
+                        content: !!child.get_first_child().content,
+                    } : null,
+                })),
+            }));
+
+        const [x, y] = global.get_pointer();
+        return JSON.stringify({
+            pointer: [x, y],
+            docks,
+            overlays,
+            // For a failure message: what is there when no dock is found.
+            uiGroup: children.map(actor => actor.name || actor.constructor.name),
+        });
     }
 
     // Opens a submenu by label and reports what appeared in it. Submenus whose

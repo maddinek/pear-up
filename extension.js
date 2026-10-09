@@ -4,6 +4,7 @@ import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { MenuManager } from './menuManager.js';
 import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
+import { DockMagnifier } from './dockMagnifier.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
 // separate toggle so nothing about the stock top bar is changed silently.
@@ -50,6 +51,13 @@ const MENU_CONTENT_KEYS = [
     'custom-menus',
 ];
 
+// Both are read live: the magnifier is built or torn down by the first, and
+// picks up a new size from the second on its next frame.
+const DOCK_MAGNIFICATION_KEYS = [
+    'dock-magnification',
+    'dock-magnification-size',
+];
+
 // GNOME reserves room in the right cluster for indicators that are inactive
 // most of the time. macOS has no equivalent, and they leave a visible gap.
 const SPACER_ROLES = [
@@ -68,6 +76,7 @@ export default class GlobalMenuExtension extends Extension {
         this._settingsChangedId = null;
         this._logoButton = null;
         this._searchButton = null;
+        this._dockMagnifier = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -142,6 +151,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._syncPanelTweaks();
             else if (MENU_CONTENT_KEYS.includes(key))
                 this._queueMenuSync();
+            else if (DOCK_MAGNIFICATION_KEYS.includes(key))
+                this._guard('updating dock magnification', () => this._syncDockMagnifier());
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -171,6 +182,10 @@ export default class GlobalMenuExtension extends Extension {
         this._syncSearchButton();
         this._syncOverviewButton();
         this._syncMenuVisibility();
+
+        // Dash to Dock is someone else's code, reached through its private
+        // members; a failure there must not take the menu bar down with it.
+        this._guard('setting up dock magnification', () => this._syncDockMagnifier());
     }
 
     // Apply or undo each panel tweak to match its setting. Safe to call again
@@ -702,6 +717,30 @@ export default class GlobalMenuExtension extends Extension {
         }
     }
 
+    // The magnifier copes with Dash to Dock coming and going by itself, so this
+    // only has to follow the switch, and hand on the size.
+    _syncDockMagnifier() {
+        if (!this._settings)
+            return;
+
+        if (!this._settings.get_boolean('dock-magnification')) {
+            this._dropDockMagnifier();
+            return;
+        }
+
+        const size = this._settings.get_int('dock-magnification-size');
+        if (this._dockMagnifier)
+            this._dockMagnifier.setSize(size);
+        else
+            this._dockMagnifier = new DockMagnifier(size);
+    }
+
+    _dropDockMagnifier() {
+        const magnifier = this._dockMagnifier;
+        this._dockMagnifier = null;
+        magnifier?.destroy();
+    }
+
     // Driven by what is actually on screen rather than by a remembered flag,
     // because a panel rebuild shows every indicator again and a flag-based
     // check would decide there was nothing to do.
@@ -894,6 +933,10 @@ export default class GlobalMenuExtension extends Extension {
             this._searchButton.destroy();
             this._searchButton = null;
         }
+
+        // Gives Dash to Dock's icons their opacity back and removes the overlay
+        // drawn above them, whether or not the pointer is on the dock.
+        this._guard('removing dock magnification', () => this._dropDockMagnifier());
 
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one

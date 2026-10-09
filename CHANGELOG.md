@@ -57,6 +57,19 @@ human reads.
 
 ### Added
 
+- **Dock magnification**: point at the dock and the icon under the pointer
+  grows while its neighbours grow less and move apart, as on the macOS Dock.
+  Off by default. The Dock page gets a Magnification group with a switch and a
+  Strength slider from Weak to Strong, 110–300% of normal size, default 175%;
+  the slider greys out while the switch is off. Pear Up draws this over Dash to
+  Dock and changes none of Dash to Dock's settings, and clicks and
+  drag-and-drop still reach Dash to Dock's own icons. It magnifies Dash to
+  Dock's icons, so the group appears only when Dash to Dock is installed.
+- **The preferences smoke test drives the magnification rows** against the
+  packaged Dash to Dock on each GNOME release: the switch and the slider write
+  their keys, the slider's bounds match the schema, the slider's greying
+  follows the switch, and a change made outside the window moves the controls.
+  Without Dash to Dock it checks the rows are absent.
 - **Running app indicator on the Dock page**: one dot under each running app
   like macOS, GNOME's default, or none. Dash to Dock has no style that draws
   nothing — hiding running apps only drops the unpinned ones from the dock — so

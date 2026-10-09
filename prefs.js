@@ -187,7 +187,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         window.add(this._buildGeneralPage(settings, window));
         window.add(this._buildMenusPage(settings));
         window.add(this._buildCustomMenuPage(settings));
-        window.add(this._buildDockPage());
+        window.add(this._buildDockPage(settings));
         window.add(this._buildKeyboardPage());
         window.add(this._buildAboutPage());
 
@@ -294,7 +294,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             : 'sudo dnf install gnome-shell-extension-dash-to-dock';
     }
 
-    _buildDockPage() {
+    _buildDockPage(settings) {
         const page = new Adw.PreferencesPage({ title: 'Dock', icon_name: 'view-grid-symbolic' });
         const dock = this._dashToDockSettings();
 
@@ -360,6 +360,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             syncLengthSensitivity();
             spanRow?.connect('notify::active', syncLengthSensitivity);
         }
+
+        this._buildDockMagnificationGroup(page, settings);
 
         if (has('dock-fixed') && has('autohide') && has('intellihide')) {
             const visibilityGroup = new Adw.PreferencesGroup({ title: 'Visibility' });
@@ -664,6 +666,46 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         return dock.get_boolean('intellihide') ? 1 : 2;
     }
 
+    // Magnification is Pear Up's own setting, unlike everything else on this
+    // page: the extension draws it over the dock and never writes to Dash to
+    // Dock, so there is no foreign key to keep in step or to misreport. It is
+    // still offered only here, because without Dash to Dock there are no icons
+    // to magnify.
+    _buildDockMagnificationGroup(page, settings) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Magnification',
+            description: 'Pear Up draws this on top of Dash to Dock; Dash to Dock’s own settings are not changed',
+        });
+        page.add(group);
+
+        const enabledRow = new Adw.SwitchRow({
+            title: 'Magnification',
+            subtitle: 'Magnify icons under the pointer',
+        });
+        group.add(enabledRow);
+        settings.bind('dock-magnification', enabledRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        // The bounds are the schema's. The ends are named rather than numbered
+        // because 110 and 300 mean nothing to anyone choosing how strong the
+        // effect should feel; the percentage above the thumb says what it is.
+        const strengthRow = this._addScaleRow(group, 'Strength', {
+            lower: 110, upper: 300, pageStep: 10,
+            marks: [[110, 'Weak'], [300, 'Strong']], unit: '%',
+            value: settings.get_int('dock-magnification-size'),
+            onChange: value => settings.set_int('dock-magnification-size', value),
+        });
+        strengthRow.row.set_subtitle('How large the icon under the pointer grows');
+        settings.connect('changed::dock-magnification-size',
+            () => strengthRow.setValue(settings.get_int('dock-magnification-size')));
+
+        // Follow the key rather than the switch, so a change made elsewhere
+        // (dconf-editor, gsettings) greys the slider the same way.
+        const syncStrengthSensitivity = () =>
+            strengthRow.row.set_sensitive(settings.get_boolean('dock-magnification'));
+        syncStrengthSensitivity();
+        settings.connect('changed::dock-magnification', syncStrengthSensitivity);
+    }
+
     // Which of RUNNING_INDICATORS the stored keys amount to, or -1 for a style
     // chosen in Dash to Dock's own settings that none of them describes.
     _currentRunningIndicator(dock) {
@@ -828,18 +870,24 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     }
 
     // A labelled slider in a row, matching the System Menu icon size control.
-    _addScaleRow(group, title, { lower, upper, marks, value, unit = '', onChange }) {
+    // A mark is a number, or [number, 'Label'] to name that point on the track.
+    // A wide range wants a bigger pageStep, or PageUp and PageDown crawl.
+    _addScaleRow(group, title, { lower, upper, marks, value, unit = '', pageStep = 4, onChange }) {
         const scale = new Gtk.Scale({
             orientation: Gtk.Orientation.HORIZONTAL,
-            adjustment: new Gtk.Adjustment({ lower, upper, step_increment: 1, page_increment: 4 }),
+            adjustment: new Gtk.Adjustment({ lower, upper, step_increment: 1, page_increment: pageStep }),
             digits: 0,
             draw_value: true,
             hexpand: true,
             valign: Gtk.Align.CENTER,
         });
         scale.set_size_request(220, -1);
-        for (const mark of marks)
-            scale.add_mark(mark, Gtk.PositionType.BOTTOM, null);
+        for (const mark of marks) {
+            const [at, label] = Array.isArray(mark) ? mark : [mark, null];
+            // Mark labels are Pango markup, so a label is escaped, not trusted.
+            scale.add_mark(at, Gtk.PositionType.BOTTOM,
+                label === null ? null : GLib.markup_escape_text(label, -1));
+        }
         if (unit)
             scale.set_format_value_func((_scale, displayed) => `${Math.round(displayed)}${unit}`);
         scale.set_value(value);

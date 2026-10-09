@@ -21,6 +21,8 @@ import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib
 
+from dock_magnification import DockChecks
+
 UUID = sys.argv[1]
 ARTIFACTS = sys.argv[2] if len(sys.argv) > 2 else "/artifacts"
 
@@ -503,7 +505,24 @@ if state and os.environ.get("PEAR_UP_SCREENSHOT", "1") != "0":
     print(f"  note: screenshot {size // 1024} KiB" if size else
           "  note: no screenshot on this release")
 
+# ------------------------------------------------------- dock magnification
+# Last, because it switches Dash to Dock on: everything above runs against the
+# stock shell, as it always has.
+print()
+print("  dock magnification:")
+dock = DockChecks(call, check, UUID, ARTIFACTS)
+try:
+    dock.run()
+except GLib.Error as exc:
+    check("dock magnification could be exercised", False, exc.message.splitlines()[0])
+
 # ------------------------------------------------------------ clean teardown
+# Disabled with the dock still magnified, so there is something to undo.
+try:
+    dock.hover_before_disable()
+except GLib.Error as exc:
+    check("the dock could be hovered before disabling", False, exc.message.splitlines()[0])
+
 call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
      "DisableExtension", (UUID,), "(s)")
 GLib.usleep(2 * 1000 * 1000)
@@ -528,6 +547,9 @@ try:
           f"visible={after_state['activitiesVisible']}")
 except GLib.Error as exc:
     check("panel state readable after disable", False, exc.message.splitlines()[0])
+
+if dock.ready:
+    dock.check_left_nothing("Pear Up is disabled")
 
 # ------------------------------------------------------------------ summary
 failures = [label for label, ok, _ in results if not ok]

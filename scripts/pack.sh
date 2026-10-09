@@ -34,6 +34,7 @@ EXTRA_SOURCES=(
     menuTemplates.js
     systemMenu.js
     searchButton.js
+    dockMagnifier.js
     recentItems.js
     forceQuit.js
     util.js

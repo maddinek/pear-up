@@ -55,7 +55,10 @@ search when that thing is unavailable, so the button is never a dead end.
 configured from the same window: which screen edge it sits on, icon size, how much of the edge it may
 use, whether it is always visible, hides when a window is in the way, or only appears when you point
 at the edge, how running apps are marked — one dot like macOS, GNOME's own, or none — and which
-display it belongs to.
+display it belongs to. Magnification works like the macOS Dock: the icon under the pointer grows
+while its neighbours grow less and move apart. It is off until you switch it on, and a slider then
+runs from weak to strong. Pear Up draws it on top of Dash to Dock without changing any of Dash to
+Dock's settings, and clicks and drag-and-drop still go to Dash to Dock's own icons.
 
 | Right edge, always visible | Bottom edge, larger icons |
 | --- | --- |
@@ -159,6 +162,11 @@ extension the way a login would, and checks what it actually did to the panel: t
 System Menu appeared with its entries, the power icon is hidden, the bar stays bare while nothing is
 in front, the File, Edit, View, Go, Window and Help menus appear once a window is focused, File and
 Go stay generic unless a file manager is in front, and disabling it leaves nothing behind.
+
+With Dash to Dock installed in the same container, a virtual pointer then hovers the dock, on the right
+edge and along the bottom: the icon under it has to reach exactly the chosen size, its neighbours less
+and pushed outward, and leaving the dock, switching magnification off mid-hover or disabling Pear Up
+has to give every icon its opacity back and leave no overlay behind.
 
 The menus are asserted rather than clicked. Activating them through the structure runs the same code
 a click would, without depending on pixel coordinates or animation timing, which is where interface
