@@ -144,6 +144,18 @@ const DECOY_ROLE = 'pear-up-test-decoy';
 // way Looking Glass would find it.
 const MAGNIFIER_NAME = 'pearup-dock-magnifier';
 
+// The weight the theme actually resolved for an actor's text, as a Pango
+// weight (400 regular, 700 bold) — what is drawn, rather than what a
+// stylesheet hoped for.
+function fontWeight(actor) {
+    try {
+        return actor?.get_theme_node()?.get_font()?.get_weight() ?? null;
+    } catch {
+        // Unmapped actors have no theme node; treat as unreadable.
+        return null;
+    }
+}
+
 function stageBox(actor) {
     const [x, y] = actor.get_transformed_position();
     const [width, height] = actor.get_transformed_size();
@@ -191,6 +203,8 @@ export default class TestHookExtension extends Extension {
         const activities = Main.panel.statusArea['activities'];
         const activitiesActor = activities?.container ?? activities;
         const search = Main.panel.statusArea[SEARCH_ROLE];
+        const dateMenu = Main.panel.statusArea.dateMenu;
+        const clockLabel = dateMenu?.label_actor ?? dateMenu;
 
         // What the shell thinks is in front, which is what decides whether Pear
         // Up builds any application menus at all.
@@ -214,6 +228,10 @@ export default class TestHookExtension extends Extension {
             clockInCentre: (layout.center ?? []).includes('dateMenu'),
             powerIconFound: !!powerIcon,
             powerIconVisible: powerIcon ? powerIcon.visible : null,
+            // The clock's own label, and the Quick Settings button whose weight
+            // the battery percentage inherits.
+            clockWeight: fontWeight(clockLabel),
+            statusWeight: fontWeight(Main.panel.statusArea.quickSettings),
             activitiesVisible: activitiesActor ? activitiesActor.visible : null,
             hasSearchButton: !!search,
             searchButtonVisible: search ? search.visible : null,
@@ -367,6 +385,8 @@ export default class TestHookExtension extends Extension {
                     natHPadding: node.get_length('-natural-hpadding'),
                     minHPadding: node.get_length('-minimum-hpadding'),
                     labelPangoSize,
+                    labelWeight: fontWeight(button.label),
+                    appMenu: button.has_style_class_name('pearup-app-menu'),
                 };
             })
             .filter(Boolean);

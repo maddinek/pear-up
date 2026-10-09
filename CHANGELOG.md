@@ -15,6 +15,15 @@ human reads.
   or by closing every window. An earlier Cmd+Q binding moves over by itself
   at the next login. File → Quit goes the same way.
 
+- **The menu bar is set in regular type, with the app name bold.** The shell
+  theme makes every panel button bold, and the regular weight Pear Up gave the
+  panel never reached them: a weight set on the button itself beats one it
+  would inherit. So File, Edit and the rest drew as heavy as the app name, and
+  the clock, the battery percentage and other extensions' readouts were bold
+  too. All of them are regular now, as on macOS, and the app name is bold —
+  the one heavy word in the bar. The integration suite reads the weight the
+  theme resolved for the titles, the clock and the status area.
+
 - **Clicking File no longer takes down the desktop.** Pinning the dropdown
   wrote `translation-x: nan` when the actor had no stage position yet, and
   did it from `notify::allocation` — which is while Clutter is walking the

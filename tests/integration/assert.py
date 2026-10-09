@@ -99,6 +99,14 @@ if state:
     else:
         print("  note: this session has no power indicator to hide")
 
+    # The shell theme makes every panel button bold; the macOS bar is regular
+    # weight throughout but for the app name (checked with the titles below).
+    # Pango weights: 400 regular, 700 bold.
+    check("the clock is regular weight", state.get("clockWeight") == 400,
+          f"weight={state.get('clockWeight')}")
+    check("the status area is regular weight", state.get("statusWeight") == 400,
+          f"weight={state.get('statusWeight')}")
+
 # ------------------------------------------------- the bar with nothing in front
 # An empty desktop should carry the System Menu and nothing else. This is the
 # regression that had "Nautilus File Edit View" sitting there after everything
@@ -357,6 +365,18 @@ if menus:
             return json.loads(raw) if raw else []
 
         at_rest = measure_bar_titles()
+
+        # File, Edit and the rest regular; the app name bold, as on macOS. The
+        # theme's own bold on .panel-button used to win over the panel's weight.
+        title_weights = {m["role"]: m.get("labelWeight") for m in at_rest if not m.get("appMenu")}
+        app_weights = [m.get("labelWeight") for m in at_rest if m.get("appMenu")]
+        check("the menu titles are regular weight",
+              title_weights and all(weight == 400 for weight in title_weights.values()),
+              f"weights={title_weights}")
+        check("the app name is bold, heavier than the menu titles",
+              len(app_weights) == 1 and (app_weights[0] or 0) >= 700,
+              f"app={app_weights} titles={sorted(set(title_weights.values()))}")
+
         pear_up_setting("menu-bar-padding", "18")
         pear_up_setting("menu-bar-font-size", "16")
         GLib.usleep(800 * 1000)

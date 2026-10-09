@@ -37,7 +37,8 @@ effect on those statistics.
 ![The pear system menu open](assets/screenshots/system-menu.png)
 
 **A macOS-shaped top bar.** The clock moves to the far right with the status icons to its left, the
-power glyph is hidden, GNOME's usually-inactive indicators stop reserving space, and a
+menu titles and the clock are set in regular type with only the app name bold, the power glyph is
+hidden, GNOME's usually-inactive indicators stop reserving space, and a
 [Search Light](https://extensions.gnome.org/extension/5489/search-light/) icon can be grouped with
 Quick Settings as a Spotlight stand-in. The gaps between the search icon, the control centre icons
 and the clock are adjustable, as is the padding each item reserves around itself — the first spreads
@@ -160,9 +161,10 @@ desktop you are using.
 
 **Does it still behave?** Boots a real GNOME Shell headless against a virtual monitor, loads the
 extension the way a login would, and checks what it actually did to the panel: the clock moved, the
-System Menu appeared with its entries, the power icon is hidden, the bar stays bare while nothing is
-in front, the File, Edit, View, Go, Window and Help menus appear once a window is focused, File and
-Go stay generic unless a file manager is in front, and disabling it leaves nothing behind.
+System Menu appeared with its entries, the power icon is hidden, the titles and clock are regular
+weight with the app name bold, the bar stays bare while nothing is in front, the File, Edit, View,
+Go, Window and Help menus appear once a window is focused, File and Go stay generic unless a file
+manager is in front, and disabling it leaves nothing behind.
 
 With Dash to Dock installed in the same container, a virtual pointer then hovers the dock, on the right
 edge and along the bottom: the icon under it has to reach exactly the chosen size, its neighbours less
