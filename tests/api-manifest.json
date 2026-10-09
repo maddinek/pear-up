@@ -141,7 +141,9 @@
       "stop"
     ],
     "St.Widget": [
-      "get_theme_node"
+      "get_theme_node",
+      "add_style_class_name",
+      "remove_style_class_name"
     ],
     "St.ThemeNode": [
       "get_foreground_color"

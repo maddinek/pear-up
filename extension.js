@@ -66,6 +66,10 @@ const DOCK_MAGNIFICATION_KEYS = [
 // With one, the same icon is the battery, and that is not for hiding.
 const POWER_GLYPH = 'system-shutdown-symbolic';
 
+// Claimed on the UI group to switch on the stylesheet rule that drops Dash to
+// Dock's backdrop behind the focused app (see stylesheet.css).
+const DOCK_PLAIN_FOCUS_CLASS = 'pearup-dock-plain-focus';
+
 // GNOME reserves room in the right cluster for indicators that are inactive
 // most of the time. macOS has no equivalent, and they leave a visible gap.
 const SPACER_ROLES = [
@@ -163,6 +167,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._queueMenuSync();
             else if (DOCK_MAGNIFICATION_KEYS.includes(key))
                 this._guard('updating dock magnification', () => this._syncDockMagnifier());
+            else if (key === 'dock-focus-highlight')
+                this._guard('updating the dock highlight', () => this._syncDockFocusHighlight());
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -196,6 +202,7 @@ export default class GlobalMenuExtension extends Extension {
         // Dash to Dock is someone else's code, reached through its private
         // members; a failure there must not take the menu bar down with it.
         this._guard('setting up dock magnification', () => this._syncDockMagnifier());
+        this._guard('styling the dock highlight', () => this._syncDockFocusHighlight());
 
         // GNOME can close a window from the keyboard but has nothing that
         // quits an app, so Cmd+Q is a binding of our own. The shell rebinds it
@@ -797,6 +804,24 @@ export default class GlobalMenuExtension extends Extension {
         magnifier?.destroy();
     }
 
+    // Dash to Dock's own stylesheet puts a grey backdrop behind the focused
+    // app's icon; the macOS Dock marks it with the running dot alone. The rule
+    // that removes it is in stylesheet.css, keyed off a class on the UI group:
+    // that is the docks' parent, and it outlives every dock Dash to Dock builds
+    // and throws away, so no dock actor is touched and nothing has to follow
+    // them. A style class is not a change to the actor tree, so this needs no
+    // idle of its own — it runs where the panel's class is claimed.
+    _syncDockFocusHighlight() {
+        if (!this._settings)
+            return;
+
+        const uiGroup = Main.layoutManager.uiGroup;
+        if (this._settings.get_boolean('dock-focus-highlight'))
+            uiGroup.remove_style_class_name(DOCK_PLAIN_FOCUS_CLASS);
+        else
+            uiGroup.add_style_class_name(DOCK_PLAIN_FOCUS_CLASS);
+    }
+
     // Driven by what is actually on screen rather than by a remembered flag,
     // because a panel rebuild shows every indicator again and a flag-based
     // check would decide there was nothing to do.
@@ -1012,6 +1037,8 @@ export default class GlobalMenuExtension extends Extension {
         this._guard('showing the power icon', () => this._showPowerButton());
         this._guard('dropping the panel style', () =>
             Main.panel.remove_style_class_name('pearup-panel'));
+        this._guard('restoring the dock highlight', () =>
+            Main.layoutManager.uiGroup.remove_style_class_name(DOCK_PLAIN_FOCUS_CLASS));
 
         this._settings = null;
     }

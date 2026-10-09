@@ -83,6 +83,8 @@ if state:
     check("system menu button is on the panel", state["hasSystemMenu"],
           f"roles={state['panelRoles']}")
     check("panel carries the extension's style class", state["panelStyled"])
+    check("UI group carries the dock highlight class, off by default as on macOS",
+          state.get("dockPlainFocus") is True)
     check("clock moved out of the centre and to the right",
           state["clockInRight"] and not state["clockInCentre"],
           f"right={state['clockInRight']} centre={state['clockInCentre']}")
@@ -644,6 +646,8 @@ try:
     check("System Menu removed", not after_state["hasSystemMenu"])
     check("search button removed", not after_state.get("hasSearchButton"))
     check("panel style class removed", not after_state["panelStyled"])
+    check("dock highlight class removed from the UI group",
+          not after_state.get("dockPlainFocus"))
     check("clock returned to the centre", after_state["clockInCentre"],
           f"right={after_state['clockInRight']}")
     check("Activities button shown again", after_state["activitiesVisible"] is True,

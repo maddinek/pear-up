@@ -195,6 +195,43 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
     }
 }
 
+// The focused-app backdrop is Pear Up's own setting too, offered beside the
+// running indicator whenever there is a Dash to Dock to draw it — including one
+// too old for the single dot, which leaves that group with this row alone.
+{
+    const dockPage = pages.find(page => page.title === 'Dock');
+    const row = dockPage && findWidget(dockPage, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === 'Highlight the Focused App');
+
+    if (!preferences._dashToDockSettings()) {
+        if (row)
+            problems.push('the Dock page offers the focus highlight although Dash to Dock is not installed');
+    } else if (GLib.getenv('PREFS_SMOKE_DOCK')) {
+        if (!row) {
+            problems.push('Dash to Dock is installed but the Dock page has no focus highlight switch');
+        } else {
+            const settings = preferences.getSettings();
+            const problemsBefore = problems.length;
+            const expect = (label, got, wanted) => {
+                if (got !== wanted)
+                    problems.push(`focus highlight: ${label} is ${got}, expected ${wanted}`);
+            };
+
+            // Off out of the box: macOS draws no backdrop.
+            expect('the switch at first', row.active, false);
+            row.active = true;
+            expect('dock-focus-highlight after switching on', settings.get_boolean('dock-focus-highlight'), true);
+            row.active = false;
+            expect('dock-focus-highlight after switching off', settings.get_boolean('dock-focus-highlight'), false);
+            settings.set_boolean('dock-focus-highlight', true);
+            expect('the switch after an outside change', row.active, true);
+            settings.reset('dock-focus-highlight');
+            if (problems.length === problemsBefore)
+                print('  focus highlight: switch writes its key and follows outside changes');
+        }
+    }
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);

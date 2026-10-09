@@ -57,10 +57,12 @@ search when that thing is unavailable, so the button is never a dead end.
 configured from the same window: which screen edge it sits on, icon size, how much of the edge it may
 use, whether it is always visible, hides when a window is in the way, or only appears when you point
 at the edge, how running apps are marked — one dot like macOS, GNOME's own, or none — and which
-display it belongs to. Magnification works like the macOS Dock: the icon under the pointer grows
-while its neighbours grow less and move apart. It is off until you switch it on, and a slider then
-runs from weak to strong. Pear Up draws it on top of Dash to Dock without changing any of Dash to
-Dock's settings, and clicks and drag-and-drop still go to Dash to Dock's own icons.
+display it belongs to. The grey backdrop Dash to Dock puts behind the app in front is removed, since
+the macOS Dock marks it with its dot alone; a switch brings it back. Magnification works like the
+macOS Dock: the icon under the pointer grows while its neighbours grow less and move apart. It is off
+until you switch it on, and a slider then runs from weak to strong. Pear Up draws it on top of Dash
+to Dock without changing any of Dash to Dock's settings, and clicks and drag-and-drop still go to
+Dash to Dock's own icons.
 
 | Right edge, always visible | Bottom edge, larger icons |
 | --- | --- |

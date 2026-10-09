@@ -393,7 +393,11 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             });
         }
 
-        this._buildDockIndicatorGroup(page, dock);
+        const runningGroup = new Adw.PreferencesGroup({ title: 'Running Apps' });
+        page.add(runningGroup);
+        this._buildDockIndicatorRow(runningGroup, dock);
+        this._buildDockFocusRow(runningGroup, settings);
+
         this._buildDockDisplayGroup(page, dock);
 
         return page;
@@ -725,16 +729,13 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         return dock.get_string('custom-theme-running-dots-color') === RUNNING_DOT_INVISIBLE ? 2 : 0;
     }
 
-    _buildDockIndicatorGroup(page, dock) {
+    _buildDockIndicatorRow(group, dock) {
         // The single dot is a newer style than the keys themselves, and writing
         // a value an enum does not list is as fatal as writing a missing key.
         if (!RUNNING_DOT_KEYS.every(key => this._schemaHasKey(dock, key)) ||
             !dock.settings_schema.get_key('running-indicator-style')
                 .range_check(GLib.Variant.new_string('DOT')))
             return;
-
-        const group = new Adw.PreferencesGroup({ title: 'Running Apps' });
-        page.add(group);
 
         // A style set elsewhere gets an entry of its own rather than reading as
         // one of ours, which would misreport what is actually saved.
@@ -771,6 +772,18 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             syncThemeOverride();
             dock.connect('changed::apply-custom-theme', syncThemeOverride);
         }
+    }
+
+    // Pear Up's own setting, like magnification: the extension removes Dash to
+    // Dock's backdrop with its stylesheet and writes nothing of Dash to Dock's,
+    // so it is offered on every Dash to Dock, even one without the single dot.
+    _buildDockFocusRow(group, settings) {
+        const row = new Adw.SwitchRow({
+            title: 'Highlight the Focused App',
+            subtitle: 'The grey backdrop Dash to Dock draws behind the app in front; macOS has only the dot',
+        });
+        group.add(row);
+        settings.bind('dock-focus-highlight', row, 'active', Gio.SettingsBindFlags.DEFAULT);
     }
 
     // Which display the dock lives on. Dash to Dock stores a connector name,

@@ -196,6 +196,13 @@
       <summary>How large the icon under the pointer grows, in percent of its normal size</summary>
       <description>110 is a hint of movement, 300 triples the icon. Neighbours grow less the further they are from the pointer.</description>
     </key>
+    <!-- Off by default, as on macOS, where the dock marks the app in front with
+         its running dot and nothing else. -->
+    <key name="dock-focus-highlight" type="b">
+      <default>false</default>
+      <summary>Keep Dash to Dock's backdrop behind the focused app</summary>
+      <description>Dash to Dock draws a grey backdrop behind the icon of the app in front. When this is off, Pear Up's stylesheet removes it; none of Dash to Dock's own settings change.</description>
+    </key>
 
     <key name="quit-app" type="as">
       <default>[]</default>

@@ -81,6 +81,12 @@ human reads.
 
 ### Added
 
+- **No backdrop behind the focused app in the dock.** Dash to Dock puts a grey
+  backdrop behind the icon of the app in front; the macOS Dock marks it with
+  its dot alone. Pear Up removes it with its own stylesheet and changes none of
+  Dash to Dock's settings; Highlight the Focused App, under Running Apps on the
+  Dock page, brings it back. The integration suite marks a dock icon focused
+  and reads the backdrop the theme resolves with the switch off and on.
 - **Dock magnification**: point at the dock and the icon under the pointer
   grows while its neighbours grow less and move apart, as on the macOS Dock.
   Off by default. The Dock page gets a Magnification group with a switch and a

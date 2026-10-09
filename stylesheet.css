@@ -108,3 +108,14 @@
   spacing: 0;
   padding-right: 6px;
 }
+
+/* Dash to Dock puts a grey backdrop behind the focused app's icon; the macOS
+   Dock marks it with the running dot alone. Applied while dock-focus-highlight
+   is off, through a class extension.js claims on the UI group, the docks'
+   parent. Extension stylesheets rank against each other by specificity, and
+   Dash to Dock's own rules for this carry two IDs and up to seven classes, so
+   the UI group's ID is what puts this one ahead of all of them. Hovering the
+   focused icon shows no backdrop either, as on macOS. */
+#uiGroup.pearup-dock-plain-focus #dashtodockContainer #dash .focused .overview-icon {
+  background-color: transparent;
+}

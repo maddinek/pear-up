@@ -324,6 +324,46 @@ class DockChecks:
                  if item["label"] and item["label"]["translation"] != [0, 0]]
         check(f"no hover label left pushed aside after {what}", not moved, f"{moved}")
 
+    def _check_focus_highlight(self):
+        """Dash to Dock's grey backdrop behind the focused app: gone by default,
+        as on macOS, and back when the setting asks for it.
+
+        The container's applications launch nothing, so no dock icon is ever
+        the focused app's; the hook marks one through Dash to Dock's own
+        `focused` property, which is what adds the style class its backdrop
+        hangs off. What is read back is the backdrop the theme resolved."""
+        check = self._check
+        dock = self._dock(self.state())
+        apps = [item["id"] for item in dock["items"]
+                if item["kind"] == "icon" and item["id"] not in (None, "show-apps")]
+        if not apps or not self._hook("SetDockIconFocused", (apps[0], True), "(sb)"):
+            check("a dock icon could be marked as the focused app's", False, f"apps={apps}")
+            return
+        app_id = apps[0]
+
+        def backdrop():
+            item = next((item for item in self._dock(self.state())["items"]
+                         if item["id"] == app_id), None)
+            return (item["focused"], item["backdropAlpha"]) if item else (None, None)
+
+        try:
+            focused, plain = backdrop()
+            self._pear_up_setting("dock-focus-highlight", "true")
+            GLib.usleep(SETTLE)
+            _, highlighted = backdrop()
+            self._pear_up_setting("dock-focus-highlight", "false")
+            GLib.usleep(SETTLE)
+            _, plain_again = backdrop()
+        finally:
+            self._hook("SetDockIconFocused", (app_id, False), "(sb)")
+
+        check("the focused app's dock icon has no backdrop, as on macOS",
+              focused is True and plain == 0, f"focused={focused} alpha={plain}")
+        check("Dash to Dock's backdrop comes back when the setting asks for it",
+              (highlighted or 0) > 0, f"alpha={highlighted}")
+        check("and goes again when it is switched back off", plain_again == 0,
+              f"alpha={plain_again}")
+
     # -------------------------------------------------------------- the run
     def run(self):
         check = self._check
@@ -357,6 +397,9 @@ class DockChecks:
         check("nothing is magnified while the pointer is elsewhere", not state["overlays"])
         self._record_baseline(self._dock(state))
         self.ready = True
+
+        # ---- the backdrop behind the focused app, with the pointer elsewhere
+        self._check_focus_highlight()
 
         # ---- hovered, right edge
         target, pointer = self._hover()

@@ -98,6 +98,11 @@ const IFACE = `
       <arg type="s" direction="in" name="iconName"/>
       <arg type="b" direction="out" name="set"/>
     </method>
+    <method name="SetDockIconFocused">
+      <arg type="s" direction="in" name="appId"/>
+      <arg type="b" direction="in" name="focused"/>
+      <arg type="b" direction="out" name="set"/>
+    </method>
     <method name="SaveStage">
       <arg type="s" direction="in" name="path"/>
       <arg type="b" direction="out" name="saved"/>
@@ -228,6 +233,7 @@ export default class TestHookExtension extends Extension {
             hasSystemMenu: roles.includes(LOGO_ROLE),
             menuButtons: roles.filter(r => r.startsWith(`${PEAR_UP_UUID}-`)).length,
             panelStyled: Main.panel.has_style_class_name('pearup-panel'),
+            dockPlainFocus: Main.layoutManager.uiGroup.has_style_class_name('pearup-dock-plain-focus'),
             clockInRight: (layout.right ?? []).includes('dateMenu'),
             clockInCentre: (layout.center ?? []).includes('dateMenu'),
             powerIconFound: !!powerIcon,
@@ -540,6 +546,18 @@ export default class TestHookExtension extends Extension {
         return true;
     }
 
+    // Marks a dock icon as the focused app's through Dash to Dock's own
+    // `focused` property, which is what puts its `.focused` style class on —
+    // the container's applications launch nothing, so none is ever in front.
+    // Dash to Dock sets it again on the next focus change.
+    SetDockIconFocused(appId, focused) {
+        const icon = this._dockAppIcon(appId);
+        if (typeof icon?.focused !== 'boolean')
+            return false;
+        icon.focused = focused;
+        return true;
+    }
+
     // What the overview announces when an app icon starts or stops being
     // dragged — a dock icon being reordered, say — without a drag to go with
     // it, which would need a pointer button held down through the DND grab.
@@ -576,6 +594,14 @@ export default class TestHookExtension extends Extension {
         return true;
     }
 
+    _backgroundAlpha(actor) {
+        try {
+            return actor.get_theme_node().get_background_color().alpha;
+        } catch {
+            return null;
+        }
+    }
+
     // Dash to Dock's docks and what is drawn over them, in stage coordinates.
     // Reads Dash to Dock's actor tree the way Pear Up's magnifier does — its
     // dash items, each one's BaseIcon and the St.Icon inside it — but nothing
@@ -605,6 +631,10 @@ export default class TestHookExtension extends Extension {
                         icon: icon ? stageBox(icon) : null,
                         opacity: icon ? base.opacity : slot.opacity,
                         siblingOpacities: siblings.map(child => child.opacity),
+                        focused: slot.child?.focused ?? null,
+                        // The backdrop Dash to Dock draws behind a focused
+                        // (or hovered) icon: the BaseIcon's background.
+                        backdropAlpha: icon ? this._backgroundAlpha(base) : null,
                         label: slot.label ? {
                             visible: slot.label.visible,
                             translation: [slot.label.translation_x, slot.label.translation_y],
