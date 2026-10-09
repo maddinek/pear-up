@@ -16,6 +16,7 @@ import * as BoxPointer from "resource:///org/gnome/shell/ui/boxpointer.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { LOGO_ROLE } from './systemMenu.js';
 import { pinTranslationX } from './menuPin.js';
+import { quitApp } from './util.js';
 import {
     isFileManager,
     compactMenuItems,
@@ -254,16 +255,12 @@ const TopLevelMenuButton = GObject.registerClass(
                 window.delete(global.get_current_time());
             return true;
         } else if (action === "quit") {
-            if (this._appInstance) {
-                for (const win of this._appInstance.get_windows()) {
-                    try {
-                        win.delete(global.get_current_time());
-                    } catch (e) {
-                        logError(`[pear-up] Failed to close window: ${e}`);
-                    }
-                }
-            } else if (window) {
-                window.delete(global.get_current_time());
+            // The same quit as Cmd+Q, so the menu item and the shortcut
+            // cannot drift apart.
+            try {
+                quitApp(this._appInstance, window);
+            } catch (e) {
+                logError(`[pear-up] Failed to quit: ${e}`);
             }
             return true;
         } else if (action === "minimize") {

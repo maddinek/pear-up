@@ -86,6 +86,14 @@ const IFACE = `
       <arg type="b" direction="in" name="begin"/>
       <arg type="b" direction="out" name="signalled"/>
     </method>
+    <method name="PressKeys">
+      <arg type="as" direction="in" name="keys"/>
+      <arg type="b" direction="out" name="pressed"/>
+    </method>
+    <method name="CountWindows">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="i" direction="out" name="count"/>
+    </method>
     <method name="SaveStage">
       <arg type="s" direction="in" name="path"/>
       <arg type="b" direction="out" name="saved"/>
@@ -151,6 +159,7 @@ export default class TestHookExtension extends Extension {
     disable() {
         this.ReleaseLeftEdge();
         this._pointer = null;
+        this._keyboard = null;
         this._export?.unexport();
         this._export = null;
     }
@@ -432,6 +441,31 @@ export default class TestHookExtension extends Extension {
         }
         this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), x, y);
         return true;
+    }
+
+    // A chord typed on a keyboard of the shell's own, through the same path a
+    // real one takes, so the shell's keybindings see it. Keys are keysym names
+    // such as Super_L and q, pressed in order and released in reverse.
+    PressKeys(keys) {
+        const keyvals = keys.map(name => Clutter[`KEY_${name}`]);
+        if (keyvals.some(keyval => keyval === undefined))
+            return false;
+        if (!this._keyboard) {
+            const seat = Clutter.get_default_backend().get_default_seat();
+            this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        }
+        // Millisecond stamps, comparable to global.get_current_time().
+        let time = global.get_current_time();
+        for (const keyval of keyvals)
+            this._keyboard.notify_keyval(time++, keyval, Clutter.KeyState.PRESSED);
+        for (const keyval of [...keyvals].reverse())
+            this._keyboard.notify_keyval(time++, keyval, Clutter.KeyState.RELEASED);
+        return true;
+    }
+
+    CountWindows(wmClass) {
+        return global.get_window_actors()
+            .filter(actor => actor.meta_window?.get_wm_class() === wmClass).length;
     }
 
     // The right-click menu of a dock icon, opened the way Dash to Dock opens it

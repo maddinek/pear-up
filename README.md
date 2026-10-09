@@ -73,7 +73,8 @@ read Cmd as the Super or Windows key.
 | `Cmd+Shift+3` | Whole screen straight to a file |
 | `Cmd+Shift+4` | Pick a region, window or screen |
 | `Cmd+Shift+5` | Screen recording |
-| `Cmd+Q` / `Cmd+W` | Close the window |
+| `Cmd+Q` | Quit the app, every window of it |
+| `Cmd+W` | Close the window |
 | `Cmd+M` | Minimize |
 | `Ctrl+Cmd+F` | Full screen |
 | `Ctrl+Cmd+Q` | Lock the screen |

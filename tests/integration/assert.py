@@ -445,6 +445,60 @@ if menus:
     else:
         check("System Menu was found", False, "no pearup-logo role")
 
+# ------------------------------------------------------------ Cmd+Q quits
+# Two windows of one app, then Cmd+Q: both have to go. Closing only the one in
+# front is what GNOME's own close binding does, and what Cmd+Q used to do here.
+TEST_WINDOW_CLASS = "io.github.maddinek.PearUpTestWindow"
+
+
+def test_windows():
+    return call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "CountWindows",
+                (TEST_WINDOW_CLASS,), "(s)")[0]
+
+
+print()
+print("  Cmd+Q:")
+try:
+    subprocess.run(
+        ["gsettings", "set", "org.gnome.shell.extensions.pear-up", "quit-app", "['<Super>q']"],
+        env={**os.environ,
+             "GSETTINGS_SCHEMA_DIR":
+                 f"{os.environ.get('HOME', '/root')}/.local/share/gnome-shell"
+                 f"/extensions/{UUID}/schemas"},
+        capture_output=True, check=False)
+
+    # A second launch of the same application opens another window in the
+    # instance already running, so both windows belong to one app.
+    for _ in range(2):
+        subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        GLib.usleep(1500 * 1000)
+    for _ in range(20):
+        if test_windows() >= 2:
+            break
+        GLib.usleep(250 * 1000)
+    before = test_windows()
+    check("two windows of the test app are open", before >= 2, f"{before} open")
+
+    call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "FocusFirstWindow")
+    GLib.usleep(500 * 1000)
+    pressed = call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "PressKeys",
+                   (["Super_L", "q"],), "(as)")[0]
+    check("Cmd+Q could be typed", pressed)
+
+    left = before
+    for _ in range(20):
+        GLib.usleep(250 * 1000)
+        left = test_windows()
+        if left == 0:
+            break
+    check("Cmd+Q quits the app, every window of it", before >= 2 and left == 0,
+          f"{before} open before, {left} after")
+except FileNotFoundError:
+    print("  note: gjs missing, cannot open a window")
+except GLib.Error as exc:
+    check("Cmd+Q could be exercised", False, exc.message.splitlines()[0])
+
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
 # something consumes its output, and the shell's screenshot API returns an empty

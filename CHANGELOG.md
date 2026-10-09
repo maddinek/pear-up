@@ -8,6 +8,13 @@ human reads.
 
 ### Fixed
 
+- **Cmd+Q quits the app.** It used to sit on GNOME's close binding, so it
+  took one window and left the rest of the app running. GNOME has nothing
+  that quits a whole app, so Pear Up now binds Cmd+Q itself and asks the app
+  to quit the way the dock's Quit does: through the app's own quit action,
+  or by closing every window. An earlier Cmd+Q binding moves over by itself
+  at the next login. File → Quit goes the same way.
+
 - **Clicking File no longer takes down the desktop.** Pinning the dropdown
   wrote `translation-x: nan` when the actor had no stage position yet, and
   did it from `notify::allocation` — which is while Clutter is walking the

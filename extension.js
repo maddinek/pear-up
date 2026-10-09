@@ -1,10 +1,14 @@
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { MenuManager } from './menuManager.js';
 import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
 import { DockMagnifier } from './dockMagnifier.js';
+import { quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
 // separate toggle so nothing about the stock top bar is changed silently.
@@ -100,6 +104,7 @@ export default class GlobalMenuExtension extends Extension {
         this._minimizedWindow = null;
         this._minimizedId = 0;
         this._minimizedGoneId = 0;
+        this._quitBound = false;
     }
 
     // Everything that reaches into GNOME's private panel internals goes
@@ -186,6 +191,37 @@ export default class GlobalMenuExtension extends Extension {
         // Dash to Dock is someone else's code, reached through its private
         // members; a failure there must not take the menu bar down with it.
         this._guard('setting up dock magnification', () => this._syncDockMagnifier());
+
+        // GNOME can close a window from the keyboard but has nothing that
+        // quits an app, so Cmd+Q is a binding of our own. The shell rebinds it
+        // whenever the setting changes.
+        this._guard('moving Cmd+Q to quit', () => this._migrateQuitShortcut());
+        Main.wm.addKeybinding('quit-app', this._settings, Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL, () => this._quitFocusedApp());
+        this._quitBound = true;
+    }
+
+    _quitFocusedApp() {
+        const window = global.display.get_focus_window();
+        // Surfaces kept off the taskbar, such as desktop icons, are not apps
+        // anyone would mean to quit, and quitting one takes the desktop with it.
+        if (!window || window.is_skip_taskbar())
+            return;
+        quitApp(Shell.WindowTracker.get_default().get_window_app(window), window);
+    }
+
+    // Earlier versions put Cmd+Q on GNOME's close binding, which closes one
+    // window. Move it over, but only where Cmd+W is there too: that pair is
+    // what the macOS Window Shortcuts switch wrote, so the Cmd+Q is ours.
+    _migrateQuitShortcut() {
+        const wm = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
+        const close = wm.get_strv('close');
+        if (!close.includes('<Super>q') || !close.includes('<Super>w'))
+            return;
+        wm.set_strv('close', close.filter(accel => accel !== '<Super>q'));
+        const quit = this._settings.get_strv('quit-app');
+        if (!quit.includes('<Super>q'))
+            this._settings.set_strv('quit-app', [...quit, '<Super>q']);
     }
 
     // Apply or undo each panel tweak to match its setting. Safe to call again
@@ -912,6 +948,11 @@ export default class GlobalMenuExtension extends Extension {
                 GLib.source_remove(this[source]);
                 this[source] = 0;
             }
+        }
+
+        if (this._quitBound) {
+            Main.wm.removeKeybinding('quit-app');
+            this._quitBound = false;
         }
 
         if (this._settings && this._settingsChangedId) {

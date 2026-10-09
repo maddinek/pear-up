@@ -196,6 +196,12 @@
       <description>110 is a hint of movement, 300 triples the icon. Neighbours grow less the further they are from the pointer.</description>
     </key>
 
+    <key name="quit-app" type="as">
+      <default>[]</default>
+      <summary>Shortcut that quits the focused app</summary>
+      <description>Every window of the app, the way Cmd+Q works on macOS. GNOME's own close binding only takes one window. The macOS Window Shortcuts switch puts Super+Q here.</description>
+    </key>
+
     <key name="debug-logging" type="b">
       <default>false</default>
       <summary>Enable verbose error logging to the system journal</summary>

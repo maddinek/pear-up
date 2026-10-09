@@ -69,6 +69,7 @@ if $RESET_SETTINGS; then
     remove_accel org.gnome.shell.keybindings show-screenshot-ui '<Super><Shift>4'
     remove_accel org.gnome.shell.keybindings show-screen-recording-ui '<Super><Shift>5'
     remove_accel org.gnome.shell.keybindings toggle-overview '<Control>Up'
+    # Cmd+Q now lives in our own quit-app key; this is where older versions put it.
     remove_accel org.gnome.desktop.wm.keybindings close '<Super>q'
     remove_accel org.gnome.desktop.wm.keybindings close '<Super>w'
     remove_accel org.gnome.desktop.wm.keybindings minimize '<Super>m'

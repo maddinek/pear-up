@@ -10,3 +10,13 @@ export function spawnCommandLine(commandLine) {
         return false;
     }
 }
+
+// Quit as macOS does: the whole app, not the one window in front. The shell
+// asks the app to quit through its own quit action when it has one, or closes
+// each window otherwise, so an app can still stop to ask about unsaved work.
+// A window the shell cannot pin to an app is closed on its own.
+export function quitApp(app, window = null) {
+    if (app?.request_quit())
+        return;
+    window?.delete(global.get_current_time());
+}

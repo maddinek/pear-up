@@ -15,6 +15,9 @@ import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/
 const DASH_TO_DOCK_UUID = 'dash-to-dock@micxgx.gmail.com';
 const DASH_TO_DOCK_SCHEMA = 'org.gnome.shell.extensions.dash-to-dock';
 
+// GNOME has no binding that quits an app, so Cmd+Q is one of our own.
+const PEAR_UP_SCHEMA = 'org.gnome.shell.extensions.pear-up';
+
 // Window controls live in a GNOME-wide setting, not in this extension.
 const WM_PREFERENCES_SCHEMA = 'org.gnome.desktop.wm.preferences';
 const INPUT_SOURCES_SCHEMA = 'org.gnome.desktop.input-sources';
@@ -31,7 +34,7 @@ const MACOS_SCREENSHOT_SHORTCUTS = [
 ];
 
 const MACOS_WINDOW_SHORTCUTS = [
-    ['org.gnome.desktop.wm.keybindings', 'close', '<Super>q', 'Close the window (Cmd+Q)'],
+    [PEAR_UP_SCHEMA, 'quit-app', '<Super>q', 'Quit the app, every window (Cmd+Q)'],
     ['org.gnome.desktop.wm.keybindings', 'close', '<Super>w', 'Close the window (Cmd+W)'],
     ['org.gnome.desktop.wm.keybindings', 'minimize', '<Super>m', 'Minimize (Cmd+M)'],
     ['org.gnome.desktop.wm.keybindings', 'toggle-fullscreen', '<Super><Control>f', 'Full screen (Ctrl+Cmd+F)'],
@@ -203,6 +206,11 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             return this._schemaCache.get(schemaId);
 
         let settings = null;
+        if (schemaId === PEAR_UP_SCHEMA) {
+            settings = this.getSettings();
+            this._schemaCache.set(schemaId, settings);
+            return settings;
+        }
         const extensionUuid = EXTENSION_SCHEMA_OWNERS[schemaId];
         const schema = Gio.SettingsSchemaSource.get_default()?.lookup(schemaId, true);
         if (schema) {
@@ -456,7 +464,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         page.add(windowGroup);
         this._addShortcutSetRow(windowGroup, {
             title: 'macOS Window Shortcuts',
-            subtitle: 'Close, minimize, full screen, lock and the overview',
+            subtitle: 'Quit, close, minimize, full screen, lock and the overview',
             shortcuts: MACOS_WINDOW_SHORTCUTS,
             conflicts: MACOS_WINDOW_CONFLICTS,
         });
@@ -502,7 +510,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         page.add(noteGroup);
         const note = new Adw.ActionRow({
             title: 'Shortcuts inside applications',
-            subtitle: 'Cmd+C, Cmd+V and Cmd+Q within an app are sent by the app itself, not the ' +
+            subtitle: 'Cmd+C, Cmd+V and Cmd+S within an app are sent by the app itself, not the ' +
                 'desktop, so they cannot be rebound from here. Matching those needs a key ' +
                 'remapper such as keyd.',
         });

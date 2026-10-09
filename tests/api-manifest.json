@@ -36,7 +36,8 @@
     ],
     "Meta": [
       "WindowType",
-      "MaximizeFlags"
+      "MaximizeFlags",
+      "KeyBindingFlags"
     ],
     "St": [
       "Label",
@@ -52,7 +53,8 @@
     "Shell": [
       "AppSystem",
       "WindowTracker",
-      "AppUsage"
+      "AppUsage",
+      "ActionMode"
     ],
     "GObject": [
       "signal_lookup"
@@ -111,7 +113,8 @@
       "located_on_workspace",
       "get_frame_rect",
       "unmaximize",
-      "maximize"
+      "maximize",
+      "is_skip_taskbar"
     ],
     "Clutter.VirtualInputDevice": [
       "notify_keyval"
@@ -151,6 +154,12 @@
     ],
     "Shell.AppSystem": [
       "lookup_app"
+    ],
+    "Shell.App": [
+      "request_quit"
+    ],
+    "Shell.WindowTracker": [
+      "get_window_app"
     ],
     "St.IconTheme": [
       "has_icon"
@@ -206,6 +215,8 @@
 
   "shellInternals": [
     "_updatePanel",
+    "addKeybinding",
+    "removeKeybinding",
     "_rightBox",
     "_centerBox",
     "addToStatusArea",
