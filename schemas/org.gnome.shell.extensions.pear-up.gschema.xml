@@ -184,6 +184,18 @@
       <description>Used for File menu items such as "New X Window" while an app is focused. The App menu no longer uses this as a fallback when every window is minimized.</description>
     </key>
 
+    <key name="dock-magnification" type="b">
+      <default>false</default>
+      <summary>Magnify dock icons under the pointer</summary>
+      <description>Dash to Dock icons near the pointer grow and push their neighbours apart, as on macOS. Pear Up draws this over Dash to Dock at runtime; none of Dash to Dock's own settings change.</description>
+    </key>
+    <key name="dock-magnification-size" type="i">
+      <default>175</default>
+      <range min="110" max="300"/>
+      <summary>How large the icon under the pointer grows, in percent of its normal size</summary>
+      <description>110 is a hint of movement, 300 triples the icon. Neighbours grow less the further they are from the pointer.</description>
+    </key>
+
     <key name="debug-logging" type="b">
       <default>false</default>
       <summary>Enable verbose error logging to the system journal</summary>
