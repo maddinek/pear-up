@@ -76,6 +76,7 @@
     <key name="hide-power-button" type="b">
       <default>true</default>
       <summary>Hide the Quick Settings power icon</summary>
+      <description>The top bar shows a power glyph only on a machine without a battery. With one, the same place shows the battery, which stays.</description>
     </key>
     <key name="hide-panel-spacers" type="b">
       <default>true</default>

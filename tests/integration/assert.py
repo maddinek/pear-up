@@ -92,10 +92,39 @@ if state:
     check("search button is on the panel", state.get("hasSearchButton"),
           f"roles={state['panelRoles']}")
 
-    # The regression that shipped twice: the icon existed, and was visible.
+    # The regression that shipped twice: the icon existed, and was visible. The
+    # one after it: on a laptop the same icon is the battery, and went too.
+    # Which one this session has depends on the machine — a privileged
+    # container's UPower sees the host's battery — so both are checked: the one
+    # it has, then the other, made the way the shell's status/system.js makes
+    # it, and back.
     if state["powerIconFound"]:
-        check("power icon is hidden", state["powerIconVisible"] is False,
-              f"visible={state['powerIconVisible']}")
+        POWER_GLYPH = "system-shutdown-symbolic"
+        icon = state.get("powerIconName")
+        has_battery = icon != POWER_GLYPH
+        check("power icon is hidden" if not has_battery else "battery icon is not hidden",
+              state["powerIconVisible"] is has_battery,
+              f"visible={state['powerIconVisible']} icon={icon}")
+
+        def power_icon_after(name):
+            call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "SetPowerIcon", (name,), "(s)")
+            GLib.usleep(300 * 1000)
+            return panel_state()["powerIconVisible"]
+
+        try:
+            if has_battery:
+                as_power = power_icon_after(POWER_GLYPH)
+                as_battery = power_icon_after(icon)
+            else:
+                as_battery = power_icon_after("battery-level-80-symbolic")
+                as_power = power_icon_after(POWER_GLYPH)
+            check("a battery in that place stays visible", as_battery is True,
+                  f"visible={as_battery}")
+            check("the power glyph in that place is hidden", as_power is False,
+                  f"visible={as_power}")
+        except GLib.Error as exc:
+            check("the power icon could be switched to and from a battery", False,
+                  exc.message.splitlines()[0])
     else:
         print("  note: this session has no power indicator to hide")
 

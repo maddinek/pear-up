@@ -24,6 +24,14 @@ human reads.
   the one heavy word in the bar. The integration suite reads the weight the
   theme resolved for the titles, the clock and the status area.
 
+- **A laptop keeps its battery icon.** Hide the Power Icon hid the Quick
+  Settings system indicator outright, but GNOME draws the battery in that same
+  icon whenever there is one, which left a bare "80%" in the bar. The icon is
+  now hidden only while it is the power glyph — on machines without a battery
+  — and shown again once it becomes the battery, which on a laptop happens a
+  moment after login. The integration suite checks both, whichever the machine
+  running it has, by switching the icon the way the shell does and back.
+
 - **Clicking File no longer takes down the desktop.** Pinning the dropdown
   wrote `translation-x: nan` when the actor had no stage position yet, and
   did it from `notify::allocation` — which is while Clutter is walking the

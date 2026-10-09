@@ -62,6 +62,10 @@ const DOCK_MAGNIFICATION_KEYS = [
     'dock-magnification-size',
 ];
 
+// What the Quick Settings system indicator shows where there is no battery.
+// With one, the same icon is the battery, and that is not for hiding.
+const POWER_GLYPH = 'system-shutdown-symbolic';
+
 // GNOME reserves room in the right cluster for indicators that are inactive
 // most of the time. macOS has no equivalent, and they leave a visible gap.
 const SPACER_ROLES = [
@@ -85,8 +89,9 @@ export default class GlobalMenuExtension extends Extension {
         this._clockMoved = false;
         this._clockSessionBackup = null;
         this._clockLayout = null;
-        this._powerHidden = null;
+        this._powerIndicator = null;
         this._powerVisibleId = 0;
+        this._powerIconId = 0;
         this._powerDestroyId = 0;
         this._powerRetryId = 0;
         this._powerRetries = 0;
@@ -570,8 +575,12 @@ export default class GlobalMenuExtension extends Extension {
     // The power glyph is the indicator icon inside the Quick Settings system
     // item. Hiding the whole item would take the battery readout with it, and
     // collapsing it in CSS only stops it reserving space — it still paints,
-    // over the clock. So hide that one actor, and keep it hidden: GNOME re-runs
-    // its own visibility sync whenever the battery or recording state changes.
+    // over the clock. So hide that one actor, and keep it hidden.
+    //
+    // It is only the power glyph on a machine without a battery, though. With
+    // one, the shell draws the battery in that same icon — starting from the
+    // glyph at login and switching once UPower answers — so it is watched rather
+    // than hidden once, and shown whenever it is a battery.
     _hidePowerButton() {
         let system = Main.panel.statusArea.quickSettings?._system;
         // On shells where `_system` exists but `_indicator` does not — usually
@@ -588,7 +597,7 @@ export default class GlobalMenuExtension extends Extension {
 
         // Compare against the actor rather than just "have we run", because a
         // panel rebuild replaces it and leaves us holding a destroyed one.
-        if (this._powerHidden === indicator)
+        if (this._powerIndicator === indicator)
             return;
 
         // Found it, so clear the poll budget: a later rebuild in the same
@@ -597,16 +606,26 @@ export default class GlobalMenuExtension extends Extension {
 
         this._releasePowerButton();
 
-        indicator.hide();
-        this._powerVisibleId = indicator.connect('notify::visible', () => {
-            if (indicator.visible)
-                indicator.hide();
-        });
+        this._powerIndicator = indicator;
+        this._powerVisibleId = indicator.connect('notify::visible',
+            () => this._syncPowerIcon(indicator));
+        this._powerIconId = indicator.connect('notify::gicon',
+            () => this._syncPowerIcon(indicator));
         // The shell rebuilds the panel more than once while starting up, so the
         // icon hidden during enable() is often not the one left on screen.
         this._powerDestroyId = indicator.connect('destroy',
             () => this._queuePanelResync());
-        this._powerHidden = indicator;
+        this._syncPowerIcon(indicator);
+    }
+
+    // Hidden while it is the power glyph, shown while it is anything else. The
+    // shell's status/system.js only ever swaps what this icon shows and never
+    // hides it, so showing it overrules nothing the shell decided. Each change
+    // comes back through notify::visible and finds nothing left to do.
+    _syncPowerIcon(indicator) {
+        const isPowerGlyph = indicator.icon_name === POWER_GLYPH;
+        if (indicator.visible === isPowerGlyph)
+            indicator.visible = !isPowerGlyph;
     }
 
     // The system item is built asynchronously while the shell starts, and
@@ -626,22 +645,23 @@ export default class GlobalMenuExtension extends Extension {
 
     // Forget the icon without revealing it: used when swapping to a newer one.
     _releasePowerButton() {
-        if (!this._powerHidden)
+        if (!this._powerIndicator)
             return;
 
-        for (const id of [this._powerVisibleId, this._powerDestroyId]) {
+        for (const id of [this._powerVisibleId, this._powerIconId, this._powerDestroyId]) {
             if (!id)
                 continue;
             try {
-                this._powerHidden.disconnect(id);
+                this._powerIndicator.disconnect(id);
             } catch {
                 // Destroyed with the old panel.
             }
         }
 
         this._powerVisibleId = 0;
+        this._powerIconId = 0;
         this._powerDestroyId = 0;
-        this._powerHidden = null;
+        this._powerIndicator = null;
     }
 
     // Re-apply the tweaks once the current batch of panel changes has settled.
@@ -657,7 +677,7 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     _showPowerButton() {
-        let indicator = this._powerHidden;
+        let indicator = this._powerIndicator;
         this._releasePowerButton();
 
         try {

@@ -94,6 +94,10 @@ const IFACE = `
       <arg type="s" direction="in" name="wmClass"/>
       <arg type="i" direction="out" name="count"/>
     </method>
+    <method name="SetPowerIcon">
+      <arg type="s" direction="in" name="iconName"/>
+      <arg type="b" direction="out" name="set"/>
+    </method>
     <method name="SaveStage">
       <arg type="s" direction="in" name="path"/>
       <arg type="b" direction="out" name="saved"/>
@@ -228,6 +232,7 @@ export default class TestHookExtension extends Extension {
             clockInCentre: (layout.center ?? []).includes('dateMenu'),
             powerIconFound: !!powerIcon,
             powerIconVisible: powerIcon ? powerIcon.visible : null,
+            powerIconName: powerIcon?.icon_name ?? null,
             // The clock's own label, and the Quick Settings button whose weight
             // the battery percentage inherits.
             clockWeight: fontWeight(clockLabel),
@@ -265,6 +270,22 @@ export default class TestHookExtension extends Extension {
 
     HideOverview() {
         Main.overview.hide();
+        return true;
+    }
+
+    // The Quick Settings system indicator is the power glyph only where there
+    // is no battery; on a laptop the shell turns it into the battery once UPower
+    // answers. Whichever this session has, this makes the other the way the
+    // shell's own status/system.js does: a battery gicon, or the glyph by name.
+    SetPowerIcon(iconName) {
+        const icon = Main.panel.statusArea.quickSettings?._system?._indicator;
+        if (!icon)
+            return false;
+
+        if (iconName === 'system-shutdown-symbolic')
+            icon.icon_name = iconName;
+        else
+            icon.set({ gicon: new Gio.ThemedIcon({ name: iconName, use_default_fallbacks: false }) });
         return true;
     }
 

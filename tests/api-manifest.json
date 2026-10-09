@@ -197,7 +197,8 @@
     "St.Icon": [
       "gicon",
       "fallback_gicon",
-      "icon_size"
+      "icon_size",
+      "icon_name"
     ],
     "St.Settings": [
       "enable_animations"
@@ -224,6 +225,7 @@
     "statusArea",
     "quickSettings",
     "_indicator",
+    "system-shutdown-symbolic",
     "showAppsButton",
     "canSuspend",
     "canPowerOff",

@@ -953,7 +953,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             ['clock-on-the-right', 'Clock on the Right',
                 'GNOME centres it; macOS keeps it in the corner'],
             ['hide-power-button', 'Hide the Power Icon',
-                'Battery and power state stay available in Quick Settings'],
+                'Only where there is no battery: a laptop keeps its battery icon'],
             ['hide-panel-spacers', 'Hide Inactive Indicators',
                 'Screen recording, screen sharing, dwell click, accessibility and keyboard layout'],
             ['group-spotlight-with-quick-settings', 'Keep Search Light Beside Quick Settings',
