@@ -92,6 +92,17 @@ human reads.
 
 ### Added
 
+- **Vitals sits closer and a size smaller, like macOS stat apps.** Its
+  readouts are spaced 11px apart in the bar's type; with Vitals installed they
+  are now 5px apart, set in 12px regular against the bar's 13px. These were
+  edits to Vitals' own stylesheet, which any Vitals update overwrites. Pear
+  Up's stylesheet carries them now, ahead of Vitals' rules whichever extension
+  loaded last, and none of Vitals' settings are changed: its fixed-widths
+  option, which gives each readout a set width, stays Vitals' to choose. The
+  integration suite loads a stand-in for Vitals' stylesheet, one that sets a
+  size and weight of its own too, and reads what the theme resolves for the
+  readouts with Pear Up on and off.
+
 - **No backdrop behind the focused app in the dock.** Dash to Dock puts a grey
   backdrop behind the icon of the app in front; the macOS Dock marks it with
   its dot alone. Pear Up removes it with its own stylesheet and changes none of

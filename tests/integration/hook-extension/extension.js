@@ -51,6 +51,12 @@ const IFACE = `
     <method name="RemoveLateIndicators">
       <arg type="b" direction="out" name="removed"/>
     </method>
+    <method name="AddVitalsStandIn">
+      <arg type="b" direction="out" name="added"/>
+    </method>
+    <method name="MeasureVitalsStandIn">
+      <arg type="s" direction="out" name="metrics"/>
+    </method>
     <method name="MeasureLateIndicators">
       <arg type="s" direction="out" name="metrics"/>
     </method>
@@ -165,6 +171,7 @@ const LATE_ROLE_PREFIX = 'pear-up-test-late-';
 // included, so anything held per instance is lost exactly when the suite wants
 // to see what Pear Up left behind. The indicators are the suite's to remove.
 const lateIndicators = new Map();
+let vitalsStandIn = null;
 
 // The overlay Pear Up draws magnified dock icons into. Found by name, the same
 // way Looking Glass would find it.
@@ -383,6 +390,8 @@ export default class TestHookExtension extends Extension {
         for (const button of lateIndicators.values())
             button.destroy();
         lateIndicators.clear();
+        vitalsStandIn?.button.destroy();
+        vitalsStandIn = null;
         return true;
     }
 
@@ -404,6 +413,56 @@ export default class TestHookExtension extends Extension {
             reference: measure(Main.panel.statusArea.quickSettings),
             indicators: Object.fromEntries(
                 [...lateIndicators].map(([name, button]) => [name, measure(button)])),
+        });
+    }
+
+    // Built the way Vitals builds its panel button: a box of icon and value
+    // pairs, carrying the classes its stylesheet (stylesheet.css, here) styles
+    // them by. Like the indicators above it arrives after Pear Up is enabled.
+    AddVitalsStandIn() {
+        if (vitalsStandIn)
+            return false;
+
+        const button = new PanelMenu.Button(0.5, 'Test Vitals', true);
+        const menu = new St.BoxLayout({ style_class: 'vitals-panel-menu' });
+        const labels = ['12%', '48\u00b0C'].map(text => {
+            const item = new St.BoxLayout({ style_class: 'vitals-panel-item' });
+            item.add_child(new St.Icon({
+                icon_name: 'start-here-symbolic',
+                style_class: 'system-status-icon',
+            }));
+            const label = new St.Label({
+                style_class: 'vitals-panel-label',
+                text,
+                y_expand: true,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            item.add_child(label);
+            menu.add_child(item);
+            return label;
+        });
+        button.add_child(menu);
+        Main.panel.addToStatusArea(`${LATE_ROLE_PREFIX}vitals`, button, 0, 'right');
+        vitalsStandIn = { button, menu, label: labels[0] };
+        return true;
+    }
+
+    // What the theme resolved for the readouts: the gap between them, and the
+    // size and weight of a value, beside the clock's size, which is the bar's
+    // own type. Sizes are Pango units, so only their ratio means anything here.
+    MeasureVitalsStandIn() {
+        if (!vitalsStandIn)
+            return JSON.stringify(null);
+
+        const { menu, label } = vitalsStandIn;
+        const dateMenu = Main.panel.statusArea.dateMenu;
+        const pangoSize = actor => actor.get_theme_node().get_font().get_size();
+        return JSON.stringify({
+            scale: St.ThemeContext.get_for_stage(global.stage).scale_factor,
+            spacing: menu.get_theme_node().get_length('spacing'),
+            labelPangoSize: pangoSize(label),
+            labelWeight: fontWeight(label),
+            barPangoSize: pangoSize(dateMenu?.label_actor ?? dateMenu),
         });
     }
 

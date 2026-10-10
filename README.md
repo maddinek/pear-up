@@ -45,7 +45,8 @@ Quick Settings as a Spotlight stand-in. The gaps between the search icon, the co
 and the clock are adjustable, as is the padding each item reserves around itself — the first spreads
 the groups out, the second packs them closer than GNOME's own spacing allows. Indicators other
 extensions add after login, such as the tray icon of an app that starts late, are spaced the same way
-as they arrive.
+as they arrive. [Vitals](https://github.com/corecoding/Vitals), if you run it, gets its readouts set
+closer together and a size smaller than the bar, as the stat readouts of macOS menu bar apps are.
 
 **A search icon of its own.** Optional, and it sits where macOS keeps Spotlight. What it opens is a
 setting: GNOME's own search, which needs nothing installed;
@@ -168,9 +169,10 @@ desktop you are using.
 extension the way a login would, and checks what it actually did to the panel: the clock moved, the
 System Menu appeared with its entries, the power icon is hidden but a battery is not, the titles and
 clock are regular weight with the app name bold, an indicator added after start-up is spaced like the
-rest, the bar stays bare while nothing is in front, the
-File, Edit, View, Go, Window and Help menus appear once a window is focused, File and Go stay generic
-unless a file manager is in front, and disabling it leaves nothing behind.
+rest, Vitals' readouts take Pear Up's spacing and type over their own stylesheet's, the bar stays bare
+while nothing is in front, the File, Edit, View, Go, Window and Help menus appear once a window is
+focused, File and Go stay generic unless a file manager is in front, and disabling it leaves nothing
+behind.
 
 With Dash to Dock installed in the same container, a virtual pointer then hovers the dock, on the right
 edge and along the bottom: the icon under it has to reach exactly the chosen size, its neighbours less

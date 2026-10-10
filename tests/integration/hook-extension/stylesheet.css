@@ -1,0 +1,18 @@
+/* Stands in for Vitals' stylesheet, so the suite can check that Pear Up's rules
+   for its readouts win against it. The shell loads this for the hook extension
+   as it does Vitals' for Vitals, after Pear Up's own, which is the order Vitals
+   comes in.
+
+   The first rule is what Vitals ships. The second is not: it stands for a copy
+   patched by hand, or a later release, that sets a size and weight of its own,
+   at the same specificity as the first. The values are ones Pear Up has to
+   override. */
+.vitals-panel-menu {
+  spacing: 11px;
+  padding: 3px;
+}
+
+.vitals-panel-label {
+  font-size: 14px;
+  font-weight: 700;
+}

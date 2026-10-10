@@ -109,6 +109,27 @@
   padding-right: 6px;
 }
 
+/* Vitals (github.com/corecoding/Vitals) shows its readouts as a row of icon and
+   value pairs in one panel button, spaced 11px apart in the bar's own type.
+   macOS menu bar stat apps keep theirs closer together and a size below the
+   bar's, so both are set here. They used to be edited into Vitals' own
+   stylesheet, which an update of Vitals overwrites; here they survive it, and
+   none of Vitals' settings are touched.
+
+   Vitals' rules are a single class each, and extension stylesheets rank
+   against each other by specificity, so the panel's ID puts these ahead of
+   them whichever of the two extensions loaded last. The weight is named too,
+   although the label inherits the same one from the button: a stylesheet of
+   Vitals' that sets its own would otherwise win the label. */
+#panel.pearup-panel .vitals-panel-menu {
+  spacing: 5px;
+}
+
+#panel.pearup-panel .vitals-panel-label {
+  font-size: 12px;
+  font-weight: 400;
+}
+
 /* Dash to Dock puts a grey backdrop behind the focused app's icon; the macOS
    Dock marks it with the running dot alone. Applied while dock-focus-highlight
    is off, through a class extension.js claims on the UI group, the docks'

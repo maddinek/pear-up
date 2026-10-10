@@ -627,6 +627,44 @@ if state:
     finally:
         pear_up_setting("status-icon-padding", original_padding)
 
+# ----------------------------------------------------------------- Vitals
+# Vitals puts its readouts in the right cluster some time after Pear Up is up,
+# spaced 11px apart in the bar's type; Pear Up sets them closer and a size
+# smaller. What stands in for it carries its classes and the stylesheet it
+# ships, loaded after Pear Up's the way Vitals is, plus a rule that sets a size
+# and weight of its own at the same specificity (hook-extension/stylesheet.css),
+# so the check is also that Pear Up's rules win against them.
+def vitals_readouts():
+    raw = call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "MeasureVitalsStandIn").unpack()[0]
+    data = json.loads(raw)
+    if not data:
+        return None
+    scale = data["scale"] or 1
+    return {
+        "spacing": round(data["spacing"] / scale, 2),
+        "size": round(data["labelPangoSize"] / data["barPangoSize"], 3),
+        "weight": data["labelWeight"],
+    }
+
+
+print()
+print("  Vitals:")
+if state:
+    try:
+        call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "AddVitalsStandIn")
+        GLib.usleep(800 * 1000)
+        readouts = vitals_readouts()
+        check("Vitals' readouts sit 5px apart, not the 11px its stylesheet asks for",
+              readouts and readouts["spacing"] == 5, f"{readouts}")
+        # 12px against the bar's 13px, compared as a ratio because the sizes
+        # come back in Pango units.
+        check("Vitals' values are 12px, a size below the bar's 13px",
+              readouts and abs(readouts["size"] - 12 / 13) < 0.005, f"{readouts}")
+        check("Vitals' values are regular weight, whatever its stylesheet says",
+              readouts and readouts["weight"] == 400, f"{readouts}")
+    except GLib.Error as exc:
+        check("Vitals' readouts could be measured", False, exc.message.splitlines()[0])
+
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
 # something consumes its output, and the shell's screenshot API returns an empty
@@ -744,6 +782,19 @@ if state:
               f"shell-built={reference} added-late={late}")
     except GLib.Error as exc:
         check("late indicators could be measured after disabling", False,
+              exc.message.splitlines()[0])
+
+# The stand-in's own stylesheet is what is left once Pear Up's rules are gone.
+# Without this the checks above could be passing because nothing else was
+# asking for anything different.
+if state:
+    try:
+        readouts = vitals_readouts()
+        check("Vitals' own spacing and weight show once Pear Up is off",
+              readouts and readouts["spacing"] == 11 and readouts["weight"] == 700,
+              f"{readouts}")
+    except GLib.Error as exc:
+        check("Vitals' readouts could be measured after disabling", False,
               exc.message.splitlines()[0])
 
 if dock.ready:
