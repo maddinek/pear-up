@@ -186,9 +186,9 @@
     </key>
 
     <key name="desktop-app-name" type="s">
-      <default>"Nautilus"</default>
-      <summary>Name shown for the file manager / desktop placeholder in the App menu</summary>
-      <description>Used for File menu items such as "New X Window" while an app is focused. The App menu no longer uses this as a fallback when every window is minimized.</description>
+      <default>""</default>
+      <summary>Name for the file manager in File → New … Window</summary>
+      <description>Used in the File menu's "New X Window" item while a file manager is in front. Empty, the default, uses the name the system gives the application, such as "Files".</description>
     </key>
 
     <key name="dock-magnification" type="b">

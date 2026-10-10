@@ -1991,10 +1991,22 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         mainGroup.add(hideOverviewRow);
         settings.bind('hide-overview-button', hideOverviewRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
-        const desktopNameRow = new Adw.EntryRow({ title: 'File Manager / Desktop Name' });
-        desktopNameRow.set_text(settings.get_string('desktop-app-name'));
-        this._onTextSettled(desktopNameRow,
-            () => settings.set_string('desktop-app-name', desktopNameRow.get_text() || 'Nautilus'));
+        // Empty follows the app, so File → New … Window says "Files" where the bar
+        // does; a name typed here, such as Finder, is used as typed.
+        const desktopNameRow = new Adw.ActionRow({
+            title: 'File Manager Name',
+            subtitle: 'In File \u2192 New \u2026 Window; empty uses the app\u2019s own',
+        });
+        const desktopNameEntry = new Gtk.Entry({
+            text: settings.get_string('desktop-app-name'),
+            placeholder_text: 'Automatic',
+            width_chars: 14,
+            valign: Gtk.Align.CENTER,
+        });
+        this._onTextSettled(desktopNameEntry,
+            () => settings.set_string('desktop-app-name', desktopNameEntry.get_text().trim()));
+        desktopNameRow.add_suffix(desktopNameEntry);
+        desktopNameRow.set_activatable_widget(desktopNameEntry);
         mainGroup.add(desktopNameRow);
 
         const panelGroup = new Adw.PreferencesGroup({

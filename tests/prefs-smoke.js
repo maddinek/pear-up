@@ -1462,6 +1462,50 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     }
 }
 
+// The file manager's name is empty out of the box, which follows the app: File
+// → New … Window says "Files" where the bar does. It used to default to
+// "Nautilus", which is what the app's code calls it. A name typed here wins, and
+// the row writes it once typing pauses.
+{
+    const settings = preferences.getSettings();
+    const page = pages.find(candidate => candidate.title === 'General');
+    const row = page && findWidget(page, widget =>
+        widget instanceof Adw.ActionRow && widget.title === 'File Manager Name');
+    const entry = row && findWidget(row, widget => widget instanceof Gtk.Entry);
+    const problemsBefore = problems.length;
+    const expect = (label, got, wanted) => {
+        if (got !== wanted)
+            problems.push(`file manager name: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+    // The write waits for typing to pause, which takes a turn of the main loop.
+    const pause = () => {
+        const loop = new GLib.MainLoop(null, false);
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 700, () => {
+            loop.quit();
+            return GLib.SOURCE_REMOVE;
+        });
+        loop.run();
+    };
+
+    if (!entry) {
+        problems.push('the General page has no File Manager Name entry');
+    } else {
+        expect('the default', settings.get_default_value('desktop-app-name').unpack(), '');
+        expect('the entry at first', entry.get_text(), '');
+
+        entry.set_text('  Finder ');
+        pause();
+        expect('the key after typing a name', settings.get_string('desktop-app-name'), 'Finder');
+
+        entry.set_text('');
+        pause();
+        expect('the key after clearing it', settings.get_string('desktop-app-name'), '');
+        if (problems.length === problemsBefore)
+            print('  file manager name: empty by default, written as typed, empty again once cleared');
+    }
+    settings.reset('desktop-app-name');
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);

@@ -19,6 +19,7 @@ import { pinTranslationX } from './menuPin.js';
 import { quitApp } from './util.js';
 import {
     isFileManager,
+    fileManagerName,
     compactMenuItems,
     fileMenu,
     editMenu,
@@ -622,7 +623,7 @@ export class MenuManager {
     }
 
     updateMenuForWindow(window) {
-        let appName = this._settings.get_string('desktop-app-name') || 'Nautilus';
+        let appName = '';
         let isAppFocused = false;
         let desktopId = "";
         let detectedApp = null;
@@ -663,7 +664,6 @@ export class MenuManager {
             }
         }
 
-        let fileManagerName = this._settings.get_string('desktop-app-name') || 'Nautilus';
         let isFiles = isFileManager(desktopId, wmClass);
 
         // Nothing in front: keep the System Menu (pear) and any custom
@@ -690,7 +690,8 @@ export class MenuManager {
         }
 
         if (this._settings.get_boolean('menu-file-enabled'))
-            menuData.push(fileMenu(isFiles, fileManagerName));
+            menuData.push(fileMenu(isFiles,
+                fileManagerName(this._settings.get_string('desktop-app-name'), appName)));
         if (this._settings.get_boolean('menu-edit-enabled'))
             menuData.push(editMenu());
         if (this._settings.get_boolean('menu-view-enabled'))

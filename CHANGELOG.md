@@ -8,6 +8,15 @@ human reads.
 
 ### Fixed
 
+- **File → New … Window uses the app's own name.** With Files in front the
+  item said "New Nautilus Window" while the bar said Files: it took its name from
+  the File Manager / Desktop Name setting, whose default was Nautilus, the name
+  of the app's code and not of the app. The setting is empty by default now,
+  which means the name the system gives the application, so the item reads "New
+  Files Window" and, for another file manager, what that one is called. A name
+  typed into the row still wins, as typed; one saved before, even Nautilus, is
+  kept. The row, now File Manager Name, says what empty does.
+
 - **Log Out is always there to click, and the power items stay current.** The
   pear menu greyed Log Out out on a machine with one account, and only in some
   sessions. It followed the shell's `canLogout`, which is not "may this user log
