@@ -2,7 +2,8 @@
 
 **Pear up your GNOME.** A macOS-like desktop in a single GNOME Shell extension: a global menu bar for
 the focused app, a system menu behind a bitten pear, the clock in the corner, window buttons on the
-left, and one settings window that also drives your dock.
+left, and one settings window that also drives your dock, your fonts and icons, your windows and your
+touchpad.
 
 > Not affiliated with Apple. The pear is the joke.
 
@@ -22,11 +23,12 @@ When no window is in front, the bar clears itself.
 
 **A system menu.** The bitten pear on the far left opens the Apple menu's arrangement, group for
 group: About This System; System Settings, your software centre and the extensions manager; Recent
-Items; Force Quit (click the window, like xkill); Sleep, Restart and Shut Down; then Lock Screen and Log Out, each naming the
-shortcut this system has bound to it. Every entry has an icon and every entry is optional — Activities,
-the App Grid, a system monitor and a terminal are available too, off by default because the menu they
-imitate has none of them. The icon can be any bundled distro logo, an Apple-style glyph, or your own
-image.
+Items; Force Quit (click the window, like xkill); Sleep, Restart and Shut Down; then Lock Screen and
+Log Out, each naming the shortcut this system has bound to it. Log Out is always there to click, as it
+is on macOS, even on a machine with a single account, where GNOME itself offers no entry for it. Every
+entry has an icon and every entry is optional — Activities, the App Grid, a system monitor and a
+terminal are available too, off by default because the menu they imitate has none of them. The icon
+can be any bundled distro logo, an Apple-style glyph, or your own image.
 
 **Recent Items**, split into Applications, Documents and Servers as macOS splits it, filled fresh each
 time it opens. Two honest differences: Applications comes from the shell's usage statistics, so it is
@@ -50,6 +52,8 @@ closer together and a size smaller than the bar, as the stat readouts of macOS m
 The clock stays in its corner when another extension moves it back to the centre afterwards, as
 Just Perfection does at its defaults whenever it is enabled.
 
+![A desktop with Pear Up: the app's menus in the bar, window buttons on the left, a dock on the right](assets/screenshots/desktop.jpg)
+
 **The rest of the desktop, where macOS has it.** Notifications appear in the top right corner, under
 the clock, and the bubble a volume or brightness key brings up sits there too, under the bar, rather
 than at the bottom of the screen. Switching desktops slides the desktop across with no popup, and the
@@ -58,12 +62,11 @@ hides them until two are in use. And a login starts on the desktop rather than i
 Automatic Screen Brightness on, the screen fades to each new light level over a few seconds, quicker
 brightening than darkening, as on macOS, rather than jumping there; the slider, the brightness keys
 and dimming when idle still act at once. That one is for GNOME 49 and later, where the shell sets the
-brightness itself. Each
-is a switch of its own in the Desktop group of the General page, on by default, and switching one off
-gives back what GNOME does.
+brightness itself. Each is a switch of its own in the Desktop group of the General page, on by default,
+and switching one off gives back what GNOME does.
 [Just Perfection](https://extensions.gnome.org/extension/3843/just-perfection/) is no longer needed
-for any of this, and neither is Dash to Dock's own switch for starting without the overview; left
-installed at its defaults, Just Perfection does not get in the way.
+for the macOS layout: none of this wants it, and neither does Dash to Dock's own switch for starting
+without the overview. Left installed at its defaults, Just Perfection does not get in the way.
 
 **A search icon of its own.** Optional, and it sits where macOS keeps Spotlight. What it opens is a
 setting: GNOME's own search, which needs nothing installed;
@@ -160,9 +163,10 @@ keyboard shortcuts.
 
 ## Settings
 
-Everything lives in one window — the panel layout, which menus appear, the dock, the type, accent,
-icons and cursor, the windows, the trackpad's scrolling, and your custom menus. Open it by pressing <kbd>Super</kbd> and typing "pear", from the app grid, or
-through the Extensions app.
+Everything lives in one window, a page for each part: the panel and the desktop (General), which
+menus appear (Menus), the dock (Dock), type, accent, icons and cursor (Appearance), the windows
+(Windows), the shortcuts and the trackpad (Keyboard), and your custom menus. Open it by pressing
+<kbd>Super</kbd> and typing "pear", from the app grid, or through the Extensions app.
 
 These settings cannot appear in GNOME Settings beside Appearance, which is where they arguably
 belong: `gnome-control-center` compiles every panel into its binary and has no plugin interface, so
@@ -172,30 +176,60 @@ no extension can add one. Installing puts a **Pear Up Settings** application ent
 | --- | --- |
 | ![General settings](assets/screenshots/settings-general.png) | ![Menu settings](assets/screenshots/settings-menus.png) |
 
-| Dock | Keyboard |
+| Appearance | Windows |
 | --- | --- |
-| ![Dock settings](assets/screenshots/settings-dock.png) | ![Keyboard settings](assets/screenshots/settings-keyboard.png) |
+| ![Appearance settings: type, accent, icon and cursor theme](assets/screenshots/settings-appearance.png) | ![Windows settings: buttons, opening, rounded corners](assets/screenshots/settings-windows.png) |
+
+| Dock | Dock, Glass and running apps |
+| --- | --- |
+| ![Dock settings](assets/screenshots/settings-dock.png) | ![Dock settings: frosted glass and running apps](assets/screenshots/settings-dock-glass.png) |
+
+| Keyboard | Keyboard, Trackpad |
+| --- | --- |
+| ![Keyboard settings](assets/screenshots/settings-keyboard.png) | ![Keyboard settings: scroll acceleration for the trackpad](assets/screenshots/settings-trackpad.png) |
 
 ## Requirements
 
 - GNOME Shell 45 – 50, under Wayland. Every release in that range is checked by the
   [test suite](#testing) rather than assumed; 50 is also what it is used on daily.
-- Optional: [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) for the Dock page
-- Optional: [Rounded Window Corners Reborn](https://extensions.gnome.org/extension/7048/rounded-window-corners-reborn/)
-  and [Magic Lamp](https://extensions.gnome.org/extension/3740/compiz-alike-magic-lamp-effect/) for the rounded
-  corners and the genie effect on the Windows page. Without them that page says so and links to them.
-- Optional: [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/) for the frosted
-  glass of the Dock page. Without it that group says so and links to it.
-- Optional: GNOME 50 or later, with libinput 1.30 or later, for the scroll acceleration on the
-  Keyboard page: earlier releases do not load libinput plugins from the user's directory.
-- Optional: [Search Light](https://extensions.gnome.org/extension/5489/search-light/) for
-  Spotlight-style search — but note it **ends a Wayland session on GNOME 50** when its icon is
-  clicked, until the fix in [`contrib/`](contrib/README.md) is applied. The search button here
-  defaults to GNOME's own search, which needs nothing installed and cannot be broken by a third
-  party.
+- Two things are for newer releases only, and their switches say so where they are not offered:
+  the smooth automatic brightness needs GNOME 49 or later, where the shell sets the brightness
+  itself, and the scroll acceleration needs GNOME 50 or later with libinput 1.30 or later, since
+  earlier releases do not load libinput plugins from the user's directory.
 
-Applications are opened through their desktop files where possible, with fallbacks, so the menu
-entries work across distributions rather than assuming GNOME's defaults.
+Nothing else is required. Applications are opened through their desktop files where possible, with
+fallbacks, so the menu entries work across distributions rather than assuming GNOME's defaults.
+
+## Optional helpers
+
+Pear Up configures these and ships none of them. Each is a row or a group on one of its pages that
+works when the helper is there and, when it is not, says so and links to it, so nothing is a dead end
+and nothing is installed behind your back. They are not needed for the macOS layout itself: the menu
+bar, the system menu, the top bar, the desktop tweaks, the shortcuts, the type and accent and the
+scroll acceleration all work on a bare GNOME.
+
+| Helper | What Pear Up does with it | Where |
+| --- | --- | --- |
+| [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) | The dock: edge, size, visibility, running-app dots, magnification, no backdrop behind the focused app | Dock |
+| [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/) | Frosted glass behind the dock, with a tint and a brightness, written to its dock settings and nowhere else | Dock, Glass |
+| [Rounded Window Corners Reborn](https://extensions.gnome.org/extension/7048/rounded-window-corners-reborn/) | Switched on and off through the shell, and its corner radius set | Windows |
+| [Magic Lamp](https://extensions.gnome.org/extension/3740/compiz-alike-magic-lamp-effect/) | Switched on and off through the shell, for the genie effect when a window minimizes | Windows |
+| [MacTahoe](https://github.com/vinceliuice/MacTahoe-icon-theme) and [WhiteSur](https://github.com/vinceliuice/WhiteSur-icon-theme) icon themes | Listed first in the icon theme picker; where neither is installed, a link and how to install one without root | Appearance |
+| [apple_cursor](https://github.com/ful1e5/apple_cursor) | The macOS cursors, listed first in the cursor theme picker, with the same link and hint | Appearance |
+| [Search Light](https://extensions.gnome.org/extension/5489/search-light/) | One of the three things the search icon can open | General |
+| [Vitals](https://github.com/corecoding/Vitals) | Its readouts set closer together and a size smaller, when you run it | none, automatic |
+
+Adwaita Sans, which the macOS type switch prefers, is GNOME's own and ships with GNOME 48 and later;
+Pear Up uses Inter where that is what is installed.
+
+[Just Perfection](https://extensions.gnome.org/extension/3843/just-perfection/) is no longer needed
+for the macOS layout: the notification and volume positions, the desktop popup and strip, starting on
+the desktop and the clock in the corner are Pear Up's own now. Left installed at its defaults it does
+not get in the way.
+
+Search Light **ends a Wayland session on GNOME 50** when its icon is clicked, until the fix in
+[`contrib/`](contrib/README.md) is applied. The search button here defaults to GNOME's own search,
+which needs nothing installed and cannot be broken by a third party.
 
 ## Install
 
