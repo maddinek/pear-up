@@ -204,12 +204,38 @@ human reads.
   undone in the right order. A monitor added later gets the same, and every
   window gets its own alignment back when the switch is turned off.
 
-- **The integration suite checks both, and that they are given back.** It
-  shows a notification and expects its banner against the right edge under
-  the bar, centres banners the way Just Perfection does and expects them back
-  on the right, and brings up the volume bubble and expects it in the top
-  right corner of the work area; after disabling, banners centred under the
-  clock and the bubble at the bottom centre with GNOME's own alignment.
+- **No Popup When Switching Desktops.** GNOME shows the row of desktops for a
+  moment whenever a shortcut switches desktop or moves a window to another;
+  macOS only slides the desktop across, and the slide, which is the shell's
+  own, stays. The popup is destroyed as the shell asks it to show, which is
+  what the shell itself does when a window switcher opens over one.
+
+- **Always Show the Desktops in the Overview.** The strip along the top of
+  the overview stays, as Mission Control's Spaces do, where GNOME hides it
+  until two desktops are in use. The overview's own strip is asked again when
+  the switch changes, and those of other monitors are made as the overview
+  opens.
+
+  Both patch a method of a class the shell keeps for its whole life, so the
+  patch is made once and recognised at the next enable rather than wrapped
+  again — the shell disables and enables Pear Up at every lock. Off, the
+  wrapper passes every call through, and it is taken out only while it is the
+  one installed: Just Perfection wraps the same two methods when its own
+  options for them are set, and putting back what Pear Up found would throw
+  its wrapper away. At its defaults it touches neither.
+
+- **The integration suite checks each of them, and that they are given
+  back.** It shows a notification and expects its banner against the right
+  edge under the bar, centres banners the way Just Perfection does and expects
+  them back on the right, and brings up the volume bubble and expects it in the
+  top right corner of the work area. It switches desktop with Cmd+PageDown and
+  back, the way GNOME's own bindings do, and expects the switch with no popup,
+  and the overview's strip of desktops shown with only two. After disabling:
+  banners centred under the clock, the bubble at the bottom centre with GNOME's
+  own alignment, the popup on the next switch, the strip's own rule, and both
+  methods the shell's own again, read from their source. Then it enables Pear
+  Up once more, as an unlock does, and disables it, and expects the same:
+  patched twice over, one disable would have left a wrapper behind.
 
 - **A Glass group on the Dock page, for a frosted-glass dock.** The floating,
   frosted pill macOS has is [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/)

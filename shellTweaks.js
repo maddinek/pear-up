@@ -1,6 +1,7 @@
 // Pieces of the shell that macOS arranges differently, set the way it has them:
 // notifications and the volume and brightness bubble in the top right corner,
-// under the bar.
+// under the bar; no popup when switching desktops; and the desktops always
+// along the top of the overview, as Mission Control shows its Spaces.
 //
 // Each is a switch of its own, and each puts back exactly what it changed. These
 // used to need Just Perfection; with them here it can go, and where it is still
@@ -14,14 +15,22 @@
 //   - Main.messageTray.bannerAlignment, the x-align of its _bannerBin
 //   - Main.osdWindowManager._osdWindows, each window held to its monitor by a
 //     Layout.MonitorConstraint, whose work-area keeps it off the bar
+//   - WorkspaceSwitcherPopup.prototype.display, called by the window manager's
+//     keybinding handler on a popup it has just made
+//   - ThumbnailsBox.prototype._updateShouldShow and its _shouldShow, and the
+//     overview's own strip at Main.overview._overview.controls._thumbnailsBox
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
+import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
+import * as WorkspaceThumbnail from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 
 export const SHELL_TWEAK_KEYS = [
     'notifications-top-right',
     'osd-top-right',
+    'hide-workspace-popup',
+    'always-show-workspace-thumbnails',
 ];
 
 // Claimed on the UI group while the bubble is in the corner, for the margins in
@@ -39,6 +48,94 @@ const FIGHT_WINDOW_US = 10 * GLib.USEC_PER_SEC;
 // One warning per tweak per shell session, not one per unlock: the shell
 // disables and enables the extension again at every lock.
 const warned = new Set();
+
+// Replaces one method of a class the shell keeps for its whole life. The patch
+// lives at module level, not per enable(), because the shell disables and
+// enables the extension at every lock and unlock, and the patch made by the
+// first enable() has to be recognised by the next rather than wrapped again.
+//
+// The replacement runs only while the patch is on; off, the wrapper hands every
+// call to the method it replaced. That matters when another extension wraps
+// the same method after this one — Just Perfection does, for both methods
+// patched here, when its own options for them are set. This wrapper is then no
+// longer the installed one, and putting back the method it replaced would
+// throw away theirs. So it stays in their chain, passing calls through, and is
+// taken out only while it is the one installed. Turned on again in that state,
+// a fresh wrapper goes on top; the one left in the chain still passes through.
+class MethodPatch {
+    constructor(owner, name, replacement) {
+        // A function, so that a class this shell does not have is found missing
+        // when the tweak is applied rather than when this module is loaded.
+        this._owner = owner;
+        this._name = name;
+        this._replacement = replacement;
+        this._installed = null;
+    }
+
+    // False when there is no such method here to patch.
+    enable() {
+        const installed = this._installed;
+        if (installed?.state.on)
+            return true;
+
+        const proto = this._owner();
+        if (installed && proto?.[this._name] === installed.wrapper) {
+            installed.state.on = true;
+            return true;
+        }
+
+        const original = proto?.[this._name];
+        if (typeof original !== 'function')
+            return false;
+
+        const state = { on: true };
+        const replacement = this._replacement;
+        const wrapper = function (...args) {
+            return state.on
+                ? replacement.call(this, original, ...args)
+                : original.apply(this, args);
+        };
+        proto[this._name] = wrapper;
+        this._installed = { proto, wrapper, original, state };
+        return true;
+    }
+
+    // Whether it was on.
+    disable() {
+        const installed = this._installed;
+        if (!installed?.state.on)
+            return false;
+
+        installed.state.on = false;
+        if (installed.proto[this._name] === installed.wrapper) {
+            installed.proto[this._name] = installed.original;
+            this._installed = null;
+        }
+        return true;
+    }
+}
+
+// The shell makes the popup in its keybinding handler, hidden, and calls this to
+// show it. Destroying it there is what the shell itself does when a window
+// switcher opens over one, and its destroy signal is how the window manager
+// forgets it and lets workspaces update again.
+const popupPatch = new MethodPatch(
+    () => WorkspaceSwitcherPopup.WorkspaceSwitcherPopup?.prototype, 'display',
+    function () {
+        this.destroy();
+    });
+
+// GNOME hides the strip of desktops while there are too few to be worth
+// showing: with dynamic workspaces, until there are three, which is to say
+// until two are in use. Mission Control shows its Spaces whatever their number.
+const thumbnailsPatch = new MethodPatch(
+    () => WorkspaceThumbnail.ThumbnailsBox?.prototype, '_updateShouldShow',
+    function () {
+        if (this._shouldShow === true)
+            return;
+        this._shouldShow = true;
+        this.notify('should-show');
+    });
 
 export class ShellTweaks {
     constructor(uuid, settings) {
@@ -63,6 +160,10 @@ export class ShellTweaks {
             () => this._moveBanners(), () => this._restoreBanners());
         this._toggle('osd-top-right', 'moving the volume and brightness bubble',
             () => this._moveOsd(), () => this._restoreOsd());
+        this._toggle('hide-workspace-popup', 'hiding the desktop switch popup',
+            () => this._hidePopup(), () => popupPatch.disable());
+        this._toggle('always-show-workspace-thumbnails', 'showing the desktops in the overview',
+            () => this._showThumbnails(), () => this._restoreThumbnails());
     }
 
     // Puts back everything, whatever the switches say.
@@ -73,6 +174,8 @@ export class ShellTweaks {
 
         this._guard('restoring notifications', () => this._restoreBanners());
         this._guard('restoring the volume and brightness bubble', () => this._restoreOsd());
+        this._guard('restoring the desktop switch popup', () => popupPatch.disable());
+        this._guard('restoring the desktops in the overview', () => this._restoreThumbnails());
         this._settings = null;
     }
 
@@ -287,5 +390,39 @@ export class ShellTweaks {
             }
         }
         Main.layoutManager.uiGroup.remove_style_class_name(OSD_CLASS);
+    }
+
+    // -------------------------------------------------- switching desktops
+    // The popup the shell shows for a moment whenever a shortcut switches
+    // desktop, or moves a window to another. macOS slides the desktop across
+    // and shows nothing else; the slide is the shell's own, and stays.
+    _hidePopup() {
+        if (!popupPatch.enable())
+            this._warnOnce('popup',
+                'This shell shows the desktop switch popup in a way Pear Up does not know; leaving it.');
+    }
+
+    // ------------------------------------------ the desktops in the overview
+    _showThumbnails() {
+        if (!thumbnailsPatch.enable()) {
+            this._warnOnce('thumbnails',
+                'This shell decides when to show the desktops in the overview in a way Pear Up does ' +
+                'not know; leaving it to decide.');
+            return;
+        }
+        this._refreshThumbnails();
+    }
+
+    _restoreThumbnails() {
+        if (thumbnailsPatch.disable())
+            this._refreshThumbnails();
+    }
+
+    // The patch reaches strips as they are made, and asks the one that already
+    // exists again. That is the overview's own, which lives as long as the
+    // shell; other monitors get strips of their own each time the overview
+    // opens, and those pick up whichever method is in place then.
+    _refreshThumbnails() {
+        Main.overview._overview?.controls?._thumbnailsBox?._updateShouldShow?.();
     }
 }

@@ -919,6 +919,82 @@ if state:
         check("notifications and the volume bubble could be exercised", False,
               exc.message.splitlines()[0])
 
+# ------------------------------------------------------------------ desktops
+# Switched with the keyboard, the way GNOME's own bindings do it, so the popup
+# is made by the window manager exactly as it would be: Cmd+PageDown, then back.
+# A window on the first desktop gives dynamic workspaces a second one to switch
+# to, and two in all, which is too few for GNOME to show the overview's strip.
+def workspace_state():
+    return json.loads(hook("GetWorkspaceState"))
+
+
+def switch_desktop(key):
+    """Types Cmd and the key; whether the switch popup was up at any moment
+    while the switch happened, and the desktops after it. From outside the
+    overview, which is the only place GNOME shows the popup at all."""
+    if workspace_state()["overviewVisible"]:
+        hook("HideOverview")
+        GLib.usleep(1000 * 1000)
+    hook("PressKeys", (["Super_L", key],), "(as)")
+    popup = False
+    # GNOME's popup stays up for 600ms, so sampling for that long sees it.
+    for _ in range(12):
+        GLib.usleep(50 * 1000)
+        popup = popup or workspace_state()["popup"]
+    GLib.usleep(400 * 1000)
+    return popup, workspace_state()
+
+
+print()
+print("  desktops:")
+if state:
+    desktop_window = None
+    try:
+        desktop_window = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(20):
+            GLib.usleep(500 * 1000)
+            if test_windows() >= 1:
+                break
+        hook("FocusFirstWindow")
+        GLib.usleep(1000 * 1000)
+
+        before = workspace_state()
+        check("while on, the popup's display and the strip's rule are Pear Up's",
+              not before["popupDisplayIsShells"] and not before["stripRuleIsShells"],
+              f"display is the shell's: {before['popupDisplayIsShells']}, "
+              f"rule is the shell's: {before['stripRuleIsShells']}")
+
+        popup, there = switch_desktop("Page_Down")
+        check("switching desktops with the keyboard shows no popup",
+              there["active"] != before["active"] and not popup,
+              f"desktop {before['active']} -> {there['active']} of {there['count']}, "
+              f"popup {'seen' if popup else 'not seen'}")
+        popup, back = switch_desktop("Page_Up")
+        check("and switching back shows none either",
+              back["active"] == before["active"] and not popup,
+              f"desktop {there['active']} -> {back['active']}, popup {'seen' if popup else 'not seen'}")
+
+        check("the overview's strip of desktops is on with only two desktops",
+              back["dynamic"] and back["count"] <= 2 and back["stripShouldShow"] is True,
+              f"{back['count']} desktops, dynamic: {back['dynamic']}, "
+              f"should show: {back['stripShouldShow']}")
+        hook("ShowOverview")
+        GLib.usleep(1500 * 1000)
+        opened = workspace_state()
+        hook("HideOverview")
+        GLib.usleep(1000 * 1000)
+        check("and is drawn when the overview opens",
+              opened["overviewVisible"] and opened["stripShown"] is True,
+              f"overview {opened['overviewVisible']}, strip shown: {opened['stripShown']}")
+    except (GLib.Error, FileNotFoundError) as exc:
+        check("the desktops could be switched", False, str(exc).splitlines()[0])
+    finally:
+        if desktop_window:
+            desktop_window.terminate()
+            desktop_window.wait()
+            GLib.usleep(800 * 1000)
+
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
 # something consumes its output, and the shell's screenshot API returns an empty
@@ -1039,6 +1115,14 @@ try:
               and w["box"][1] + w["box"][3] > w["monitor"][1] + w["monitor"][3] / 2
               for w in placed),
           f"{[(w['box'], w['monitor']) for w in windows]}")
+
+    desktops = workspace_state()
+    check("the popup's display and the strip's rule are the shell's own again",
+          desktops["popupDisplayIsShells"] and desktops["stripRuleIsShells"],
+          f"display: {desktops['popupDisplayIsShells']}, rule: {desktops['stripRuleIsShells']}")
+    check("the strip of desktops is off again with two desktops or fewer, as GNOME has it",
+          desktops["count"] <= 2 and desktops["stripShouldShow"] is False,
+          f"{desktops['count']} desktops, should show: {desktops['stripShouldShow']}")
     check("Activities button shown again", after_state["activitiesVisible"] is True,
           f"visible={after_state['activitiesVisible']}")
 except GLib.Error as exc:
@@ -1073,6 +1157,79 @@ if state:
 
 if dock.ready:
     dock.check_left_nothing("Pear Up is disabled")
+
+# GNOME shows no switch popup with a single desktop, so a window makes a second,
+# now that nothing else here could be disturbed by one. It stays for the second
+# enable below.
+desktop_window = None
+if state:
+    try:
+        desktop_window = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(20):
+            GLib.usleep(500 * 1000)
+            if test_windows() >= 1 and workspace_state()["count"] >= 2:
+                break
+        desktops = workspace_state()
+        popup, moved = switch_desktop("Page_Down")
+        check("with Pear Up off, switching desktops shows GNOME's popup again", popup,
+              f"desktop {desktops['active']} -> {moved['active']} of {moved['count']}, "
+              f"overview {moved['overviewVisible']}")
+        if moved["active"] != desktops["active"]:
+            switch_desktop("Page_Up")
+    except (GLib.Error, FileNotFoundError) as exc:
+        check("the desktops could be switched with Pear Up off", False, str(exc).splitlines()[0])
+
+# ------------------------------------------ enabled again, as after an unlock
+# The shell disables extensions at every lock and enables them again at unlock,
+# in the same shell, so whatever Pear Up patched the first time is still loaded
+# when it is enabled the second. Patched again on top of itself, one disable
+# would leave the first wrapper behind; this enables and disables once more and
+# expects the shell's own methods back, and everything else as before.
+print()
+print("  enabled again, as after an unlock:")
+if state:
+    try:
+        call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
+             "EnableExtension", (UUID,), "(s)")
+        GLib.usleep(3 * 1000 * 1000)
+        again = extension_info()
+        check("Pear Up enables again with no error",
+              again.get("state") == 1 and not again.get("error"),
+              f"state={again.get('state')} error={again.get('error') or 'none'}")
+
+        desktops = workspace_state()
+        check("the popup is hidden and the strip shown again",
+              not desktops["popupDisplayIsShells"] and not desktops["stripRuleIsShells"]
+              and desktops["stripShouldShow"] is True,
+              f"display is the shell's: {desktops['popupDisplayIsShells']}, "
+              f"should show: {desktops['stripShouldShow']}")
+        popup, moved = switch_desktop("Page_Down")
+        check("and switching desktops shows no popup", not popup)
+        if moved["active"] != desktops["active"]:
+            switch_desktop("Page_Up")
+        check("notifications go to the right again", banner_state()["alignment"] == END)
+
+        call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
+             "DisableExtension", (UUID,), "(s)")
+        GLib.usleep(2 * 1000 * 1000)
+        desktops = workspace_state()
+        check("disabled again, the shell's own methods are back, with nothing left wrapped",
+              desktops["popupDisplayIsShells"] and desktops["stripRuleIsShells"]
+              and desktops["count"] <= 2 and desktops["stripShouldShow"] is False,
+              f"display: {desktops['popupDisplayIsShells']}, rule: {desktops['stripRuleIsShells']}, "
+              f"should show: {desktops['stripShouldShow']}")
+        osd = osd_state(show=False)
+        check("and notifications and the bubble are GNOME's again",
+              banner_state()["alignment"] == CENTER and not osd["styled"]
+              and all(w["xAlign"] == CENTER and w["yAlign"] == END and w["onWorkArea"] is False
+                      for w in osd["windows"]))
+    except GLib.Error as exc:
+        check("Pear Up could be enabled and disabled again", False, exc.message.splitlines()[0])
+    finally:
+        if desktop_window:
+            desktop_window.terminate()
+            desktop_window.wait()
 
 # ------------------------------------------------------------------ summary
 failures = [label for label, ok, _ in results if not ok]

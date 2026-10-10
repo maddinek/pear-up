@@ -141,6 +141,16 @@
       <summary>Show the volume and brightness bubble in the top right corner</summary>
       <description>Under the bar, as on macOS, instead of at the bottom centre of the screen.</description>
     </key>
+    <key name="hide-workspace-popup" type="b">
+      <default>true</default>
+      <summary>Show no popup when switching desktops</summary>
+      <description>GNOME shows the desktops for a moment whenever a shortcut switches to another one or moves a window there. macOS only slides the desktop across, which the shell still does.</description>
+    </key>
+    <key name="always-show-workspace-thumbnails" type="b">
+      <default>true</default>
+      <summary>Always show the desktops along the top of the overview</summary>
+      <description>GNOME hides them until two are in use; Mission Control shows its Spaces however many there are.</description>
+    </key>
 
     <!-- The panel button is this extension's own, so it works with no search
          extension installed at all. What it opens is left open: GNOME's search

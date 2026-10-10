@@ -1883,6 +1883,8 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     const rows = [
         ['Notifications at the Top Right', 'notifications-top-right'],
         ['Volume and Brightness at the Top Right', 'osd-top-right'],
+        ['No Popup When Switching Desktops', 'hide-workspace-popup'],
+        ['Always Show the Desktops in the Overview', 'always-show-workspace-thumbnails'],
     ];
     const expect = (label, got, wanted) => {
         if (got !== wanted)

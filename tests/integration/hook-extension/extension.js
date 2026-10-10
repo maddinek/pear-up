@@ -12,12 +12,15 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
+import Meta from 'gi://Meta';
 import St from 'gi://St';
 import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
+import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
+import * as WorkspaceThumbnail from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 
 const IFACE = `
 <node>
@@ -181,6 +184,12 @@ const IFACE = `
       <arg type="b" direction="out" name="hidden"/>
     </method>
     <method name="GetOsdState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="ShowOverview">
+      <arg type="b" direction="out" name="shown"/>
+    </method>
+    <method name="GetWorkspaceState">
       <arg type="s" direction="out" name="state"/>
     </method>
   </interface>
@@ -1171,6 +1180,39 @@ export default class TestHookExtension extends Extension {
         return JSON.stringify({
             windows,
             styled: Main.layoutManager.uiGroup.has_style_class_name('pearup-osd-top-right'),
+        });
+    }
+
+    ShowOverview() {
+        Main.overview.show();
+        return true;
+    }
+
+    // The desktops: which is active and how many, whether the window manager
+    // has a switch popup up, and what the overview's strip of them says and
+    // shows. Whether the two methods involved are the shell's own is read from
+    // their source, which is what tells a method put back from a wrapper left
+    // behind.
+    GetWorkspaceState() {
+        const manager = global.workspace_manager;
+        const strip = Main.overview._overview?.controls?._thumbnailsBox ?? null;
+        const source = (proto, name) => proto?.[name]?.toString() ?? '';
+        return JSON.stringify({
+            active: manager.get_active_workspace_index(),
+            count: manager.n_workspaces,
+            popup: !!Main.wm._workspaceSwitcherPopup ||
+                Main.layoutManager.uiGroup.get_children()
+                    .some(actor => actor instanceof WorkspaceSwitcherPopup.WorkspaceSwitcherPopup),
+            dynamic: Meta.prefs_get_dynamic_workspaces(),
+            stripShouldShow: strip ? strip.shouldShow : null,
+            stripShown: strip ? strip.visible && strip.mapped : null,
+            overviewVisible: Main.overview.visible,
+            // DISPLAY_TIMEOUT is in display() on every release from 45 to 50,
+            // and in no wrapper.
+            popupDisplayIsShells: source(WorkspaceSwitcherPopup.WorkspaceSwitcherPopup.prototype, 'display')
+                .includes('DISPLAY_TIMEOUT'),
+            stripRuleIsShells: source(WorkspaceThumbnail.ThumbnailsBox.prototype, '_updateShouldShow')
+                .includes('NUM_WORKSPACES_THRESHOLD'),
         });
     }
 

@@ -89,6 +89,13 @@ dbus-run-session -- bash -c '
     gsettings set org.gnome.shell favorite-apps \
         "$(python3 /src/tests/integration/make-test-apps.py)"
 
+    # Dynamic workspaces, as a GNOME session has them. The shell ships that as
+    # an override for XDG_CURRENT_DESKTOP=GNOME only, which this shell is not
+    # started under, so it would otherwise run with four fixed ones — and with
+    # four, GNOME shows the overview'"'"'s strip of desktops anyway, which leaves
+    # nothing for the check that Pear Up always shows it to tell apart.
+    gsettings set org.gnome.mutter dynamic-workspaces true
+
     # The question here is whether the code works on this release, which is
     # separate from whether metadata.json claims it. Without this the shell
     # refuses to load anything not claiming its version, and the answer would

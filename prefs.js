@@ -2383,6 +2383,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 'Under the clock wherever it is; GNOME centres them under a centred clock'],
             ['osd-top-right', 'Volume and Brightness at the Top Right',
                 'Under the bar; GNOME shows them at the bottom centre'],
+            ['hide-workspace-popup', 'No Popup When Switching Desktops',
+                'The desktop slides across, and nothing else shows'],
+            ['always-show-workspace-thumbnails', 'Always Show the Desktops in the Overview',
+                'Along the top, like Mission Control; GNOME hides them until two are in use'],
         ]) {
             const row = new Adw.SwitchRow({ title, subtitle });
             group.add(row);

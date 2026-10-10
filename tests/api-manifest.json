@@ -286,7 +286,13 @@
     "osdWindowManager",
     "_osdWindows",
     "MonitorConstraint",
-    "work-area"
+    "work-area",
+    "WorkspaceSwitcherPopup",
+    "ThumbnailsBox",
+    "_updateShouldShow",
+    "_shouldShow",
+    "should-show",
+    "_thumbnailsBox"
   ],
 
   "absent": {
