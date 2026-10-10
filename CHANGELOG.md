@@ -111,11 +111,11 @@ human reads.
 ### Added
 
 - **A Windows page, after Appearance.** What macOS does with its windows, in
-  two groups so far: the buttons, and how new windows open. Window Buttons on
-  the Left moves here from General, with the same switch and the same two
-  layouts. As on Appearance, none of it is Pear Up's own setting, so each row
-  reads the state of the thing it drives, whoever put it there, and follows it
-  when it changes elsewhere.
+  four groups: the buttons, how new windows open, rounded corners and the
+  minimize effect. Window Buttons on the Left moves here from General, with the
+  same switch and the same two layouts. As on Appearance, none of it is Pear
+  Up's own setting, so each row reads the state of the thing it drives, whoever
+  put it there, and follows it when it changes elsewhere.
 - **Small Window Buttons.** Shrinks the close, minimize and maximize buttons to
   about the size macOS draws them, in every app that draws its own title bar.
   The size is CSS, and Pear Up keeps one block of it in each of
@@ -143,6 +143,30 @@ human reads.
   for, as on macOS. It remembers what it replaced in `displaced-settings`, as
   the Appearance switches do, and switching off gives the user's own value back,
   or the default if there was none.
+- **Rounded corners and the genie effect, when their extensions are there.**
+  [Rounded Window Corners Reborn](https://extensions.gnome.org/extension/7048/rounded-window-corners-reborn/)
+  and [Magic Lamp](https://extensions.gnome.org/extension/3740/compiz-alike-magic-lamp-effect/),
+  neither of which Pear Up installs. When one is installed, in the user's data
+  directory or a system one, the page has a switch for it and, for the corners,
+  a Corner Radius slider from 0 to 40px; when it is not, a row says so and links
+  to its page on extensions.gnome.org. The switches ask the shell, as the
+  Extensions app does, through `EnableExtension` and `DisableExtension` on
+  `org.gnome.Shell.Extensions`, rather than writing `enabled-extensions`: the
+  shell puts the extension in one list and takes it out of the other, which
+  matters because `disabled-extensions` wins over `enabled-extensions`, and it
+  says whether it knows the extension at all. An extension installed since the
+  session began is unknown to a Wayland shell until the next login, and the
+  switch goes back with a note saying so, as it does when the shell cannot be
+  reached. Each switch reads the same two lists and `disable-user-extensions`,
+  so it is on whenever the extension is, however it was switched; it keeps the
+  user's choice while a call is out and once the shell has said yes, because on
+  GNOME 45 and 48 the lists in the preferences process are still the old ones
+  when the reply arrives and catch up a moment later; and a second flip is a
+  second call, in order. The radius is one entry of
+  `global-rounded-corner-settings`, a dictionary of mixed types the extension
+  keeps everything in: it is rebuilt entry by entry, so every other entry comes
+  back with the type and the place it had, and the radius goes back as the
+  unsigned integer the extension writes.
 - **The preferences smoke test drives the Windows page.** Against the
   container's own in-memory settings, and a config directory the runner makes
   and names so the test can tell it from anyone's real one: it does not write
@@ -155,11 +179,19 @@ human reads.
   directory where a file should be, a decoder that changes what it reads and a
   write that fails half way each leave the files as they were, which taking out
   the read-everything-first order, the rollback or the re-encoding check each
-  makes fail. Auto-maximize is switched on and off through a second preferences
-  object, as after the window was closed and opened again, and gives back the
-  user's value, or none. The window is also opened at the width it asks for, on
-  a screen wide enough to hold it, and every page label in the switcher has to
-  be whole.
+  makes fail. The extension switches run against a stand-in for the shell that
+  does what its `enableExtension` and `disableExtension` do to the two lists,
+  with the extensions' metadata, and for Rounded Window Corners Reborn the
+  schema of its one key, put where GNOME looks: one in the user's data
+  directory and one in a system one, and once with neither. It covers the
+  uuid in both lists, extensions switched off as a whole, a shell that does not
+  know the extension, one that cannot be reached, a second flip while a call is
+  out, and the radius against a dictionary with odd types, with no radius and
+  with a radius stored as a double. Auto-maximize is switched on and off
+  through a second preferences object, as after the window was closed and
+  opened again, and gives back the user's value, or none. The window is also
+  opened at the width it asks for, on a screen wide enough to hold it, and every
+  page label in the switcher has to be whole.
 - **An Appearance page, starting with type and the accent.** macOS-Like Type
   sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
   own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns

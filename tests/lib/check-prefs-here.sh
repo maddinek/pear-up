@@ -115,3 +115,75 @@ HOME="$THEMES/home" XDG_DATA_HOME="$THEMES/data" \
     XDG_DATA_DIRS="$THEMES/share:/usr/local/share:/usr/share" \
     PREFS_SMOKE_THEMES="$THEMES" \
     "${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
+
+# And once more with the two extensions the Windows page drives installed, where
+# GNOME looks for them: Rounded Window Corners Reborn in the user's data
+# directory and Magic Lamp in a system one, as Bazzite ships it. Real ones would
+# need the shell they run in; the page only needs to find them, read the one
+# key of the first that it writes, and ask the shell to switch them, which the
+# smoke test stands in for. So these are the metadata and, for the first, the
+# schema of that key, with the types and the shape of the default the real
+# extension has.
+HELPERS="$WORK/extension-fixtures"
+rm -rf "$HELPERS"
+
+rounded="$HELPERS/data/gnome-shell/extensions/rounded-window-corners@fxgn"
+mkdir -p "$rounded/schemas"
+cat > "$rounded/metadata.json" <<'JSON'
+{
+  "uuid": "rounded-window-corners@fxgn",
+  "name": "Rounded Window Corners Reborn (fixture)",
+  "description": "Stands in for the extension in tests/lib/check-prefs-here.sh",
+  "settings-schema": "org.gnome.shell.extensions.rounded-window-corners-reborn",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 25
+}
+JSON
+cat > "$rounded/schemas/org.gnome.shell.extensions.rounded-window-corners-reborn.gschema.xml" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.rounded-window-corners-reborn"
+          path="/org/gnome/shell/extensions/rounded-window-corners-reborn/">
+    <key name="global-rounded-corner-settings" type="a{sv}">
+      <summary>Global rounded corners settings for all windows</summary>
+      <default>
+        {
+          'padding': &lt;{
+            'left': &lt;uint32 1&gt;,
+            'right': &lt;uint32 1&gt;,
+            'top': &lt;uint32 1&gt;,
+            'bottom': &lt;uint32 1&gt;
+          }&gt;,
+          'keepRoundedCorners': &lt;{
+            'maximized': &lt;false&gt;,
+            'fullscreen': &lt;false&gt;
+          }&gt;,
+          'borderRadius': &lt;uint32 15&gt;,
+          'smoothing': &lt;0&gt;,
+          'borderColor': &lt;[0.5, 0.5, 0.5, 1.0]&gt;,
+          'enabled': &lt;true&gt;
+        }
+      </default>
+    </key>
+  </schema>
+</schemalist>
+XML
+glib-compile-schemas "$rounded/schemas"
+
+lamp="$HELPERS/share/gnome-shell/extensions/compiz-alike-magic-lamp-effect@hermes83.github.com"
+mkdir -p "$lamp"
+cat > "$lamp/metadata.json" <<'JSON'
+{
+  "uuid": "compiz-alike-magic-lamp-effect@hermes83.github.com",
+  "name": "Compiz alike magic lamp effect (fixture)",
+  "description": "Stands in for the extension in tests/lib/check-prefs-here.sh",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 25
+}
+JSON
+
+echo "  with Rounded Window Corners Reborn and Magic Lamp installed:"
+XDG_DATA_HOME="$HELPERS/data" \
+    XDG_DATA_DIRS="$HELPERS/share:/usr/local/share:/usr/share" \
+    PREFS_SMOKE_HELPERS="$HELPERS" \
+    "${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"

@@ -700,14 +700,18 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
     }
 }
 
-// The Windows page drives GNOME's window settings and the user's gtk.css files.
-// As with Appearance, the checks that matter are what is
+// The Windows page drives GNOME's window settings, the user's gtk.css files and
+// two other extensions. As with Appearance, the checks that matter are what is
 // written and what is handed back; run here the settings land in the in-memory
 // backend and the files in a directory the runner made, so it is safe to drive.
 const BUTTON_LAYOUT_LEFT = 'close,minimize,maximize:appmenu';
 const BUTTON_LAYOUT_RIGHT = 'appmenu:minimize,maximize,close';
 const BLOCK_BEGIN = '/* >>> pear-up window buttons >>> */';
 const BLOCK_END = '/* <<< pear-up window buttons <<< */';
+const ROUNDED_UUID = 'rounded-window-corners@fxgn';
+const ROUNDED_SCHEMA = 'org.gnome.shell.extensions.rounded-window-corners-reborn';
+const ROUNDED_KEY = 'global-rounded-corner-settings';
+const LAMP_UUID = 'compiz-alike-magic-lamp-effect@hermes83.github.com';
 
 // The page and the row in it, from a preferences object of its own, which as far
 // as anything held in memory goes is a window opened afresh.
@@ -1163,6 +1167,299 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     reset();
     if (problems.length === problemsBefore)
         print('  small window buttons: the block goes in and out of both files, touching nothing else');
+}
+
+// The extensions the Windows page drives, installed or not. Whether they are is
+// whatever the runner arranged: with PREFS_SMOKE_HELPERS it has put both where
+// GNOME looks, one in the user's data directory and one in a system one.
+{
+    const helpers = GLib.getenv('PREFS_SMOKE_HELPERS');
+    const problemsBefore = problems.length;
+    const expect = windowsExpecter('extensions');
+    const ROUNDED_URL = 'extensions.gnome.org/extension/7048/rounded-window-corners-reborn/';
+    const LAMP_URL = 'extensions.gnome.org/extension/3740/compiz-alike-magic-lamp-effect/';
+    const ROUNDED_ROW = 'Rounded Corners';
+    const RADIUS_ROW = 'Corner Radius';
+    const LAMP_ROW = 'Genie Effect';
+
+    const shell = preferences._settingsForSchema('org.gnome.shell');
+    const linkTo = (page, target) => findWidget(page, widget =>
+        widget instanceof Gtk.LinkButton && widget.uri.endsWith(target));
+    const radiusRowOf = page => findWidget(page, widget =>
+        widget instanceof Adw.ActionRow && widget.title === RADIUS_ROW);
+    const scaleOf = row => findWidget(row, widget => widget instanceof Gtk.Scale);
+
+    if (!helpers) {
+        // Neither is installed: the links, and nothing that would do anything.
+        const page = windowsPageOf(new Preferences(metadata));
+        expect('the rounded corners switch without the extension', !!windowsSwitch(page, ROUNDED_ROW), false);
+        expect('the radius without the extension', !!radiusRowOf(page), false);
+        expect('the genie switch without the extension', !!windowsSwitch(page, LAMP_ROW), false);
+        expect('the link to Rounded Window Corners Reborn', !!linkTo(page, ROUNDED_URL), true);
+        expect('the link to Magic Lamp', !!linkTo(page, LAMP_URL), true);
+        expect('both links, in full', [
+            linkTo(page, ROUNDED_URL)?.uri, linkTo(page, LAMP_URL)?.uri,
+        ], [`https://${ROUNDED_URL}`, `https://${LAMP_URL}`]);
+        if (problems.length === problemsBefore)
+            print('  extensions: neither installed, so both show where to get them and nothing else');
+    } else {
+        // Both installed: no links, and the rows work through the shell.
+        expect('the fixture directories are the ones GNOME would search', [
+            preferences._extensionInstalled(ROUNDED_UUID), preferences._extensionInstalled(LAMP_UUID),
+            preferences._extensionInstalled('nothing@nowhere'),
+        ], [true, true, false]);
+        const page = windowsPageOf(new Preferences(metadata));
+        expect('the link to Rounded Window Corners Reborn once installed', !!linkTo(page, ROUNDED_URL), false);
+        expect('the link to Magic Lamp once installed', !!linkTo(page, LAMP_URL), false);
+
+        // The shell, as far as these rows can tell: the two methods the Extensions
+        // app calls, doing what the shell's own enableExtension and
+        // disableExtension do to the two lists, for the extensions it knows.
+        const calls = [];
+        const fakeShell = (known = [ROUNDED_UUID, LAMP_UUID]) => (method, uuid) => {
+            calls.push([method, uuid]);
+            if (!known.includes(uuid))
+                return Promise.resolve(false);
+            const enabled = shell.get_strv('enabled-extensions').filter(item => item !== uuid);
+            const disabled = shell.get_strv('disabled-extensions').filter(item => item !== uuid);
+            if (method === 'EnableExtension') {
+                shell.set_strv('disabled-extensions', disabled);
+                shell.set_strv('enabled-extensions', [...enabled, uuid]);
+            } else {
+                shell.set_strv('enabled-extensions', enabled);
+                shell.set_strv('disabled-extensions', [...disabled, uuid]);
+            }
+            return Promise.resolve(true);
+        };
+        const prefsWithShell = fake => {
+            const fresh = new Preferences(metadata);
+            fresh._callShellExtensions = fake ?? fakeShell();
+            return fresh;
+        };
+        // The answers arrive in later turns of the loop.
+        const settle = async () => {
+            for (let turn = 0; turn < 8; turn++)
+                await null;
+        };
+        const resetShell = () => {
+            shell.reset('enabled-extensions');
+            shell.reset('disabled-extensions');
+            shell.reset('disable-user-extensions');
+            calls.length = 0;
+        };
+        const lamp = prefs => windowsSwitch(windowsPageOf(prefs), LAMP_ROW);
+
+        resetShell();
+        shell.set_strv('enabled-extensions', ['other@elsewhere']);
+        let row = lamp(prefsWithShell());
+        const subtitle = row.subtitle;
+        expect('the genie switch with the extension off', [row.active, row.sensitive], [false, true]);
+        row.active = true;
+        await settle();
+        expect('the call made to switch it on', calls, [['EnableExtension', LAMP_UUID]]);
+        expect('enabled-extensions after switching on', shell.get_strv('enabled-extensions'), ['other@elsewhere', LAMP_UUID]);
+        expect('the genie switch after switching on', [row.active, row.subtitle], [true, subtitle]);
+        expect('the genie switch after reopening', lamp(prefsWithShell()).active, true);
+
+        // Off goes through the shell too, which also puts it in the list that
+        // beats the other, so that a system-wide default cannot bring it back.
+        row.active = false;
+        await settle();
+        expect('the call made to switch it off', calls.at(-1), ['DisableExtension', LAMP_UUID]);
+        expect('enabled-extensions after switching off', shell.get_strv('enabled-extensions'), ['other@elsewhere']);
+        expect('disabled-extensions after switching off', shell.get_strv('disabled-extensions'), [LAMP_UUID]);
+        expect('the genie switch after switching off', lamp(prefsWithShell()).active, false);
+        row.active = true;
+        await settle();
+        expect('disabled-extensions after switching on again', shell.get_strv('disabled-extensions'), []);
+
+        // A uuid in both lists is off: the shell lets the second win.
+        shell.set_strv('enabled-extensions', [LAMP_UUID]);
+        shell.set_strv('disabled-extensions', [LAMP_UUID]);
+        expect('the genie switch with the uuid in both lists', lamp(prefsWithShell()).active, false);
+
+        // Extensions switched off as a whole: nothing here can switch one on.
+        resetShell();
+        shell.set_strv('enabled-extensions', [LAMP_UUID]);
+        row = lamp(prefsWithShell());
+        expect('the genie switch with the extension on', row.active, true);
+        shell.set_boolean('disable-user-extensions', true);
+        expect('the genie switch with extensions switched off', [row.active, row.sensitive], [false, false]);
+        if (!/switched off/.test(row.subtitle))
+            problems.push(`extensions: the subtitle does not say extensions are switched off (${row.subtitle})`);
+        shell.set_boolean('disable-user-extensions', false);
+        expect('the genie switch with extensions switched on again', [row.active, row.sensitive], [true, true]);
+
+        // It follows the keys when they change elsewhere, without a call.
+        calls.length = 0;
+        shell.set_strv('enabled-extensions', []);
+        expect('the genie switch after the extension was switched off elsewhere', row.active, false);
+        shell.set_strv('enabled-extensions', [LAMP_UUID]);
+        expect('the genie switch after it was switched on elsewhere', row.active, true);
+        expect('calls made for changes made elsewhere', calls, []);
+
+        // While the shell is working on a call, its half-written lists are not
+        // the answer: the switch stays as the user left it.
+        resetShell();
+        let release;
+        row = lamp(prefsWithShell((method, uuid) => {
+            calls.push([method, uuid]);
+            return new Promise(resolve => {
+                release = () => {
+                    shell.set_strv('disabled-extensions', []);
+                    shell.set_strv('enabled-extensions', [uuid]);
+                    resolve(true);
+                };
+            });
+        }));
+        row.active = true;
+        shell.set_strv('disabled-extensions', ['unrelated@elsewhere']);
+        expect('the genie switch while the shell is still working', row.active, true);
+        release();
+        await settle();
+        expect('the genie switch once the shell has finished', row.active, true);
+
+        // Flipped back before the shell has answered: two requests, in order,
+        // and the switch shows the last while the first is answered.
+        resetShell();
+        const queue = [];
+        row = lamp(prefsWithShell((method, uuid) =>
+            new Promise(resolve => queue.push(() => resolve(fakeShell()(method, uuid))))));
+        row.active = true;
+        row.active = false;
+        expect('requests made before the shell answered', queue.length, 2);
+        queue[0]?.();
+        await settle();
+        expect('the genie switch when only the first request is answered', row.active, false);
+        queue[1]?.();
+        await settle();
+        expect('the calls made, in order', calls, [['EnableExtension', LAMP_UUID], ['DisableExtension', LAMP_UUID]]);
+        expect('the genie switch when both are answered', row.active, false);
+        expect('disabled-extensions when both are answered', shell.get_strv('disabled-extensions'), [LAMP_UUID]);
+
+        // A shell that does not know the extension, as when it was installed
+        // after login: the switch goes back and says what to do.
+        resetShell();
+        row = lamp(prefsWithShell(fakeShell([])));
+        row.active = true;
+        await settle();
+        expect('the genie switch for an extension the shell has not loaded', row.active, false);
+        expect('calls made for an extension the shell has not loaded, putting the switch back asks nothing more',
+            calls, [['EnableExtension', LAMP_UUID]]);
+        expect('the lists for an extension the shell has not loaded',
+            [shell.get_strv('enabled-extensions'), shell.get_strv('disabled-extensions')], [[], []]);
+        if (!/log out/i.test(row.subtitle))
+            problems.push(`extensions: the subtitle does not say to log out and in (${row.subtitle})`);
+
+        // No shell to ask, or one that refuses: the same.
+        resetShell();
+        let refused = 0;
+        const refusing = prefsWithShell(() => {
+            refused++;
+            return Promise.reject(new Error('no bus'));
+        });
+        row = lamp(refusing);
+        row.active = true;
+        await settle();
+        expect('the genie switch with no shell to ask', row.active, false);
+        expect('calls made with no shell to ask', refused, 1);
+        if (!/no bus/.test(row.subtitle))
+            problems.push(`extensions: the subtitle does not say what went wrong (${row.subtitle})`);
+        // ...and a later try that works clears it.
+        refusing._callShellExtensions = fakeShell();
+        row.active = true;
+        await settle();
+        expect('the genie switch once the shell answers', [row.active, row.subtitle], [true, subtitle]);
+
+        // The radius: one entry of the extension's dictionary, the others kept.
+        resetShell();
+        const rounded = preferences._settingsForSchema(ROUNDED_SCHEMA);
+        const dictOf = () => {
+            const value = rounded.get_value(ROUNDED_KEY);
+            return Array.from({ length: value.n_children() }, (_, index) => {
+                const entry = value.get_child_value(index);
+                const inner = entry.get_child_value(1).get_variant();
+                return [entry.get_child_value(0).get_string()[0], inner.get_type_string(), inner.print(true)];
+            });
+        };
+        const others = () => dictOf().filter(([name]) => name !== 'borderRadius');
+        const radiusOf = () => dictOf().find(([name]) => name === 'borderRadius');
+
+        if (!rounded) {
+            problems.push('extensions: the Rounded Window Corners Reborn schema was not found in its directory');
+        } else {
+            rounded.reset(ROUNDED_KEY);
+            const untouched = dictOf();
+            expect('the dictionary at first', untouched.map(([name]) => name),
+                ['padding', 'keepRoundedCorners', 'borderRadius', 'smoothing', 'borderColor', 'enabled']);
+            const roundedRow = prefs => windowsSwitch(windowsPageOf(prefs), ROUNDED_ROW);
+
+            const rowRounded = roundedRow(prefsWithShell());
+            rowRounded.active = true;
+            await settle();
+            expect('the call made to switch the corners on', calls.at(-1), ['EnableExtension', ROUNDED_UUID]);
+            expect('enabled-extensions with the corners on', shell.get_strv('enabled-extensions'), [ROUNDED_UUID]);
+
+            const radiusPage = windowsPageOf(prefsWithShell());
+            const radiusRow = radiusRowOf(radiusPage);
+            const scale = radiusRow && scaleOf(radiusRow);
+            if (!scale) {
+                problems.push('extensions: the radius row or its slider is missing with the extension installed');
+            } else {
+                const adjustment = scale.get_adjustment();
+                expect('the slider bounds', [adjustment.lower, adjustment.upper], [0, 40]);
+                expect('the slider at the extension\'s default', scale.get_value(), 15);
+                expect('the slider with the extension on', radiusRow.sensitive, true);
+
+                scale.set_value(22);
+                expect('the radius after the slider moved', radiusOf(), ['borderRadius', 'u', 'uint32 22']);
+                expect('every other entry after the slider moved', others(), untouched.filter(([name]) => name !== 'borderRadius'));
+                expect('the order of the entries after the slider moved', dictOf().map(([name]) => name),
+                    untouched.map(([name]) => name));
+                scale.set_value(0);
+                expect('the radius at the bottom of the slider', radiusOf(), ['borderRadius', 'u', 'uint32 0']);
+                scale.set_value(40);
+                expect('the radius at the top of the slider', radiusOf(), ['borderRadius', 'u', 'uint32 40']);
+                expect('every other entry after the slider moved again', others(), untouched.filter(([name]) => name !== 'borderRadius'));
+
+                // The key changing elsewhere, as when the extension's own window is used.
+                rounded.set_value(ROUNDED_KEY, GLib.Variant.parse(null,
+                    "{'borderRadius': <uint32 9>, 'enabled': <true>}", null, null));
+                expect('the slider after the dictionary changed elsewhere', scale.get_value(), 9);
+
+                // Whatever the dictionary holds besides the radius, of whatever type,
+                // comes through a change of radius as it was.
+                rounded.set_value(ROUNDED_KEY, GLib.Variant.parse(null,
+                    "{'enabled': <false>, 'smoothing': <2.5>, 'padding': <{'left': <uint32 4>}>, 'borderRadius': <15.0>, 'keepRoundedCorners': <{'maximized': <true>}>, 'extra': <['a', 'b']>}",
+                    null, null));
+                const unusual = others();
+                expect('the slider on a radius stored as a double', scale.get_value(), 15);
+                scale.set_value(18);
+                expect('the radius, stored as an unsigned integer again', radiusOf(), ['borderRadius', 'u', 'uint32 18']);
+                expect('the unusual entries, with their types', others(), unusual);
+
+                // A dictionary with no radius in it takes one, and loses nothing.
+                rounded.set_value(ROUNDED_KEY, GLib.Variant.parse(null,
+                    "{'enabled': <false>, 'smoothing': <2.5>}", null, null));
+                const sparse = others();
+                scale.set_value(12);
+                expect('the radius added to a dictionary without one', radiusOf(), ['borderRadius', 'u', 'uint32 12']);
+                expect('the entries of a dictionary without a radius', others(), sparse);
+
+                // Nothing to set while the extension is off.
+                rowRounded.active = false;
+                await settle();
+                expect('the call made to switch the corners off', calls.at(-1), ['DisableExtension', ROUNDED_UUID]);
+                expect('the slider with the extension off', radiusRowOf(windowsPageOf(prefsWithShell())).sensitive, false);
+                expect('the slider already open, with the extension off', radiusRow.sensitive, false);
+            }
+            rounded.reset(ROUNDED_KEY);
+        }
+
+        resetShell();
+        if (problems.length === problemsBefore)
+            print('  extensions: both installed; the switches go through the shell, the radius keeps the other entries');
+    }
 }
 
 if (problems.length > 0) {

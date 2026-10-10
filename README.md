@@ -56,7 +56,12 @@ search when that thing is unavailable, so the button is never a dead end.
 
 **Windows the way macOS has them.** Close, minimize and maximize on the left, in macOS order, and
 smaller, at about the size macOS draws them. New windows are no longer maximized for being nearly as
-large as the screen. The small buttons are CSS, kept in a marked block of your own
+large as the screen. With
+[Rounded Window Corners Reborn](https://extensions.gnome.org/extension/7048/rounded-window-corners-reborn/)
+installed, the corners are rounded and their radius is set here; with
+[Magic Lamp](https://extensions.gnome.org/extension/3740/compiz-alike-magic-lamp-effect/), a minimizing
+window folds into the dock like a genie lamp. Pear Up installs neither and switches each on and off through
+the shell, as the Extensions app does. The small buttons are CSS, kept in a marked block of your own
 `~/.config/gtk-4.0/gtk.css` and `~/.config/gtk-3.0/gtk.css` — one reaches libadwaita apps, the other GTK 3
 apps and the Electron ones, such as Claude, ChatGPT and Cursor, that draw GTK 3 title buttons — which
 apps read when they next start. Everything outside the block is left exactly as it is, and rules of your
@@ -137,6 +142,9 @@ no extension can add one. Installing puts a **Pear Up Settings** application ent
 - GNOME Shell 45 – 50, under Wayland. Every release in that range is checked by the
   [test suite](#testing) rather than assumed; 50 is also what it is used on daily.
 - Optional: [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) for the Dock page
+- Optional: [Rounded Window Corners Reborn](https://extensions.gnome.org/extension/7048/rounded-window-corners-reborn/)
+  and [Magic Lamp](https://extensions.gnome.org/extension/3740/compiz-alike-magic-lamp-effect/) for the rounded
+  corners and the genie effect on the Windows page. Without them that page says so and links to them.
 - Optional: [Search Light](https://extensions.gnome.org/extension/5489/search-light/) for
   Spotlight-style search — but note it **ends a Wayland session on GNOME 50** when its icon is
   clicked, until the fix in [`contrib/`](contrib/README.md) is applied. The search button here
@@ -177,7 +185,8 @@ same actions alone) and resets the other keys only while they still hold the val
 wrote, printing what was restored. What the Appearance page set is not among them: switch the
 type and accent off there first if you want your old ones back, and pick the icon and cursor
 theme again. The same goes for the Windows page: switch Small Window Buttons off there to take its
-block out of the two `gtk.css` files, and Don't Maximize New Windows to put GNOME's value back.
+block out of the two `gtk.css` files, Don't Maximize New Windows to put GNOME's value back, and the
+rounded corners and the genie effect off to leave those extensions as you found them.
 
 ## Testing
 
@@ -244,9 +253,9 @@ opened — as an empty window and a stack trace in the journal. This builds ever
 fails on the first throw, then drives the rows that change settings of the desktop itself — the
 Appearance and Windows switches and pickers and the shortcut sets — against the container's own
 in-memory settings, and checks that the values the user had come back. The pickers are run once more
-with fixture icon and cursor themes dropped into the container's XDG directories. The Windows page's
-`gtk.css` switch works on a config directory the runner makes, and the check is that every byte outside
-the block is as it was.
+with fixture icon and cursor themes dropped into the container's XDG directories, and the Windows page
+once more with the two extensions it drives installed. Its `gtk.css` switch works on a config directory
+the runner makes, and the check is that every byte outside the block is as it was.
 
 ```bash
 tests/run-prefs-smoke.sh            # every version in the table

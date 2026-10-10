@@ -260,6 +260,8 @@
     "getWorkAreaForMonitor",
     "monitors-changed",
     "extension-state-changed",
+    "EnableExtension",
+    "DisableExtension",
     "isLocked",
     "item-drag-begin",
     "item-drag-end",

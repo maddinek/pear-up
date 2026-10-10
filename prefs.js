@@ -89,8 +89,22 @@ const THEMES_NEVER_OFFERED = new Set(['hicolor', 'locolor', 'default']);
 // otherwise left out, except the one in use, which has to be shown to be read.
 const STOCK_THEME = 'Adwaita';
 
-// The Windows page: GNOME's own window settings and the user's GTK stylesheets.
+// The Windows page drives GNOME's own window settings, the user's GTK
+// stylesheets and two other extensions. The extensions are not Pear Up's to
+// install: their rows appear when they are there, and when they are not, a link
+// says where to get them. The links are the extensions' pages on
+// extensions.gnome.org, whose numbers the uuids cannot give.
 const MUTTER_SCHEMA = 'org.gnome.mutter';
+const SHELL_SCHEMA = 'org.gnome.shell';
+
+const ROUNDED_CORNERS_UUID = 'rounded-window-corners@fxgn';
+const ROUNDED_CORNERS_SCHEMA = 'org.gnome.shell.extensions.rounded-window-corners-reborn';
+const ROUNDED_CORNERS_KEY = 'global-rounded-corner-settings';
+const ROUNDED_CORNERS_URL = 'https://extensions.gnome.org/extension/7048/rounded-window-corners-reborn/';
+const ROUNDED_CORNERS_RADIUS = { lower: 0, upper: 40 };
+
+const MAGIC_LAMP_UUID = 'compiz-alike-magic-lamp-effect@hermes83.github.com';
+const MAGIC_LAMP_URL = 'https://extensions.gnome.org/extension/3740/compiz-alike-magic-lamp-effect/';
 
 // Smaller window buttons are CSS in the user's own gtk.css, one file per GTK
 // major version, because an app reads the one for the toolkit it was built
@@ -192,6 +206,7 @@ const DOCK_FUNCTION_KEY_CONFLICTS = [
 // Schemas that live inside another extension rather than the system set.
 const EXTENSION_SCHEMA_OWNERS = {
     [DASH_TO_DOCK_SCHEMA]: DASH_TO_DOCK_UUID,
+    [ROUNDED_CORNERS_SCHEMA]: ROUNDED_CORNERS_UUID,
 };
 
 const BUTTON_LAYOUT_LEFT = 'close,minimize,maximize:appmenu';
@@ -793,9 +808,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
     // Window chrome and behaviour as macOS has it. As on the Appearance page,
     // none of this is Pear Up's own: the button layout and automatic
-    // maximizing are GNOME's settings and the small buttons are rules in the
-    // user's own gtk.css. So each row reads the state of the thing it drives,
-    // whoever put it there, and follows it when it changes elsewhere.
+    // maximizing are GNOME's settings, the corners and the genie effect belong
+    // to two other extensions, and the small buttons are rules in the user's
+    // own gtk.css. So each row reads the state of the thing it drives, whoever
+    // put it there, and is absent or a link where that thing is not there.
     _buildWindowsPage() {
         const page = new Adw.PreferencesPage({
             title: 'Windows',
@@ -818,6 +834,9 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         });
         if (maximizeRow)
             page.add(openingGroup);
+
+        this._buildRoundedCornersGroup(page);
+        this._buildGenieGroup(page);
 
         return page;
     }
@@ -1080,6 +1099,262 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             }
         }
         return null;
+    }
+
+    // Whether an extension is installed, in the places GNOME looks for them:
+    // the user's data directory and each system one. Not whether it is on.
+    _extensionInstalled(uuid) {
+        return [GLib.get_user_data_dir(), ...GLib.get_system_data_dirs()].some(dir =>
+            GLib.file_test(
+                GLib.build_filenamev([dir, 'gnome-shell', 'extensions', uuid, 'metadata.json']),
+                GLib.FileTest.EXISTS));
+    }
+
+    // Shown in place of an extension's rows when it is not installed. Nothing
+    // here installs it: that is the user's call, as with Dash to Dock.
+    _addExtensionMissingRow(group, { title, subtitle, url }) {
+        const row = new Adw.ActionRow({ title, subtitle });
+        row.set_subtitle_lines(0);
+        row.add_suffix(new Gtk.LinkButton({ uri: url, label: 'Open', valign: Gtk.Align.CENTER }));
+        group.add(row);
+    }
+
+    // The extension's switch on GNOME's side: in `enabled-extensions`, not in
+    // `disabled-extensions` (which wins over it) and not switched off wholesale.
+    // The shell's own rule, the same on every release from 45 to 50.
+    _extensionEnabled(uuid) {
+        const shell = this._settingsForSchema(SHELL_SCHEMA);
+        if (!shell)
+            return false;
+        return !shell.get_boolean('disable-user-extensions') &&
+            shell.get_strv('enabled-extensions').includes(uuid) &&
+            !shell.get_strv('disabled-extensions').includes(uuid);
+    }
+
+    // Asks the shell to switch an extension on or off, the way the Extensions
+    // app does: org.gnome.Shell.Extensions on the session bus. The shell then
+    // loads or unloads it at once and keeps `enabled-extensions` and
+    // `disabled-extensions` in step. Writing those keys from here would not
+    // do the same: a uuid left in `disabled-extensions` beats one in
+    // `enabled-extensions`, and nothing says whether the shell knows the
+    // extension. Resolves to whether it did — false for one installed since
+    // the session began, which Wayland cannot load until the next login.
+    _callShellExtensions(method, uuid) {
+        return new Promise((resolve, reject) => {
+            Gio.DBus.session.call(
+                'org.gnome.Shell.Extensions', '/org/gnome/Shell/Extensions',
+                'org.gnome.Shell.Extensions', method,
+                new GLib.Variant('(s)', [uuid]), new GLib.VariantType('(b)'),
+                Gio.DBusCallFlags.NONE, 5000, null,
+                (connection, result) => {
+                    try {
+                        resolve(connection.call_finish(result).deepUnpack()[0]);
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+        });
+    }
+
+    // Returns what went wrong, or null.
+    async _setExtensionEnabled(uuid, enabled) {
+        try {
+            const known = await this._callShellExtensions(
+                enabled ? 'EnableExtension' : 'DisableExtension', uuid);
+            return known ? null : 'GNOME has not loaded this extension yet. Log out and back in, then try again.';
+        } catch (e) {
+            return `Could not reach GNOME Shell: ${e.message}`;
+        }
+    }
+
+    // A switch for another extension. It reads the shell's own keys, so it is
+    // on whenever the extension is, whoever switched it, follows them when they
+    // change elsewhere, and is written only through the shell. A call the shell
+    // does not carry out puts the switch back and says why.
+    _addExtensionSwitchRow(group, { uuid, title, subtitle }) {
+        const shell = this._settingsForSchema(SHELL_SCHEMA);
+        if (!['enabled-extensions', 'disabled-extensions', 'disable-user-extensions']
+            .every(key => this._schemaHasKey(shell, key)))
+            return null;
+
+        const row = new Adw.SwitchRow({ title, subtitle });
+        row.set_subtitle_lines(0);
+        group.add(row);
+
+        let problem = null;
+        let busy = false;
+        let pending = 0;
+        let gone = false;
+        // The subtitle and whether the switch can be used. Extensions switched
+        // off as a whole are out of the switch's reach.
+        const describe = () => {
+            const allOff = shell.get_boolean('disable-user-extensions');
+            row.set_sensitive(!allOff);
+            row.set_subtitle(allOff
+                ? 'Extensions are switched off in GNOME’s Extensions app'
+                : problem ?? subtitle);
+        };
+        // While a call is out the switch is the user's, not the keys': they
+        // change in two steps, and reading them between would flick it back.
+        const refresh = () => {
+            if (busy || pending > 0 || gone)
+                return;
+            busy = true;
+            row.set_active(this._extensionEnabled(uuid));
+            describe();
+            busy = false;
+        };
+        refresh();
+
+        row.connect('notify::active', () => {
+            if (busy)
+                return;
+            // Every flip is a request, also one made while another is out: they
+            // reach the shell in order, and the last one is what stands.
+            problem = null;
+            pending++;
+            this._setExtensionEnabled(uuid, row.active).then(reason => {
+                pending--;
+                problem = reason;
+                if (gone)
+                    return;
+                // Done: the keys will say so in a moment, not yet — read at once,
+                // they still show the old state on 45 and 48, where the reply
+                // is ahead of dconf's notice. Refused: they say otherwise now.
+                if (reason === null)
+                    describe();
+                else
+                    refresh();
+            });
+        });
+
+        const watched = ['enabled-extensions', 'disabled-extensions', 'disable-user-extensions']
+            .map(key => shell.connect(`changed::${key}`, refresh));
+        row.connect('destroy', () => {
+            gone = true;
+            for (const id of watched)
+                shell.disconnect(id);
+        });
+
+        return row;
+    }
+
+    // The corner radius is one entry of a dictionary of mixed types the
+    // extension keeps all its global settings in. It is read from the user's
+    // value, else the schema's default; a missing or oddly typed entry is the
+    // default's.
+    _cornerRadius(settings) {
+        for (const dict of [settings.get_value(ROUNDED_CORNERS_KEY), settings.get_default_value(ROUNDED_CORNERS_KEY)]) {
+            for (let index = 0; index < dict.n_children(); index++) {
+                const entry = dict.get_child_value(index);
+                if (entry.get_child_value(0).get_string()[0] !== 'borderRadius')
+                    continue;
+                const radius = entry.get_child_value(1).get_variant().unpack();
+                if (typeof radius === 'number')
+                    return radius;
+            }
+        }
+        return ROUNDED_CORNERS_RADIUS.lower;
+    }
+
+    // The same dictionary with the radius changed and every other entry exactly
+    // as it was, type and order included: they are the extension's to write.
+    // It stores the radius as an unsigned integer, so that is what goes back.
+    _withCornerRadius(dict, radius) {
+        const builder = new GLib.VariantBuilder(new GLib.VariantType('a{sv}'));
+        const entryOf = (name, value) => GLib.Variant.new_dict_entry(
+            GLib.Variant.new_string(name), GLib.Variant.new_variant(value));
+        let found = false;
+        for (let index = 0; index < dict.n_children(); index++) {
+            const entry = dict.get_child_value(index);
+            const name = entry.get_child_value(0).get_string()[0];
+            if (name === 'borderRadius') {
+                found = true;
+                builder.add_value(entryOf(name, GLib.Variant.new_uint32(radius)));
+            } else {
+                builder.add_value(entry);
+            }
+        }
+        if (!found)
+            builder.add_value(entryOf('borderRadius', GLib.Variant.new_uint32(radius)));
+        return builder.end();
+    }
+
+    _buildRoundedCornersGroup(page) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Rounded Corners',
+            description: 'Rounded Window Corners Reborn does the rounding. Pear Up switches it ' +
+                'on and off and sets the radius; the rest stays in its own preferences',
+        });
+        page.add(group);
+
+        if (!this._extensionInstalled(ROUNDED_CORNERS_UUID)) {
+            this._addExtensionMissingRow(group, {
+                title: 'Rounded Window Corners Reborn is not installed',
+                subtitle: 'It rounds the corners of every window, as macOS does. Install it from ' +
+                    'the GNOME Extensions site and log out and back in: this page then switches ' +
+                    'it on and off and sets the radius.',
+                url: ROUNDED_CORNERS_URL,
+            });
+            return;
+        }
+
+        const switchRow = this._addExtensionSwitchRow(group, {
+            uuid: ROUNDED_CORNERS_UUID,
+            title: 'Rounded Corners',
+            subtitle: 'Round the corners of every window',
+        });
+
+        // Its settings live in a schema inside the extension. Without the key,
+        // or with one of another type, the radius is left to the extension.
+        const settings = this._settingsForSchema(ROUNDED_CORNERS_SCHEMA);
+        if (!switchRow || !this._schemaHasKey(settings, ROUNDED_CORNERS_KEY) ||
+            settings.settings_schema.get_key(ROUNDED_CORNERS_KEY).get_value_type().dup_string() !== 'a{sv}')
+            return;
+
+        const radius = this._addScaleRow(group, 'Corner Radius', {
+            lower: ROUNDED_CORNERS_RADIUS.lower, upper: ROUNDED_CORNERS_RADIUS.upper,
+            marks: [0, 10, 20, 30, 40], unit: 'px',
+            value: this._cornerRadius(settings),
+            onChange: value => {
+                if (value !== this._cornerRadius(settings)) {
+                    settings.set_value(ROUNDED_CORNERS_KEY,
+                        this._withCornerRadius(settings.get_value(ROUNDED_CORNERS_KEY), value));
+                }
+            },
+        });
+        const watched = settings.connect(`changed::${ROUNDED_CORNERS_KEY}`,
+            () => radius.setValue(this._cornerRadius(settings)));
+        radius.row.connect('destroy', () => settings.disconnect(watched));
+
+        // Nothing to set while the extension is off, as with the other sliders.
+        radius.row.set_sensitive(switchRow.active);
+        switchRow.connect('notify::active', () => radius.row.set_sensitive(switchRow.active));
+    }
+
+    _buildGenieGroup(page) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Minimizing',
+            description: 'Magic Lamp does the effect. Pear Up switches it on and off',
+        });
+        page.add(group);
+
+        if (!this._extensionInstalled(MAGIC_LAMP_UUID)) {
+            this._addExtensionMissingRow(group, {
+                title: 'Magic Lamp is not installed',
+                subtitle: 'The “Compiz alike magic lamp effect” extension folds a window into the ' +
+                    'dock when it is minimized, as macOS does. Install it from the GNOME ' +
+                    'Extensions site and log out and back in: this page then switches it on and off.',
+                url: MAGIC_LAMP_URL,
+            });
+            return;
+        }
+
+        this._addExtensionSwitchRow(group, {
+            uuid: MAGIC_LAMP_UUID,
+            title: 'Genie Effect',
+            subtitle: 'Minimized windows fold into the dock like a genie lamp, as on macOS',
+        });
     }
 
     _buildKeyboardPage() {
