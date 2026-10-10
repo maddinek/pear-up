@@ -543,7 +543,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                             continue;
                         try {
                             this._displacedValues.set(id,
-                                GLib.Variant.parse(null, serialized, null));
+                                GLib.Variant.parse(null, serialized, null, null));
                         } catch {
                             // One bad entry must not sink the rest; skip it.
                         }

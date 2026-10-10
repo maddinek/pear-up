@@ -8,6 +8,17 @@ human reads.
 
 ### Fixed
 
+- **A shortcut set gives Dash to Dock's shortcuts back as you had them.**
+  Switching a macOS shortcut set on stands Dash to Dock's own grabs down and
+  notes what they were, so that switching it off restores them. The note was
+  written but never read back: the call that parses it was missing an argument,
+  the error was swallowed on purpose, and so once Preferences had been closed
+  and opened again the set found nothing to restore and reset the shortcut to
+  Dash to Dock's default instead. The smoke test now sets Dash to Dock's
+  shortcut to something of its own, switches the window set on and off through
+  a second preferences object, and expects it back; without the fix it comes
+  back as the default.
+
 - **Indicators that arrive late are spaced like the rest.** The status area
   was spaced once at start-up and again after each panel rebuild, so an
   indicator added in between kept the stylesheet's floor of 3px instead of

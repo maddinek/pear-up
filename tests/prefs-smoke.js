@@ -232,6 +232,52 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
     }
 }
 
+// A shortcut set stands conflicting grabs down while it is on, and has to give
+// them back as the user had them. The window set displaces the shortcut that
+// reveals Dash to Dock. The note of what was there is read back from our own
+// settings, so it is driven through a second preferences object, as after the
+// window was closed and opened again. The shortcut is set to something other
+// than Dash to Dock's own default, since resetting would hand back that.
+if (GLib.getenv('PREFS_SMOKE_DOCK')) {
+    const dock = preferences._dashToDockSettings();
+    const pearUp = preferences.getSettings();
+    const problemsBefore = problems.length;
+
+    if (dock && preferences._schemaHasKey(dock, 'shortcut')) {
+        const kept = [];
+        const setRow = prefs => {
+            const page = prefs._buildKeyboardPage();
+            kept.push(page);
+            return findWidget(page, widget =>
+                widget instanceof Adw.ExpanderRow && widget.title === 'macOS Window Shortcuts');
+        };
+        const mine = ['<Alt>x'];
+        const shortcut = () => dock.get_strv('shortcut').join(',');
+
+        pearUp.reset('displaced-keybindings');
+        dock.set_strv('shortcut', mine);
+        if (dock.settings_schema.get_key('shortcut').get_default_value().deepUnpack().join(',') === mine.join(','))
+            problems.push('shortcut set: the test shortcut is Dash to Dock\'s default, so it proves nothing');
+        setRow(new Preferences(metadata)).enable_expansion = true;
+        if (shortcut() !== '')
+            problems.push(`shortcut set: Dash to Dock keeps its shortcut (${shortcut()}) after the set is switched on`);
+        if (!pearUp.get_string('displaced-keybindings').includes('dash-to-dock:shortcut'))
+            problems.push('shortcut set: the displaced shortcut was not stored');
+
+        // Reopened: only the stored note can say what the shortcut was.
+        const reopened = setRow(new Preferences(metadata));
+        if (!reopened.enable_expansion)
+            problems.push('shortcut set: the set does not read as on after reopening');
+        reopened.enable_expansion = false;
+        if (shortcut() !== mine.join(','))
+            problems.push(`shortcut set: the shortcut came back as '${shortcut()}', not the user's own`);
+        if (pearUp.get_string('displaced-keybindings') !== '{}')
+            problems.push('shortcut set: the displaced note was not cleared');
+        if (problems.length === problemsBefore)
+            print('  shortcut set: hands Dash to Dock\'s shortcut back as the user had it, after a reopen');
+    }
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);
