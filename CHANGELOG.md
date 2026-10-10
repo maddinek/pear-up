@@ -180,6 +180,39 @@ human reads.
 
 ### Added
 
+- **macOS-Like Scroll Acceleration, in a Trackpad group on the Keyboard
+  page.** libinput scrolls by the same amount for every millimetre two
+  fingers travel, about 10.5 units, however slowly they go, so a page moves
+  away under a gentle nudge; macOS starts slowly and speeds up with the
+  fingers. Nothing in the shell can change that, since only libinput sees the
+  fingers, so this is a libinput plugin (libinput 1.30 brought them), shipped
+  in `libinput/`. The switch copies it into `~/.config/libinput/plugins`,
+  where GNOME 50 loads plugins from at login, and switching it off removes
+  that one file. While exactly two fingers move together, the plugin scales
+  the movement they share by a gain that follows their speed: 0.35 up to 20
+  mm/s, rising smoothly to libinput's own rate at 80 mm/s and a touch beyond,
+  1.15, for a flick from 200 mm/s. A Strength choice sets the slow end —
+  Light 0.6, Medium 0.35, Strong 0.2 — by writing it into the copy, since a
+  plugin cannot read files. One finger, three, a palm, the bottom 10 mm where
+  the click areas are, a pad pressed down, and any movement the fingers do
+  not share — a pinch, one resting while the other moves — reach libinput as
+  the kernel sent them. A finger keeps the offset it gathered until it lifts,
+  so lifting the other does not make the pointer jump. If the plugin ever
+  fails, libinput unloads it and scrolling is as before until the next
+  login. Before GNOME 50 the switch is greyed out and says why; a file of the
+  same name that is not Pear Up's is left alone. install.sh updates an
+  installed copy, keeping its strength, and uninstall.sh removes it. Slower
+  browser back and forward swipes come with it, as they do on macOS.
+
+  `tests/run-libinput-tests.sh` checks it in a container: its arithmetic, in
+  a sandbox like libinput's; then the plugin loaded into libinput 1.31 itself,
+  replaying a slow and a quick two-finger scroll, a pinch and pointer motion
+  on a touchpad that only umockdev's fake device node makes, rather than a
+  uinput device every libinput on the machine would see. A slow scroll comes
+  out at 0.35 of libinput's own, a quick one at about the same, and a pinch
+  and one finger exactly as without it. The preferences smoke test installs,
+  re-strengthens and removes the file in a config directory of its own.
+
 - **A Desktop group on the General page, for what is not the bar.** The
   pieces of the shell that macOS puts elsewhere, each a switch of its own and
   on by default like the bar's tweaks. Together they cover what Just

@@ -1934,6 +1934,132 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             `GNOME ${release}, so ${release >= 49 ? 'with' : 'without'} ${brightnessTitle}`);
 }
 
+// Scroll acceleration is one file, which the switch installs into the user's
+// libinput plugin directory with the strength written into it, and removes
+// again. Only GNOME 50 and later load it, so before that the switch is greyed
+// and writes nothing. The file goes into the runner's config directory, like
+// the gtk.css ones, and nothing is written without one.
+{
+    const TITLE = 'macOS-Like Scroll Acceleration';
+    const problemsBefore = problems.length;
+    const shell = parseInt(GLib.getenv('PREFS_SMOKE_SHELL_VERSION') ?? '0', 10);
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`scroll acceleration: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+    const titled = (type, title) => widget => widget instanceof type && widget.title === title;
+    const rowsOf = (prefs = new Preferences(metadata)) => {
+        const page = prefs._buildKeyboardPage();
+        windowsKept.push(page);
+        return [findWidget(page, titled(Adw.SwitchRow, TITLE)), findWidget(page, titled(Adw.ComboRow, 'Strength'))];
+    };
+    const keyboard = pages.find(page => page.title === 'Keyboard');
+    const configDir = GLib.get_user_config_dir();
+    const ours = smokeConfig && smokeConfig === configDir &&
+        GLib.path_get_basename(smokeConfig).startsWith('pear-up-smoke-');
+    const pluginDir = `${configDir}/libinput/plugins`;
+    const target = `${pluginDir}/10-pear-up-scroll-acceleration.lua`;
+    const read = path => GLib.file_test(path, GLib.FileTest.IS_REGULAR)
+        ? new TextDecoder().decode(GLib.file_get_contents(path)[1]) : null;
+    const write = (path, text) => {
+        GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
+        GLib.file_set_contents(path, new TextEncoder().encode(text));
+    };
+    const reset = () => {
+        GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(`${configDir}/libinput`)}`);
+    };
+    const source = read(`${extensionDir}/libinput/10-pear-up-scroll-acceleration.lua`);
+    const withGain = gain => source.replace(/^local SLOW_GAIN = [0-9.]+$/m, `local SLOW_GAIN = ${gain}`);
+
+    if (!keyboard || !findWidget(keyboard, titled(Adw.SwitchRow, TITLE))) {
+        problems.push('the Keyboard page has no scroll acceleration switch');
+    } else if (shell < 50) {
+        const [row, strength] = rowsOf();
+        expect('the switch on GNOME ' + shell + ', sensitive', row.sensitive, false);
+        expect('the strength on GNOME ' + shell + ', sensitive', strength.sensitive, false);
+        if (!/GNOME 50/.test(row.subtitle ?? ''))
+            problems.push(`scroll acceleration: the subtitle does not say it needs GNOME 50 (${row.subtitle})`);
+        if (ours) {
+            reset();
+            row.active = true;
+            expect('the switch set on where it cannot work', row.active, false);
+            expect('the plugin written where it cannot work', read(target), null);
+        }
+        if (problems.length === problemsBefore)
+            print(`  scroll acceleration: greyed out on GNOME ${shell}, saying it needs GNOME 50`);
+    } else if (!ours) {
+        print('  scroll acceleration: not driven, the runner has not given this process a config directory of its own');
+    } else if (source === null || !/^local SLOW_GAIN = [0-9.]+$/m.test(source)) {
+        problems.push('scroll acceleration: the plugin is not in libinput/ or has no SLOW_GAIN line');
+    } else {
+        reset();
+        write(`${pluginDir}/20-of-my-own.lua`, 'libinput:register({1})\n');
+        let [row, strength] = rowsOf();
+        expect('the switch with nothing installed', row.active, false);
+        expect('the switch sensitive', row.sensitive, true);
+        expect('the strength while off, sensitive', strength.sensitive, false);
+        expect('the strength while off', strength.selected, 1);
+
+        row.active = true;
+        expect('the plugin after switching on', read(target), withGain(0.35));
+        expect('the strength after switching on, sensitive', strength.sensitive, true);
+        strength.selected = 2;
+        expect('the plugin at Strong', read(target), withGain(0.2));
+        strength.selected = 0;
+        expect('the plugin at Light', read(target), withGain(0.6));
+
+        [row, strength] = rowsOf();
+        expect('the switch reopened', row.active, true);
+        expect('the strength reopened', strength.selected, 0);
+
+        // A strength written by hand reads as itself, not as one of the three.
+        write(target, withGain(0.5));
+        [row, strength] = rowsOf();
+        expect('the strengths with one written by hand', strength.model.get_n_items(), 4);
+        expect('the strength written by hand', strength.model.get_string(strength.selected), 'Custom (0.5)');
+
+        // Off takes Pear Up's file away and nothing else.
+        row.active = false;
+        expect('the plugin after switching off', read(target), null);
+        expect('another plugin after switching off', read(`${pluginDir}/20-of-my-own.lua`), 'libinput:register({1})\n');
+        expect('the plugin directory after switching off', GLib.file_test(pluginDir, GLib.FileTest.IS_DIR), true);
+
+        // A copy from another version of Pear Up is still Pear Up's, and says so.
+        write(target, `${withGain(0.35)}-- an older line\n`);
+        [row] = rowsOf();
+        expect('the switch with an older copy', row.active, true);
+        if (!/another version/.test(row.subtitle ?? ''))
+            problems.push(`scroll acceleration: an older copy is not mentioned (${row.subtitle})`);
+        row.active = false;
+        expect('the older copy after switching off', read(target), null);
+
+        // A file of the same name that is not Pear Up's is never touched.
+        write(target, 'print("mine")\n');
+        [row] = rowsOf();
+        expect('the switch over a file of someone else\'s', row.active, false);
+        expect('the switch over a file of someone else\'s, sensitive', row.sensitive, false);
+        if (!/not Pear Up/.test(row.subtitle ?? ''))
+            problems.push(`scroll acceleration: someone else's file is not explained (${row.subtitle})`);
+        row.active = true;
+        expect('someone else\'s file after the switch was set', read(target), 'print("mine")\n');
+        expect('someone else\'s file after removing', preferences._setScrollPlugin(null) !== null, true);
+        expect('someone else\'s file, still', read(target), 'print("mine")\n');
+
+        // Where the directory cannot be made, the switch says so and stays off.
+        reset();
+        write(`${configDir}/libinput/plugins`, 'not a directory\n');
+        [row] = rowsOf();
+        row.active = true;
+        expect('the switch where the directory cannot be made', row.active, false);
+        if (!/^Could not write/.test(row.subtitle ?? ''))
+            problems.push(`scroll acceleration: the subtitle does not say it failed (${row.subtitle})`);
+
+        reset();
+        if (problems.length === problemsBefore)
+            print('  scroll acceleration: installs and removes only its own file, with the strength written in');
+    }
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);

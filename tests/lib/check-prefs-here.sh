@@ -24,6 +24,13 @@ glib-compile-schemas "$WORK/schemas"
 # tests/prefs-stub.js.
 sed -i "s|resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js|file://$WORK/tests/prefs-stub.js|" \
     "$WORK/prefs.js"
+# The shell's config module, the same way; tests/config-stub.js reports the
+# version of the gnome-shell this container has.
+sed -i "s|resource:///org/gnome/Shell/Extensions/js/misc/config.js|file://$WORK/tests/config-stub.js|" \
+    "$WORK/prefs.js"
+PREFS_SMOKE_SHELL_VERSION="$(rpm -q --qf '%{VERSION}' gnome-shell)"
+export PREFS_SMOKE_SHELL_VERSION
+echo "  gnome-shell: $PREFS_SMOKE_SHELL_VERSION, libinput: $(rpm -q --qf '%{VERSION}' libinput 2>/dev/null || echo none)"
 
 # Writes go nowhere: a smoke test must not depend on, or leave behind, a dconf
 # database. And anything GTK considers a programming error fails the run.

@@ -143,13 +143,25 @@ stands that down and offers to move the dock shortcuts to `Cmd+F1…F9` instead.
 Shortcuts *inside* an application, like `Cmd+C`, are sent by the app rather than the desktop and
 cannot be rebound from here; matching those needs a key remapper such as `keyd`.
 
+**Scrolling that speeds up like the Mac's.** On a touchpad, libinput scrolls by the same amount for
+every millimetre two fingers travel, however slowly they go, so a gentle nudge sends the page away.
+macOS starts slowly and speeds up with the fingers. A switch in the Trackpad group of the Keyboard
+page installs a small [libinput plugin](libinput/10-pear-up-scroll-acceleration.lua) that does the
+same: while two fingers move together, the movement they share is scaled by a gain that follows
+their speed — 0.35 of libinput's rate up to 20 mm/s, rising smoothly to libinput's own at 80 mm/s
+and a little beyond for a flick — with a Strength choice for the slow end. A pinch, one finger,
+three, a palm, the click areas at the bottom and a pad pressed down are left exactly as libinput
+has them. It needs GNOME 50, whose compositor loads the user's libinput plugins, and takes effect at
+the next login; the switch says so on anything older. Switching it off removes the one file it
+installed, `~/.config/libinput/plugins/10-pear-up-scroll-acceleration.lua`.
+
 **Your own menus.** Add any number of extra top-level menus whose items run shell commands or send
 keyboard shortcuts.
 
 ## Settings
 
 Everything lives in one window — the panel layout, which menus appear, the dock, the type, accent,
-icons and cursor, the windows, and your custom menus. Open it by pressing <kbd>Super</kbd> and typing "pear", from the app grid, or
+icons and cursor, the windows, the trackpad's scrolling, and your custom menus. Open it by pressing <kbd>Super</kbd> and typing "pear", from the app grid, or
 through the Extensions app.
 
 These settings cannot appear in GNOME Settings beside Appearance, which is where they arguably
@@ -174,6 +186,8 @@ no extension can add one. Installing puts a **Pear Up Settings** application ent
   corners and the genie effect on the Windows page. Without them that page says so and links to them.
 - Optional: [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/) for the frosted
   glass of the Dock page. Without it that group says so and links to it.
+- Optional: GNOME 50 or later, with libinput 1.30 or later, for the scroll acceleration on the
+  Keyboard page: earlier releases do not load libinput plugins from the user's directory.
 - Optional: [Search Light](https://extensions.gnome.org/extension/5489/search-light/) for
   Spotlight-style search — but note it **ends a Wayland session on GNOME 50** when its icon is
   clicked, until the fix in [`contrib/`](contrib/README.md) is applied. The search button here
@@ -200,7 +214,9 @@ To remove it:
 bash uninstall.sh
 ```
 
-By default this only removes the extension's own files. Changes made from the Preferences
+By default this only removes the extension's own files, the scroll acceleration plugin with them
+when the preferences installed it (scrolling is libinput's own again at the next login). Changes
+made from the Preferences
 window to settings owned by other parts of the desktop — the macOS shortcut sets appended
 to GNOME's keybindings, the Alt/Cmd swap in `xkb-options`, the Dash to Dock hot keys stood
 down for them, and the window button layout — are left in place. To revert those as well:
@@ -317,6 +333,24 @@ raising a window from the list of open ones.
 That last group is the edge of what the automated suites reach. The headless container has a shell
 but no applications, so it can prove the menu bar is built correctly and cannot prove that a menu
 item does what its label says. Those stay a manual pass in a VM, with clicks injected as above.
+
+**Does the scroll acceleration do what it says, and nothing else?** A libinput plugin runs inside
+the compositor and sees every touchpad frame, so it is checked twice, in a container. First its
+arithmetic: frames shaped the way the kernel sends them go through it, in a sandbox holding only
+what libinput's offers, and what libinput would be told is compared with what the kernel sent —
+slow scrolling scaled, a pinch, one finger, a palm, three fingers, the click areas and a pressed pad
+untouched, no jump when a finger lifts, fractions of a unit carried, nothing outside the touchpad.
+Then the plugin loaded into libinput itself, with `libinput debug-events` replaying a slow and a
+quick two-finger scroll, a pinch and pointer motion on framy's touchpad, once with the plugin and
+once without. The touchpad exists only inside [umockdev](https://github.com/martinpitt/umockdev),
+which fakes the device node for the one process it runs: `libinput replay` would make a uinput
+device instead, which every libinput on the machine — the desktop's included — would pick up.
+
+```bash
+tests/run-libinput-tests.sh
+```
+
+How it feels is another matter, and is for fingers on a real touchpad to say.
 
 **Do the helpers that reach into settings behave?** The undo logic in uninstall.sh does string
 surgery on printed GVariant lists, and the dock script forwards its opt-outs through a quoted heredoc

@@ -10,6 +10,7 @@ import GLib from 'gi://GLib';
 import PangoCairo from 'gi://PangoCairo';
 
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+import * as Config from 'resource:///org/gnome/Shell/Extensions/js/misc/config.js';
 
 // The dock itself is Dash to Dock; these pages only drive its settings so the
 // whole macOS-style desktop can be configured from one window.
@@ -185,6 +186,26 @@ const WINDOW_BUTTONS_CSS = [
         ],
     },
 ];
+
+// Two-finger scrolling accelerated as macOS does it is a libinput plugin,
+// libinput/10-pear-up-scroll-acceleration.lua, not something the shell can do:
+// libinput hands the compositor a fixed amount of scrolling per millimetre, and
+// nothing above it sees how fast the fingers went. Plugins came with libinput
+// 1.30, and GNOME 50's compositor is the first to load them from the user's own
+// directory, which it reads at login. The file there is all the state there is:
+// the switch reads whether Pear Up's copy is installed, and the strength is the
+// slow-movement gain written into its SLOW_GAIN line. A file of that name that is
+// not Pear Up's is never written over or removed.
+const SCROLL_PLUGIN = '10-pear-up-scroll-acceleration.lua';
+const SCROLL_PLUGIN_GAIN = /^local SLOW_GAIN = ([0-9.]+)$/m;
+const SCROLL_PLUGIN_SHELL = 50;
+const SCROLL_PLUGIN_LIBINPUT = [1, 30];
+const SCROLL_STRENGTHS = [
+    { title: 'Light', gain: 0.6 },
+    { title: 'Medium', gain: 0.35 },
+    { title: 'Strong', gain: 0.2 },
+];
+const SCROLL_STRENGTH_DEFAULT = 1;
 
 // A Magic Keyboard reports Cmd as Super, so binding the Super combinations
 // gives the real macOS chords rather than an approximation of them. Each entry
@@ -1475,7 +1496,188 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         note.set_subtitle_lines(0);
         noteGroup.add(note);
 
+        // The trackpad has no page of its own: eight tabs are what the window's
+        // width holds, and its neighbour in macOS's settings is the keyboard.
+        this._buildTrackpadGroup(page);
+
         return page;
+    }
+
+    _buildTrackpadGroup(page) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Trackpad',
+            description: 'A plugin for libinput, which GNOME loads when you log in',
+        });
+        page.add(group);
+
+        const unsupported = this._scrollAccelerationUnsupported();
+        const subtitle = 'Scrolling with two fingers starts slowly and speeds up as the fingers do, ' +
+            'instead of moving the page by the same amount at any speed. Takes effect at the next login.';
+        const row = new Adw.SwitchRow({ title: 'macOS-Like Scroll Acceleration', subtitle });
+        row.set_subtitle_lines(0);
+        group.add(row);
+
+        const strengths = Gtk.StringList.new(SCROLL_STRENGTHS.map(strength => strength.title));
+        const strengthRow = new Adw.ComboRow({
+            title: 'Strength',
+            subtitle: 'How much slower a slow scroll is',
+            model: strengths,
+        });
+        group.add(strengthRow);
+
+        // What went wrong the last time something was written, until the next.
+        let problem = null;
+        let busy = false;
+        const refresh = () => {
+            if (busy)
+                return;
+            busy = true;
+            const state = this._scrollPluginState();
+            const path = this._tildePath(this._scrollPluginPath());
+            let text = subtitle;
+            if (state.foreign)
+                text = `${path} is a file of the same name that is not Pear Up’s, and is left alone. ` +
+                    'Remove or rename it to use this.';
+            else if (unsupported !== null && !state.installed)
+                text = unsupported;
+            else if (state.installed && !state.current)
+                text = `${subtitle} The copy installed is from another version of Pear Up: switch this ` +
+                    'off and on, or run install.sh, to update it.';
+            row.set_active(state.installed);
+            row.set_sensitive(!state.foreign && (unsupported === null || state.installed));
+            row.set_subtitle(problem ?? text);
+
+            // A strength written by hand gets an entry of its own, as a style
+            // set in Dash to Dock does, rather than reading as one of these.
+            const index = SCROLL_STRENGTHS.findIndex(strength => strength.gain === state.gain);
+            strengths.splice(SCROLL_STRENGTHS.length, strengths.get_n_items() - SCROLL_STRENGTHS.length,
+                state.installed && index < 0 ? [`Custom (${state.gain})`] : []);
+            strengthRow.set_selected(!state.installed ? SCROLL_STRENGTH_DEFAULT
+                : index < 0 ? SCROLL_STRENGTHS.length : index);
+            strengthRow.set_sensitive(state.installed);
+            busy = false;
+        };
+        refresh();
+
+        const write = gain => {
+            problem = this._setScrollPlugin(gain);
+            // Show what is on disk, not what was asked for.
+            refresh();
+        };
+        row.connect('notify::active', () => {
+            // Showing the file is not the user switching, and greyed out is not
+            // enough: whatever sets `active` gets here.
+            if (busy || row.active === this._scrollPluginState().installed)
+                return;
+            if (row.active && unsupported !== null) {
+                refresh();
+                return;
+            }
+            const strength = SCROLL_STRENGTHS[strengthRow.selected] ?? SCROLL_STRENGTHS[SCROLL_STRENGTH_DEFAULT];
+            write(row.active ? strength.gain : null);
+        });
+        strengthRow.connect('notify::selected', () => {
+            const strength = SCROLL_STRENGTHS[strengthRow.selected];
+            if (busy || !strength || !this._scrollPluginState().installed)
+                return;
+            write(strength.gain);
+        });
+    }
+
+    _scrollPluginPath() {
+        return GLib.build_filenamev([GLib.get_user_config_dir(), 'libinput', 'plugins', SCROLL_PLUGIN]);
+    }
+
+    // The plugin as this version of Pear Up ships it, with `gain` written into
+    // its strength line.
+    _scrollPluginText(gain) {
+        const [, bytes] = GLib.file_get_contents(GLib.build_filenamev([this.path, 'libinput', SCROLL_PLUGIN]));
+        const source = new TextDecoder().decode(bytes);
+        if (source.match(new RegExp(SCROLL_PLUGIN_GAIN.source, 'gm'))?.length !== 1)
+            throw new Error('the plugin Pear Up ships has no strength line');
+        return source.replace(SCROLL_PLUGIN_GAIN, `local SLOW_GAIN = ${gain}`);
+    }
+
+    // What is installed: Pear Up's plugin, with its gain and whether it is what
+    // this version would write; nothing; or a file of the same name that is
+    // someone else's, which is anything without Pear Up's strength line.
+    _scrollPluginState() {
+        let text;
+        try {
+            const [, bytes] = Gio.File.new_for_path(this._scrollPluginPath()).load_contents(null);
+            text = new TextDecoder().decode(bytes);
+        } catch (e) {
+            // Nothing there, or no directory for it to be in, is nothing
+            // installed; a write will say what stands in the way. Anything
+            // else there — a directory, a file it may not read — is not Pear
+            // Up's to replace.
+            const absent = [Gio.IOErrorEnum.NOT_FOUND, Gio.IOErrorEnum.NOT_DIRECTORY]
+                .some(code => e.matches?.(Gio.IOErrorEnum, code));
+            return { installed: false, foreign: !absent, gain: null, current: true };
+        }
+        const gain = text.match(SCROLL_PLUGIN_GAIN);
+        if (!gain || !text.includes('Pear Up'))
+            return { installed: false, foreign: true, gain: null, current: true };
+        let current = true;
+        try {
+            current = text === this._scrollPluginText(Number(gain[1]));
+        } catch {
+            // Without the shipped copy there is nothing to compare with.
+        }
+        return { installed: true, foreign: false, gain: Number(gain[1]), current };
+    }
+
+    // Installs the plugin with `gain`, written whole beside the old copy and
+    // moved over it, or with null removes Pear Up's copy and only that. Returns
+    // what went wrong, or null.
+    _setScrollPlugin(gain) {
+        const path = this._scrollPluginPath();
+        if (this._scrollPluginState().foreign)
+            return `${this._tildePath(path)} is not Pear Up’s, and is left alone`;
+        try {
+            const file = Gio.File.new_for_path(path);
+            if (gain === null) {
+                if (this._scrollPluginState().installed)
+                    file.delete(null);
+                return null;
+            }
+            const text = this._scrollPluginText(gain);
+            const dir = GLib.path_get_dirname(path);
+            if (GLib.mkdir_with_parents(dir, 0o755) !== 0)
+                throw new Error(`${this._tildePath(dir)} cannot be created`);
+            file.replace_contents(new TextEncoder().encode(text), null, false, Gio.FileCreateFlags.NONE, null);
+            return null;
+        } catch (e) {
+            return `Could not ${gain === null ? 'remove' : 'write'} ${this._tildePath(path)}: ${e.message}`;
+        }
+    }
+
+    // Why the plugin would not be loaded here, or null when it would be. Only
+    // GNOME 50 and later load the user's plugins, which is a matter of the
+    // release (mutter MR !4739), not of anything this process could ask about.
+    // GNOME 50 needs libinput 1.30 to build, so the version libinput's tool
+    // reports, when it is installed, is a second opinion.
+    _scrollAccelerationUnsupported() {
+        const shell = parseInt(Config.PACKAGE_VERSION, 10);
+        if (!(shell >= SCROLL_PLUGIN_SHELL))
+            return `Needs GNOME ${SCROLL_PLUGIN_SHELL} or later: GNOME ${Config.PACKAGE_VERSION} does not load libinput plugins`;
+        const libinput = this._libinputVersion();
+        const [major, minor] = SCROLL_PLUGIN_LIBINPUT;
+        if (libinput && (libinput[0] < major || (libinput[0] === major && libinput[1] < minor)))
+            return `Needs libinput ${major}.${minor} or later, which brought plugins: this system has ${libinput.join('.')}`;
+        return null;
+    }
+
+    // libinput's version as [major, minor], from its command-line tool, or null
+    // where that is not installed.
+    _libinputVersion() {
+        try {
+            const [ok, out] = GLib.spawn_command_line_sync('libinput --version');
+            const match = ok && new TextDecoder().decode(out).match(/^(\d+)\.(\d+)/);
+            return match ? [Number(match[1]), Number(match[2])] : null;
+        } catch {
+            return null;
+        }
     }
 
     // What a switch displaced has to survive the preferences process exiting:

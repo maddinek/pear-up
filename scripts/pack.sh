@@ -41,6 +41,7 @@ EXTRA_SOURCES=(
     forceQuit.js
     util.js
     icons
+    libinput
 )
 
 PACK_ARGS=()
