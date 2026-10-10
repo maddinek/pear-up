@@ -131,6 +131,12 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         }
         if (dock.get_int('custom-theme-running-dots-border-width') !== 0)
             problems.push('the dot keeps a border, so None would still draw a ring');
+        // The dropdown's value shares the row with the subtitle, and a subtitle
+        // as long as the old one, 81 characters, left "One Dot, Like macOS" room
+        // for an ellipsis at the default window width.
+        if (row.subtitle.length > 48)
+            problems.push(`the indicator row's subtitle is ${row.subtitle.length} characters, ` +
+                'enough to squeeze the selected value out of the row');
         print('  running indicator: every choice stored and read back');
     }
 }
@@ -1460,6 +1466,31 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         if (problems.length === problemsBefore)
             print('  extensions: both installed; the switches go through the shell, the radius keeps the other entries');
     }
+}
+
+// The About page names the release as people do. `version` is the integer GNOME
+// compares, which printed as "Version 2" for 0.2.0; it is only what is shown
+// where metadata.json has no version-name.
+{
+    const versionShown = meta => {
+        const page = new Preferences(meta)._buildAboutPage();
+        const row = findWidget(page, widget =>
+            widget instanceof Adw.ActionRow && widget.title === 'Version');
+        return row ? row.subtitle : null;
+    };
+    const { 'version-name': name, ...unnamed } = metadata;
+    const problemsBefore = problems.length;
+
+    if (!name) {
+        problems.push('about: metadata.json has no version-name');
+    } else {
+        if (versionShown(metadata) !== name)
+            problems.push(`about: the version is ${JSON.stringify(versionShown(metadata))}, expected ${JSON.stringify(name)}`);
+        if (versionShown(unnamed) !== String(metadata.version))
+            problems.push(`about: without a version-name the version is ${JSON.stringify(versionShown(unnamed))}, expected ${JSON.stringify(String(metadata.version))}`);
+    }
+    if (problems.length === problemsBefore)
+        print(`  about: shows ${name}, and ${metadata.version} without a version-name`);
 }
 
 // The file manager's name is empty out of the box, which follows the app: File

@@ -8,6 +8,19 @@ human reads.
 
 ### Fixed
 
+- **The preferences read cleanly at the default width.** Four things that
+  showed in the 820px window at scale 2. The Dock page's Indicator dropdown was
+  squeezed to "One Dot, Like m…" by its own 81-character subtitle, which shares
+  the row with the value; the subtitle is shorter now, what it said about
+  tray-only apps such as Steam is the group's description, and the two long
+  subtitles of When to Show the Dock are shortened for the same reason. The
+  Strong end of the Magnification slider ran to the edge of its row, because
+  the labels of a slider's marks are centred on them and overhang its end; every
+  slider has a small margin there now. "Before the Control Center Icons" left
+  "left" alone on a second line, which a shorter subtitle fixes. And About said
+  "Version 2", the integer GNOME compares; it shows the version-name, 0.2.0, and
+  the integer only where there is none.
+
 - **File → New … Window uses the app's own name.** With Files in front the
   item said "New Nautilus Window" while the bar said Files: it took its name from
   the File Manager / Desktop Name setting, whose default was Nautilus, the name

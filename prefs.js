@@ -241,7 +241,7 @@ const DOCK_VISIBILITY = [
     },
     {
         title: 'Hide When a Window Is in the Way',
-        subtitle: 'Visible on an empty desktop, hidden as soon as a window overlaps it',
+        subtitle: 'Hidden as soon as a window overlaps it',
         apply: (dock, has) => {
             dock.set_boolean('dock-fixed', false);
             dock.set_boolean('autohide', true);
@@ -252,7 +252,7 @@ const DOCK_VISIBILITY = [
     },
     {
         title: 'Hide Until Pointed At',
-        subtitle: 'Always hidden; slides out when the pointer reaches the screen edge',
+        subtitle: 'Slides out when the pointer reaches the edge',
         apply: dock => {
             dock.set_boolean('dock-fixed', false);
             dock.set_boolean('autohide', true);
@@ -1789,7 +1789,11 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             current = labels.length - 1;
         }
 
-        const subtitle = 'Shown only for apps with an open window, so tray-only apps such as Steam get none';
+        // The subtitle shares the row's width with the selected value, and a long
+        // one leaves the value a few pixels: at the default window width it
+        // squeezed "One Dot, Like macOS" down to an ellipsis. What the long one
+        // said, that tray-only apps get none, is the group's to say.
+        const subtitle = 'Only for apps that have an open window';
         const row = new Adw.ComboRow({
             title: 'Indicator',
             subtitle,
@@ -1797,6 +1801,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             selected: current,
         });
         group.add(row);
+        group.set_description('Tray-only apps such as Steam have no window, so they get none');
 
         row.connect('notify::selected', () => {
             RUNNING_INDICATORS[row.selected]?.apply(dock);
@@ -1808,9 +1813,9 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             const syncThemeOverride = () => {
                 const overridden = dock.get_boolean('apply-custom-theme');
                 row.set_sensitive(!overridden);
-                row.set_subtitle(overridden
-                    ? 'Dash to Dock’s built-in theme draws its own; turn it off there to choose'
-                    : subtitle);
+                row.set_subtitle(overridden ? 'Overridden by Dash to Dock’s built-in theme' : subtitle);
+                row.set_tooltip_text(overridden
+                    ? 'Turn off Dash to Dock’s built-in theme to choose' : null);
             };
             syncThemeOverride();
             dock.connect('changed::apply-custom-theme', syncThemeOverride);
@@ -1945,7 +1950,12 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             hexpand: true,
             valign: Gtk.Align.CENTER,
         });
-        scale.set_size_request(220, -1);
+        // The labels of the marks are drawn centred on them and run past the end
+        // of the slider, so the end that has one, "Strong", reached the edge of
+        // the row. The margin is what gives it room; the width is what it takes
+        // from the minimum, so the title next to it has no less than before.
+        scale.set_size_request(212, -1);
+        scale.set_margin_end(8);
         for (const mark of marks) {
             const [at, label] = Array.isArray(mark) ? mark : [mark, null];
             // Mark labels are Pango markup, so a label is escaped, not trusted.
@@ -2039,7 +2049,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         for (const [key, title, subtitle] of [
             ['gap-before-quick-settings', 'Before the Control Center Icons',
-                'Separates them from a search icon sitting to their left'],
+                'Gap between them and a search icon to their left'],
             ['gap-before-clock', 'Before the Clock',
                 'Separates the date from the control center icons'],
         ]) {
@@ -2723,7 +2733,12 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         page.add(group);
 
         group.add(new Adw.ActionRow({ title: meta.name || 'Pear Up' }));
-        group.add(new Adw.ActionRow({ title: 'Version', subtitle: String(meta.version ?? '') }));
+        // The release as people name it. `version` is the integer GNOME compares,
+        // which reads as "2" for 0.2.0; it is what is left where there is no name.
+        group.add(new Adw.ActionRow({
+            title: 'Version',
+            subtitle: String(meta['version-name'] ?? meta.version ?? ''),
+        }));
 
         const descRow = new Adw.ActionRow({ title: 'Description', subtitle: meta.description || '' });
         descRow.set_subtitle_lines(0);
