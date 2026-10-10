@@ -2264,6 +2264,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         settings.connect('changed::status-icon-padding',
             () => paddingRow.setValue(settings.get_int('status-icon-padding')));
 
+        this._buildDesktopGroup(page, settings);
+
         this._buildSearchGroup(page, settings);
 
         const logoGroup = new Adw.PreferencesGroup({
@@ -2364,6 +2366,28 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         settings.bind('debug-logging', debugRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
         return page;
+    }
+
+    // The shell's pieces that are not the bar, where macOS has them. Each
+    // switch is applied by the shell side at once; the subtitles say what GNOME
+    // does instead, since that is what switching one off brings back.
+    _buildDesktopGroup(page, settings) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Desktop',
+            description: 'Where macOS puts the rest of the desktop. These used to need Just Perfection',
+        });
+        page.add(group);
+
+        for (const [key, title, subtitle] of [
+            ['notifications-top-right', 'Notifications at the Top Right',
+                'Under the clock wherever it is; GNOME centres them under a centred clock'],
+            ['osd-top-right', 'Volume and Brightness at the Top Right',
+                'Under the bar; GNOME shows them at the bottom centre'],
+        ]) {
+            const row = new Adw.SwitchRow({ title, subtitle });
+            group.add(row);
+            settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        }
     }
 
     // A visual icon picker: a grid of the bundled distro icons plus a

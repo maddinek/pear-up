@@ -1873,6 +1873,41 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     settings.reset('desktop-app-name');
 }
 
+// The Desktop group on the General page: the shell's pieces that are not the bar,
+// one switch each, all on out of the box like the bar's own tweaks. Each row has
+// to write its own key and follow it when it changes from outside.
+{
+    const settings = preferences.getSettings();
+    const page = pages.find(candidate => candidate.title === 'General');
+    const problemsBefore = problems.length;
+    const rows = [
+        ['Notifications at the Top Right', 'notifications-top-right'],
+        ['Volume and Brightness at the Top Right', 'osd-top-right'],
+    ];
+    const expect = (label, got, wanted) => {
+        if (got !== wanted)
+            problems.push(`desktop group: ${label} is ${got}, expected ${wanted}`);
+    };
+
+    for (const [title, key] of rows) {
+        const row = page && findWidget(page, widget =>
+            widget instanceof Adw.SwitchRow && widget.title === title);
+        if (!row) {
+            problems.push(`the General page has no "${title}" switch`);
+            continue;
+        }
+        expect(`the default of ${key}`, settings.get_default_value(key).unpack(), true);
+        expect(`"${title}" at first`, row.active, true);
+        row.active = false;
+        expect(`${key} after switching "${title}" off`, settings.get_boolean(key), false);
+        settings.set_boolean(key, true);
+        expect(`"${title}" after an outside change`, row.active, true);
+        settings.reset(key);
+    }
+    if (problems.length === problemsBefore)
+        print(`  desktop group: ${rows.length} switches, on by default, each writing its own key`);
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);

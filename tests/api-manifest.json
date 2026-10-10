@@ -136,7 +136,8 @@
       "get_paint_opacity",
       "get_preferred_width",
       "get_preferred_height",
-      "get_first_child"
+      "get_first_child",
+      "get_constraints"
     ],
     "Clutter.Timeline": [
       "start",
@@ -192,6 +193,8 @@
       "rotation_angle_z",
       "translation_x",
       "translation_y",
+      "x_align",
+      "y_align",
       "scale_x",
       "scale_y"
     ],
@@ -277,7 +280,13 @@
     "window-drag-begin",
     "window-drag-end",
     "window-drag-cancelled",
-    "xdndHandler"
+    "xdndHandler",
+    "bannerAlignment",
+    "_bannerBin",
+    "osdWindowManager",
+    "_osdWindows",
+    "MonitorConstraint",
+    "work-area"
   ],
 
   "absent": {

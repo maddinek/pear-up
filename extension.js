@@ -8,6 +8,7 @@ import { MenuManager } from './menuManager.js';
 import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
 import { DockMagnifier } from './dockMagnifier.js';
+import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
@@ -95,6 +96,7 @@ export default class GlobalMenuExtension extends Extension {
         this._logoButton = null;
         this._searchButton = null;
         this._dockMagnifier = null;
+        this._shellTweaks = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -180,6 +182,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._guard('updating dock magnification', () => this._syncDockMagnifier());
             else if (key === 'dock-focus-highlight')
                 this._guard('updating the dock highlight', () => this._syncDockFocusHighlight());
+            else if (SHELL_TWEAK_KEYS.includes(key))
+                this._shellTweaks?.sync();
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -219,6 +223,13 @@ export default class GlobalMenuExtension extends Extension {
         // members; a failure there must not take the menu bar down with it.
         this._guard('setting up dock magnification', () => this._syncDockMagnifier());
         this._guard('styling the dock highlight', () => this._syncDockFocusHighlight());
+
+        // Notifications, the volume bubble and the rest of what is not the bar.
+        // Each tweak guards itself, so one the shell has changed under it is
+        // left out on its own.
+        this._guard('applying the shell tweaks', () => {
+            this._shellTweaks = new ShellTweaks(this.metadata.uuid, this._settings);
+        });
 
         // GNOME can close a window from the keyboard but has nothing that
         // quits an app, so Cmd+Q is a binding of our own. The shell rebinds it
@@ -1199,6 +1210,9 @@ export default class GlobalMenuExtension extends Extension {
         // Gives Dash to Dock's icons their opacity back and removes the overlay
         // drawn above them, whether or not the pointer is on the dock.
         this._guard('removing dock magnification', () => this._dropDockMagnifier());
+
+        this._guard('restoring the shell tweaks', () => this._shellTweaks?.destroy());
+        this._shellTweaks = null;
 
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one

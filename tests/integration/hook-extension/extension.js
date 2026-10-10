@@ -164,6 +164,25 @@ const IFACE = `
     <method name="ReleaseClock">
       <arg type="i" direction="out" name="moves"/>
     </method>
+    <method name="ShowTestNotification">
+      <arg type="b" direction="out" name="shown"/>
+    </method>
+    <method name="SetBannerAlignment">
+      <arg type="i" direction="in" name="align"/>
+      <arg type="b" direction="out" name="set"/>
+    </method>
+    <method name="GetBannerState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="ShowTestOsd">
+      <arg type="b" direction="out" name="shown"/>
+    </method>
+    <method name="HideOsd">
+      <arg type="b" direction="out" name="hidden"/>
+    </method>
+    <method name="GetOsdState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
   </interface>
 </node>`;
 
@@ -294,6 +313,22 @@ function stageBox(actor) {
     const [x, y] = actor.get_transformed_position();
     const [width, height] = actor.get_transformed_size();
     return [x, y, width, height];
+}
+
+function rectBox(rect) {
+    return rect ? [rect.x, rect.y, rect.width, rect.height] : null;
+}
+
+// A monitor, its work area and the bar's bottom edge, to measure things placed
+// within them against.
+function screenGeometry(index) {
+    const monitor = Main.layoutManager.monitors[index];
+    const [, panelY] = Main.layoutManager.panelBox.get_transformed_position();
+    return {
+        monitor: rectBox(monitor),
+        workArea: rectBox(Main.layoutManager.getWorkAreaForMonitor(index)),
+        panelBottom: panelY + Main.layoutManager.panelBox.height,
+    };
 }
 
 export default class TestHookExtension extends Extension {
@@ -1071,6 +1106,72 @@ export default class TestHookExtension extends Extension {
         if (holder.sourceId)
             GLib.source_remove(holder.sourceId);
         return holder.moves;
+    }
+
+    // A notification from the shell itself, so its banner shows wherever the
+    // message tray puts banners. Transient: it goes away on its own.
+    ShowTestNotification() {
+        Main.notify('Pear Up test', 'Where does the banner go?');
+        return true;
+    }
+
+    // Sets where banners go the way Just Perfection does at its defaults — top
+    // centre — whenever it is enabled.
+    SetBannerAlignment(align) {
+        Main.messageTray.bannerAlignment = align;
+        return true;
+    }
+
+    GetBannerState() {
+        const tray = Main.messageTray;
+        const bin = tray._bannerBin;
+        const shown = (bin?.get_n_children?.() ?? 0) > 0;
+        return JSON.stringify({
+            alignment: tray.bannerAlignment,
+            shown,
+            box: shown ? stageBox(bin) : null,
+            ...screenGeometry(Main.layoutManager.primaryIndex),
+        });
+    }
+
+    // The volume bubble, as a volume key brings it up, on every monitor.
+    // GNOME 49 split show() into showOne() and showAll(); before, show() took a
+    // monitor index, -1 for all of them.
+    ShowTestOsd() {
+        const manager = Main.osdWindowManager;
+        const icon = new Gio.ThemedIcon({ name: 'audio-volume-medium-symbolic' });
+        if (typeof manager.showAll === 'function')
+            manager.showAll(icon, null, 0.5, 1);
+        else
+            manager.show(-1, icon, null, 0.5, 1);
+        return true;
+    }
+
+    HideOsd() {
+        Main.osdWindowManager.hideAll();
+        return true;
+    }
+
+    // Each bubble window's alignment within its monitor, whether its monitor
+    // constraint keeps it to the work area, and where the bubble itself is.
+    GetOsdState() {
+        const windows = (Main.osdWindowManager._osdWindows ?? []).filter(Boolean).map((window, index) => {
+            const constraint = window.get_constraints()
+                .find(c => 'work_area' in c && 'index' in c);
+            const bubble = window.get_first_child();
+            return {
+                xAlign: window.x_align,
+                yAlign: window.y_align,
+                onWorkArea: constraint ? constraint.work_area : null,
+                visible: window.visible,
+                box: bubble && window.visible ? stageBox(bubble) : null,
+                ...screenGeometry(index),
+            };
+        });
+        return JSON.stringify({
+            windows,
+            styled: Main.layoutManager.uiGroup.has_style_class_name('pearup-osd-top-right'),
+        });
     }
 
     // Opens a submenu by label and reports what appeared in it. Submenus whose

@@ -854,6 +854,71 @@ if state:
     except GLib.Error as exc:
         check("the clock could be read after placing it again", False, exc.message.splitlines()[0])
 
+# --------------------------------------------- notifications and the bubble
+# Clutter.ActorAlign, as the shell stores where banners and the bubble go.
+START, CENTER, END = 1, 2, 3
+
+
+def right_edge(box):
+    return box[0] + box[2]
+
+
+def banner_state():
+    return json.loads(hook("GetBannerState"))
+
+
+def osd_state(show=True):
+    if show:
+        hook("ShowTestOsd")
+        # The bubble fades in over 100ms, and is laid out on the frame after.
+        GLib.usleep(600 * 1000)
+    data = json.loads(hook("GetOsdState"))
+    if show:
+        hook("HideOsd")
+    return data
+
+
+print()
+print("  notifications and the volume bubble:")
+if state:
+    try:
+        hook("ShowTestNotification")
+        GLib.usleep(1000 * 1000)
+        banner = banner_state()
+        check("notification banners go to the top right", banner["alignment"] == END,
+              f"alignment={banner['alignment']}")
+        if banner["shown"]:
+            work = banner["workArea"]
+            check("and a banner is drawn against the right edge, under the bar",
+                  abs(right_edge(banner["box"]) - right_edge(work)) <= 2
+                  and banner["box"][1] >= banner["panelBottom"] - 1,
+                  f"banner={banner['box']} work area={work} bar ends at {banner['panelBottom']}")
+        else:
+            print("  note: no banner was drawn here, so only its alignment is checked")
+
+        # What Just Perfection does at its defaults whenever it is enabled.
+        hook("SetBannerAlignment", (CENTER,), "(i)")
+        GLib.usleep(600 * 1000)
+        check("banners go back to the right after another extension centres them",
+              banner_state()["alignment"] == END)
+
+        osd = osd_state()
+        windows = osd["windows"]
+        placed = [w for w in windows if w["box"]]
+        check("the volume bubble's windows are aligned to the top right and kept to the work area",
+              windows and all(w["xAlign"] == END and w["yAlign"] == START and w["onWorkArea"] is True
+                              for w in windows) and osd["styled"],
+              f"{[(w['xAlign'], w['yAlign'], w['onWorkArea']) for w in windows]} styled={osd['styled']}")
+        check("the volume bubble shows in the top right corner, under the bar",
+              placed and all(
+                  w["panelBottom"] <= w["box"][1] <= w["panelBottom"] + 20
+                  and right_edge(w["workArea"]) - 20 <= right_edge(w["box"]) <= right_edge(w["workArea"])
+                  for w in placed),
+              f"{[(w['box'], w['workArea'], w['panelBottom']) for w in windows]}")
+    except GLib.Error as exc:
+        check("notifications and the volume bubble could be exercised", False,
+              exc.message.splitlines()[0])
+
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
 # something consumes its output, and the shell's screenshot API returns an empty
@@ -956,6 +1021,24 @@ try:
           f"right={after_state['clockInRight']}")
     check("and the clock itself is in the centre box", after_state.get("clockBox") == "center",
           f"box={after_state.get('clockBox')}")
+
+    # GNOME's own places: banners under the centred clock, and the bubble at the
+    # bottom centre of each monitor.
+    check("notification banners are centred again, under the clock",
+          banner_state()["alignment"] == CENTER)
+    osd = osd_state()
+    windows = osd["windows"]
+    check("the volume bubble's windows have GNOME's alignment and constraint back",
+          windows and all(w["xAlign"] == CENTER and w["yAlign"] == END and w["onWorkArea"] is False
+                          for w in windows) and not osd["styled"],
+          f"{[(w['xAlign'], w['yAlign'], w['onWorkArea']) for w in windows]} styled={osd['styled']}")
+    placed = [w for w in windows if w["box"]]
+    check("and the bubble shows at the bottom centre again",
+          placed and all(
+              abs(w["box"][0] + w["box"][2] / 2 - (w["monitor"][0] + w["monitor"][2] / 2)) <= 2
+              and w["box"][1] + w["box"][3] > w["monitor"][1] + w["monitor"][3] / 2
+              for w in placed),
+          f"{[(w['box'], w['monitor']) for w in windows]}")
     check("Activities button shown again", after_state["activitiesVisible"] is True,
           f"visible={after_state['activitiesVisible']}")
 except GLib.Error as exc:

@@ -47,6 +47,15 @@ the groups out, the second packs them closer than GNOME's own spacing allows. In
 extensions add after login, such as the tray icon of an app that starts late, are spaced the same way
 as they arrive. [Vitals](https://github.com/corecoding/Vitals), if you run it, gets its readouts set
 closer together and a size smaller than the bar, as the stat readouts of macOS menu bar apps are.
+The clock stays in its corner when another extension moves it back to the centre afterwards, as
+Just Perfection does at its defaults whenever it is enabled.
+
+**The rest of the desktop, where macOS has it.** Notifications appear in the top right corner, under
+the clock, and the bubble a volume or brightness key brings up sits there too, under the bar, rather
+than at the bottom of the screen. Each is a switch of its own in the Desktop group of the General
+page, on by default, and switching one off gives back GNOME's own placement.
+[Just Perfection](https://extensions.gnome.org/extension/3843/just-perfection/) is no longer needed
+for any of this; left installed at its defaults, it does not get in the way.
 
 **A search icon of its own.** Optional, and it sits where macOS keeps Spotlight. What it opens is a
 setting: GNOME's own search, which needs nothing installed;
@@ -207,8 +216,9 @@ Both suites run in containers, so no other system has to be installed and nothin
 desktop you are using.
 
 **Does it still behave?** Boots a real GNOME Shell headless against a virtual monitor, loads the
-extension the way a login would, and checks what it actually did to the panel: the clock moved, the
-System Menu appeared with its entries, the power icon is hidden but a battery is not, the titles and
+extension the way a login would, and checks what it actually did to the panel: the clock moved, and
+taken back when another extension moves it, notifications and the volume bubble in the top right
+corner, the System Menu appeared with its entries, the power icon is hidden but a battery is not, the titles and
 clock are regular weight with the app name bold, an indicator added after start-up is spaced like the
 rest, Vitals' readouts take Pear Up's spacing and type over their own stylesheet's, the bar stays bare
 while nothing is in front, the File, Edit, View, Go, Window and Help menus appear once a window is

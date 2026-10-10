@@ -127,6 +127,21 @@
       <description>Lower values pack the icons and clock more tightly. Zero leaves no space at all between them.</description>
     </key>
 
+    <!-- The shell's own pieces that are not the bar, where macOS has them. On by
+         default like the bar's own tweaks: they are what makes it look like
+         macOS, and each one gives back exactly what it changed when switched
+         off. Together they cover what Just Perfection was installed for. -->
+    <key name="notifications-top-right" type="b">
+      <default>true</default>
+      <summary>Show notification banners in the top right corner</summary>
+      <description>Under the clock, as on macOS. GNOME puts them under the clock too, centred while it is in the middle; this keeps them on the right wherever the clock is, and whatever another extension sets.</description>
+    </key>
+    <key name="osd-top-right" type="b">
+      <default>true</default>
+      <summary>Show the volume and brightness bubble in the top right corner</summary>
+      <description>Under the bar, as on macOS, instead of at the bottom centre of the screen.</description>
+    </key>
+
     <!-- The panel button is this extension's own, so it works with no search
          extension installed at all. What it opens is left open: GNOME's search
          needs nothing, and anything else people already use can be named. -->

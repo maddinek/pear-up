@@ -180,6 +180,37 @@ human reads.
 
 ### Added
 
+- **A Desktop group on the General page, for what is not the bar.** The
+  pieces of the shell that macOS puts elsewhere, each a switch of its own and
+  on by default like the bar's tweaks. Together they cover what Just
+  Perfection was installed for, so it can go; with it still installed at its
+  defaults, nothing fights.
+
+- **Notifications at the Top Right.** GNOME shows a banner under the clock,
+  which with Clock on the Right is already the top right corner, but it sets
+  that again every time it builds the panel, and Just Perfection puts banners
+  top centre, at its defaults, whenever it is enabled. Banners now stay on the
+  right whatever the clock does, and go back there on the next idle tick
+  after anyone else moves them; a fight with something that moves them back
+  each time ends after five rounds. Switched off, they go where the last of
+  the others asked.
+
+- **Volume and Brightness at the Top Right.** The bubble a volume or
+  brightness key brings up moves from the bottom centre of each screen to the
+  top right corner, under the bar, as on macOS. Each monitor's bubble window
+  is aligned to the corner and held to the work area, which starts below the
+  bar whatever its height, rather than its class being patched, which is how
+  Just Perfection does it: two extensions wrapping the same method can only be
+  undone in the right order. A monitor added later gets the same, and every
+  window gets its own alignment back when the switch is turned off.
+
+- **The integration suite checks both, and that they are given back.** It
+  shows a notification and expects its banner against the right edge under
+  the bar, centres banners the way Just Perfection does and expects them back
+  on the right, and brings up the volume bubble and expects it in the top
+  right corner of the work area; after disabling, banners centred under the
+  clock and the bubble at the bottom centre with GNOME's own alignment.
+
 - **A Glass group on the Dock page, for a frosted-glass dock.** The floating,
   frosted pill macOS has is [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/)
   blurring and tinting what is behind Dash to Dock, and the group sets how. It is
