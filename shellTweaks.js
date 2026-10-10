@@ -1,7 +1,8 @@
 // Pieces of the shell that macOS arranges differently, set the way it has them:
 // notifications and the volume and brightness bubble in the top right corner,
-// under the bar; no popup when switching desktops; and the desktops always
-// along the top of the overview, as Mission Control shows its Spaces.
+// under the bar; no popup when switching desktops; the desktops always along
+// the top of the overview, as Mission Control shows its Spaces; and the desktop,
+// not the overview, at login.
 //
 // Each is a switch of its own, and each puts back exactly what it changed. These
 // used to need Just Perfection; with them here it can go, and where it is still
@@ -19,10 +20,14 @@
 //     keybinding handler on a popup it has just made
 //   - ThumbnailsBox.prototype._updateShouldShow and its _shouldShow, and the
 //     overview's own strip at Main.overview._overview.controls._thumbnailsBox
+//   - Main.layoutManager._startingUp, and Main.overview.runStartupAnimation,
+//     which the shell calls once as it starts and nowhere else; the overview's
+//     state at Main.overview._overview.controls._stateAdjustment
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
+import * as OverviewControls from 'resource:///org/gnome/shell/ui/overviewControls.js';
 import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import * as WorkspaceThumbnail from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 
@@ -31,6 +36,7 @@ export const SHELL_TWEAK_KEYS = [
     'osd-top-right',
     'hide-workspace-popup',
     'always-show-workspace-thumbnails',
+    'start-on-desktop',
 ];
 
 // Claimed on the UI group while the bubble is in the corner, for the margins in
@@ -144,6 +150,7 @@ export class ShellTweaks {
         this._banner = null;
         this._osd = null;
         this._osdMonitorsId = 0;
+        this._startup = null;
         this._sources = new Map();
         this._returns = new Map();
         this._givenUp = new Set();
@@ -164,6 +171,8 @@ export class ShellTweaks {
             () => this._hidePopup(), () => popupPatch.disable());
         this._toggle('always-show-workspace-thumbnails', 'showing the desktops in the overview',
             () => this._showThumbnails(), () => this._restoreThumbnails());
+        this._toggle('start-on-desktop', 'starting on the desktop',
+            () => this._skipStartupOverview(), () => this._restoreStartup());
     }
 
     // Puts back everything, whatever the switches say.
@@ -176,6 +185,7 @@ export class ShellTweaks {
         this._guard('restoring the volume and brightness bubble', () => this._restoreOsd());
         this._guard('restoring the desktop switch popup', () => popupPatch.disable());
         this._guard('restoring the desktops in the overview', () => this._restoreThumbnails());
+        this._guard('restoring the startup overview', () => this._restoreStartup());
         this._settings = null;
     }
 
@@ -424,5 +434,100 @@ export class ShellTweaks {
     // opens, and those pick up whichever method is in place then.
     _refreshThumbnails() {
         Main.overview._overview?.controls?._thumbnailsBox?._updateShouldShow?.();
+    }
+
+    // ------------------------------------------------------- the first view
+    // A login lands in the overview, which the shell opens as its startup
+    // animation; macOS shows the desktop. While the shell starts, its overview's
+    // startup animation is stood in for by one that does nothing, so the shell
+    // finishes starting with the overview closed and the desktop as it is. Only
+    // then: enabled later — at an unlock, or by hand — there is no start to
+    // change, and nothing is done.
+    //
+    // Just Perfection and Dash to Dock do this instead by having
+    // Main.sessionMode.hasOverview read false while the shell starts, which
+    // takes the shell down its other path, a zoom from the centre, and by
+    // setting it back once it has started. Each sets back what it read first,
+    // though, and the one that comes second reads the other's false, which can
+    // leave it false after the start — and with it Super+1…9, which the shell
+    // offers only while there is an overview — until the next lock. Nothing
+    // here touches hasOverview; with either of them doing its own, the shell
+    // takes that path and never calls the animation stood in for here.
+    _skipStartupOverview() {
+        if (this._startup || !Main.layoutManager._startingUp)
+            return;
+
+        const overview = Main.overview;
+        if (typeof overview?.runStartupAnimation !== 'function') {
+            this._warnOnce('startup',
+                'This shell opens the overview at login in a way Pear Up does not know; leaving it as it is.');
+            return;
+        }
+
+        this._startup = {
+            skip: null,
+            completeId: Main.layoutManager.connect('startup-complete',
+                () => this._onStartupComplete()),
+        };
+
+        // Extensions are enabled while the shell starts, and the two race: with
+        // a wallpaper quick to load, the shell can have begun its animation
+        // already. Then it is too late to stand in for it, and the overview is
+        // closed at once instead, on idle — the shell copes with that part-way
+        // through the animation, and the sooner, the less of it shows.
+        if (overview.visible) {
+            this._queue('leaving the overview after starting', () => this._leaveStartupOverview());
+            return;
+        }
+
+        // Somebody else's stand-in is already there, and is theirs to remove.
+        if (Object.hasOwn(overview, 'runStartupAnimation'))
+            return;
+
+        // GNOME 45 passes a callback and carries on starting once it is called;
+        // later releases await what this returns. The callback finishes the
+        // shell's start, so it is not cancelled with the rest on disable.
+        const skip = callback => {
+            if (typeof callback === 'function') {
+                GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    callback();
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+            return Promise.resolve();
+        };
+        overview.runStartupAnimation = skip;
+        this._startup.skip = skip;
+    }
+
+    _onStartupComplete() {
+        this._restoreStartup();
+        this._queue('leaving the overview after starting', () => this._leaveStartupOverview());
+    }
+
+    // Closes the overview if it opened; asked again while it is closing, hide()
+    // does nothing. If it never opened, its state is still the window picker it
+    // is made with, which is where a swipe up on the touchpad would start from;
+    // it goes to hidden, where closing the overview leaves it.
+    _leaveStartupOverview() {
+        if (Main.overview.visible) {
+            Main.overview.hide();
+            return;
+        }
+        const state = Main.overview._overview?.controls?._stateAdjustment;
+        const hidden = OverviewControls.ControlsState?.HIDDEN;
+        if (state && hidden !== undefined && state.value !== hidden)
+            state.value = hidden;
+    }
+
+    _restoreStartup() {
+        const startup = this._startup;
+        if (!startup)
+            return;
+
+        this._startup = null;
+        Main.layoutManager.disconnect(startup.completeId);
+        if (startup.skip && Main.overview.runStartupAnimation === startup.skip)
+            delete Main.overview.runStartupAnimation;
     }
 }

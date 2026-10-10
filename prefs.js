@@ -2387,6 +2387,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 'The desktop slides across, and nothing else shows'],
             ['always-show-workspace-thumbnails', 'Always Show the Desktops in the Overview',
                 'Along the top, like Mission Control; GNOME hides them until two are in use'],
+            ['start-on-desktop', 'Start on the Desktop',
+                'Instead of the overview at login; takes effect at the next one'],
         ]) {
             const row = new Adw.SwitchRow({ title, subtitle });
             group.add(row);

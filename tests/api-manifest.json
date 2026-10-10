@@ -292,7 +292,12 @@
     "_updateShouldShow",
     "_shouldShow",
     "should-show",
-    "_thumbnailsBox"
+    "_thumbnailsBox",
+    "_startingUp",
+    "runStartupAnimation",
+    "startup-complete",
+    "_stateAdjustment",
+    "ControlsState"
   ],
 
   "absent": {

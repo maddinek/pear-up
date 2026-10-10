@@ -151,6 +151,11 @@
       <summary>Always show the desktops along the top of the overview</summary>
       <description>GNOME hides them until two are in use; Mission Control shows its Spaces however many there are.</description>
     </key>
+    <key name="start-on-desktop" type="b">
+      <default>true</default>
+      <summary>Start on the desktop, not in the overview</summary>
+      <description>GNOME opens the overview at login; macOS shows the desktop. Takes effect at the next login.</description>
+    </key>
 
     <!-- The panel button is this extension's own, so it works with no search
          extension installed at all. What it opens is left open: GNOME's search

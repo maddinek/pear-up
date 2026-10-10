@@ -54,10 +54,12 @@ Just Perfection does at its defaults whenever it is enabled.
 the clock, and the bubble a volume or brightness key brings up sits there too, under the bar, rather
 than at the bottom of the screen. Switching desktops slides the desktop across with no popup, and the
 overview always shows the desktops along its top, as Mission Control shows its Spaces, where GNOME
-hides them until two are in use. Each is a switch of its own in the Desktop group of the General
-page, on by default, and switching one off gives back what GNOME does.
+hides them until two are in use. And a login starts on the desktop rather than in the overview. Each
+is a switch of its own in the Desktop group of the General page, on by default, and switching one off
+gives back what GNOME does.
 [Just Perfection](https://extensions.gnome.org/extension/3843/just-perfection/) is no longer needed
-for any of this; left installed at its defaults, it does not get in the way.
+for any of this, and neither is Dash to Dock's own switch for starting without the overview; left
+installed at its defaults, Just Perfection does not get in the way.
 
 **A search icon of its own.** Optional, and it sits where macOS keeps Spotlight. What it opens is a
 setting: GNOME's own search, which needs nothing installed;
@@ -219,14 +221,14 @@ desktop you are using.
 
 **Does it still behave?** Boots a real GNOME Shell headless against a virtual monitor, loads the
 extension the way a login would, and checks what it actually did to the panel: the clock moved, and
-taken back when another extension moves it, notifications and the volume bubble in the top right
-corner, no popup when switching desktops and the overview's desktops always shown, the System Menu
-appeared with its entries, the power icon is hidden but a battery is not, the titles and
-clock are regular weight with the app name bold, an indicator added after start-up is spaced like the
-rest, Vitals' readouts take Pear Up's spacing and type over their own stylesheet's, the bar stays bare
-while nothing is in front, the File, Edit, View, Go, Window and Help menus appear once a window is
-focused, File and Go stay generic unless a file manager is in front, and disabling it leaves nothing
-behind.
+back in its corner after another extension moves it, notifications and the volume bubble in the top
+right corner, no popup when switching desktops, the overview's desktops always shown, the session
+starting on the desktop, the System Menu appeared with its entries, the power icon is hidden but a
+battery is not, the titles and clock are regular weight with the app name bold, an indicator added
+after start-up is spaced like the rest, Vitals' readouts take Pear Up's spacing and type over their
+own stylesheet's, the bar stays bare while nothing is in front, the File, Edit, View, Go, Window and
+Help menus appear once a window is focused, File and Go stay generic unless a file manager is in
+front, and disabling it leaves nothing behind.
 
 With Dash to Dock installed in the same container, a virtual pointer then hovers the dock, on the right
 edge and along the bottom: the icon under it has to reach exactly the chosen size, its neighbours less

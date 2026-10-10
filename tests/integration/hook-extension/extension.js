@@ -192,6 +192,9 @@ const IFACE = `
     <method name="GetWorkspaceState">
       <arg type="s" direction="out" name="state"/>
     </method>
+    <method name="GetStartupState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
   </interface>
 </node>`;
 
@@ -268,6 +271,30 @@ let vitalsStandIn = null;
 // the re-enable that disabling Pear Up causes, so that it can be let go of.
 let clockHolder = null;
 
+// What the shell did while it started, as seen from this hook, which is enabled
+// straight after Pear Up at login: whether the shell was still starting then,
+// whether the overview was open by then, how often it began to show before the
+// start finished, and whether it was open when it did. Module-level, so that the
+// re-enable that disabling Pear Up causes does not start it over.
+const startup = { seen: null, overviewAtEnable: null, showings: 0, overviewAtComplete: null };
+
+function watchStartup() {
+    if (startup.seen !== null)
+        return;
+
+    startup.seen = Main.layoutManager._startingUp;
+    if (!startup.seen)
+        return;
+
+    startup.overviewAtEnable = Main.overview.visible;
+    const showingId = Main.overview.connect('showing', () => startup.showings++);
+    const completeId = Main.layoutManager.connect('startup-complete', () => {
+        startup.overviewAtComplete = Main.overview.visible;
+        Main.overview.disconnect(showingId);
+        Main.layoutManager.disconnect(completeId);
+    });
+}
+
 // The panel box an actor is in, by the name Pear Up's settings and the shell's
 // session layouts use for it.
 function panelBoxOf(actor) {
@@ -342,6 +369,7 @@ function screenGeometry(index) {
 
 export default class TestHookExtension extends Extension {
     enable() {
+        watchStartup();
         this._export = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
         this._export.export(Gio.DBus.session, PATH);
     }
@@ -434,8 +462,9 @@ export default class TestHookExtension extends Extension {
     }
 
     // Put a window in front. A headless shell has no pointer or keyboard to do
-    // it, and it starts in the overview where nothing is focused at all — so
-    // without this there is never an application for the menu bar to describe.
+    // it, and it starts with nothing focused at all — in the overview, unless
+    // Pear Up's Start on the Desktop kept it out — so without this there is
+    // never an application for the menu bar to describe.
     FocusFirstWindow() {
         Main.overview.hide();
 
@@ -1213,6 +1242,20 @@ export default class TestHookExtension extends Extension {
                 .includes('DISPLAY_TIMEOUT'),
             stripRuleIsShells: source(WorkspaceThumbnail.ThumbnailsBox.prototype, '_updateShouldShow')
                 .includes('NUM_WORKSPACES_THRESHOLD'),
+        });
+    }
+
+    // The overview's state is its controls' adjustment: 0 hidden, 1 the window
+    // picker, 2 the app grid. And whether anything still stands in for the
+    // overview's startup animation, an own property over the shell's method.
+    GetStartupState() {
+        return JSON.stringify({
+            ...startup,
+            startingUp: Main.layoutManager._startingUp,
+            overviewVisible: Main.overview.visible,
+            overviewState: Main.overview._overview?.controls?._stateAdjustment?.value ?? null,
+            standIn: Object.hasOwn(Main.overview, 'runStartupAnimation'),
+            panelStyle: Main.panel.style,
         });
     }
 

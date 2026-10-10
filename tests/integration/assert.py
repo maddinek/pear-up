@@ -91,6 +91,38 @@ info = extension_info()
 check("extension is active", info.get("state") == 1, f"state={info.get('state')}")
 check("extension reported no error", not info.get("error"), info.get("error") or "none")
 
+# ------------------------------------------------------------ the first view
+# GNOME opens the overview at login, as its startup animation; with Start on the
+# Desktop on, as it is by default, the shell has to finish starting with it
+# closed. The hook is enabled straight after Pear Up, so it sees whether the
+# overview so much as began to show once Pear Up was in place. If the shell had
+# already begun before Pear Up was enabled — the two race at login, and with no
+# wallpaper to load here the shell can win — Pear Up closes it straight away.
+try:
+    first = json.loads(hook("GetStartupState"))
+    check("the session starts on the desktop, not in the overview",
+          first["startingUp"] is False and first["overviewVisible"] is False
+          and first["overviewState"] == 0,
+          f"overview visible={first['overviewVisible']} state={first['overviewState']} "
+          f"starting={first['startingUp']}")
+    if first["seen"]:
+        check("the overview never began to show while the shell started",
+              first["showings"] == 0, f"began to show {first['showings']} times")
+        if first["overviewAtEnable"]:
+            print("  note: the shell had begun to show the overview before Pear Up was enabled, "
+                  "so it was closed rather than skipped; open when the start completed: "
+                  f"{first['overviewAtComplete']}")
+    else:
+        print("  note: the shell had finished starting before the hook was enabled")
+    check("nothing is left standing in for the overview's startup animation",
+          first["standIn"] is False)
+    # The startup animation turns the bar's transitions off while it runs, and
+    # the overview closing, part-way through it or after, turns them on again.
+    check("the bar keeps its transitions after the start",
+          not first["panelStyle"], f"style={first['panelStyle']!r}")
+except GLib.Error as exc:
+    check("the first view could be read", False, exc.message.splitlines()[0])
+
 # ------------------------------------------------------------ what it did
 try:
     state = panel_state()
@@ -219,9 +251,8 @@ try:
 except FileNotFoundError:
     print("  note: gjs missing, cannot open a window")
 
-# Wait for the window to map, then put it in front: a headless shell starts in
-# the overview with nothing focused, and the menu bar describes the focused
-# application.
+# Wait for the window to map, then put it in front: a headless shell starts with
+# nothing focused, and the menu bar describes the focused application.
 menus = []
 for _ in range(40):
     GLib.usleep(500 * 1000)

@@ -224,11 +224,35 @@ human reads.
   options for them are set, and putting back what Pear Up found would throw
   its wrapper away. At its defaults it touches neither.
 
+- **Start on the Desktop.** A login lands in the overview, which the shell
+  opens as its startup animation; macOS shows the desktop. While the shell
+  starts, and only then, the overview's startup animation is stood in for by
+  one that does nothing, so the shell finishes starting with the overview
+  closed, and the stand-in is gone again once it has. If the shell got there
+  first — extensions are enabled while it starts, and with a wallpaper quick
+  to load the shell can win — the overview is closed straight away, part-way
+  through its animation, which the shell allows for; Dash to Dock waits for
+  the start to complete, with the overview fully shown. In a framy-like GNOME
+  50.5 that is the usual case: the overview was already showing when the last
+  extension was enabled; in the integration suite on 45 and 48 the stand-in
+  got there first, and on 50 the overview was closed. Otherwise the
+  overview's state, which it is made with at the window picker, is set to
+  hidden, where closing it leaves it: a swipe up on the touchpad starts from
+  there. Just Perfection and Dash to Dock do this by having the
+  session mode say there is no overview while the shell starts, each putting
+  back what it read first, and the one that comes second reads the other's
+  answer and puts that back, which can leave Super+1…9 off until the next
+  lock. Nothing here touches it, and with either of them doing its own the
+  shell never calls what is stood in for. Takes effect at the next login.
+
 - **The integration suite checks each of them, and that they are given
-  back.** It shows a notification and expects its banner against the right
-  edge under the bar, centres banners the way Just Perfection does and expects
-  them back on the right, and brings up the volume bubble and expects it in the
-  top right corner of the work area. It switches desktop with Cmd+PageDown and
+  back.** It expects the session to have started on the desktop, the
+  overview never to have begun to show once Pear Up was in place, its state
+  hidden and nothing left standing in for its animation. It shows a
+  notification and expects its banner against the right edge under the bar,
+  centres banners the way Just Perfection does and expects them back on the
+  right, and brings up the volume bubble and expects it in the top right
+  corner of the work area. It switches desktop with Cmd+PageDown and
   back, the way GNOME's own bindings do, and expects the switch with no popup,
   and the overview's strip of desktops shown with only two. After disabling:
   banners centred under the clock, the bubble at the bottom centre with GNOME's
