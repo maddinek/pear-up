@@ -8,6 +8,26 @@ human reads.
 
 ### Fixed
 
+- **Log Out is always there to click, and the power items stay current.** The
+  pear menu greyed Log Out out on a machine with one account, and only in some
+  sessions. It followed the shell's `canLogout`, which is not "may this user log
+  out" but "does the shell offer an entry of its own", and the shell offers none
+  there; `activateLogout()` throws when it is false. It was also read once, when
+  the menu was built, so it depended on whether AccountsService had answered by
+  then. macOS always offers Log Out, and so does the menu now: it asks
+  gnome-session for the ordinary logout itself, with the shell's confirmation
+  dialog, says so in a notification when there is nothing to ask, and greys the
+  item only where an administrator has set the `disable-log-out` lockdown key.
+  Sleep, Restart, Shut Down and Lock Screen are still greyed when the system
+  says they cannot run, but are asked again each time the menu opens and follow
+  the shell as its answers arrive: they come from gnome-session, polkit and
+  logind after the menu is built, and polkit's change without notice, so a menu
+  built too early stayed greyed for the whole session. The integration suite
+  forces the shell's answer to no and rebuilds the menu, then expects Log Out
+  active and, with a stand-in for gnome-session, to ask it for the ordinary
+  logout; it expects a notification when nothing answers, and Sleep to follow
+  the shell's answer when the menu opens and when it changes.
+
 - **A shortcut set gives Dash to Dock's shortcuts back as you had them.**
   Switching a macOS shortcut set on stands Dash to Dock's own grabs down and
   notes what they were, so that switching it off restores them. The note was

@@ -338,6 +338,88 @@ if menus:
                   for entry in entries),
               f"found {[e for e in entries if e.startswith('Log Out')]}")
 
+        # ------------------------------------------- Log Out, and the power items
+        # GNOME's own Log Out entry is left out on a machine with one local user
+        # and no other session, and the shell's canLogout says so; macOS always
+        # offers it, and so does this menu. Found as a greyed-out item on a laptop
+        # with one account, and only in some sessions, because the answer also
+        # depended on whether AccountsService had replied before the menu was
+        # built. The answer is forced to "no" and the menu rebuilt under it, so
+        # this holds on any machine whatever its accounts are.
+        def hook(method, args=None, signature="()"):
+            return call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, method,
+                        args, signature).unpack()[0]
+
+        def system_item(prefix):
+            tree = next((m for m in menu_tree() if m["role"] == "pearup-logo"), None)
+            return next((item for item in (tree["items"] if tree else [])
+                         if (item["label"] or "").startswith(prefix)), None)
+
+        try:
+            hook("SetSystemAction", ("logout", False, False), "(sbb)")
+            pear_up_setting("show-log-out", "false")
+            GLib.usleep(500 * 1000)
+            pear_up_setting("show-log-out", "true")
+            GLib.usleep(800 * 1000)
+
+            gnome = json.loads(hook("GetSystemActions"))
+            logout = system_item("Log Out")
+            check("Log Out is available although GNOME offers no entry of its own",
+                  bool(logout) and logout["sensitive"] is True,
+                  f"canLogout={gnome['canLogout']} item={logout}")
+
+            # What a click does with gnome-session there to ask: the ordinary
+            # logout, mode 0, the one with the confirmation dialog.
+            hook("StandInForSession")
+            GLib.usleep(500 * 1000)
+            activated = hook("ActivateSystemMenuItem", ("Log Out",), "(s)")
+            GLib.usleep(500 * 1000)
+            modes = json.loads(hook("LogoutCalls"))
+            check("Log Out asks gnome-session to end the session",
+                  activated and modes == [0], f"activated={activated} modes={modes}")
+
+            # And with nothing to ask it must not go quiet: the click has closed
+            # the menu, so a notification is the only way to hear about it.
+            before = json.loads(hook("PearUpNotifications"))
+            hook("ActivateSystemMenuItem", ("Log Out",), "(s)")
+            GLib.usleep(1200 * 1000)
+            after = json.loads(hook("PearUpNotifications"))
+            check("Log Out says so when there is no session to ask",
+                  len(after) == len(before) + 1 and after[-1:] == ["Log Out is not available."],
+                  f"before={before} after={after}")
+
+            # Sleep, Restart, Shut Down and Lock Screen are answered by
+            # gnome-session, polkit and logind some time after the menu is
+            # built, and polkit's answers arrive with no notification at all.
+            # So the menu asks again when it opens, and follows the ones that do
+            # announce themselves. Without either a menu built too early stayed
+            # greyed out for the whole session.
+            hook("SetSystemAction", ("suspend", True, False), "(sbb)")
+            opened = json.loads(hook("OpenSystemMenu") or "[]")
+            hook("CloseSystemMenu")
+            sleep = next((item for item in opened or [] if item["label"] == "Sleep"), None)
+            check("Sleep reflects GNOME's answer at the moment the menu opens",
+                  bool(sleep) and sleep["sensitive"] is True, f"item={sleep}")
+
+            # Let the answers the open asked for come back, then change it again.
+            GLib.usleep(800 * 1000)
+            hook("SetSystemAction", ("suspend", True, True), "(sbb)")
+            GLib.usleep(200 * 1000)
+            on = (system_item("Sleep") or {}).get("sensitive")
+            hook("SetSystemAction", ("suspend", False, True), "(sbb)")
+            GLib.usleep(200 * 1000)
+            off = (system_item("Sleep") or {}).get("sensitive")
+            check("Sleep follows GNOME's answer when it changes",
+                  on is True and off is False, f"available={on} unavailable={off}")
+        except GLib.Error as exc:
+            check("Log Out and the power items could be exercised", False,
+                  exc.message.splitlines()[0])
+        finally:
+            try:
+                hook("LogoutCalls")
+            except GLib.Error:
+                pass
+
         # Separators group the menu; leading, trailing or doubled ones are the
         # symptom of building them inline as items are added.
         flags = [item["separator"] for item in system_menu["items"]]

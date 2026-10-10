@@ -16,6 +16,7 @@ import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 
 const IFACE = `
 <node>
@@ -119,6 +120,34 @@ const IFACE = `
       <arg type="b" direction="in" name="focused"/>
       <arg type="b" direction="out" name="set"/>
     </method>
+    <method name="GetSystemActions">
+      <arg type="s" direction="out" name="actions"/>
+    </method>
+    <method name="SetSystemAction">
+      <arg type="s" direction="in" name="id"/>
+      <arg type="b" direction="in" name="available"/>
+      <arg type="b" direction="in" name="notify"/>
+      <arg type="b" direction="out" name="set"/>
+    </method>
+    <method name="OpenSystemMenu">
+      <arg type="s" direction="out" name="items"/>
+    </method>
+    <method name="CloseSystemMenu">
+      <arg type="b" direction="out" name="closed"/>
+    </method>
+    <method name="ActivateSystemMenuItem">
+      <arg type="s" direction="in" name="prefix"/>
+      <arg type="b" direction="out" name="activated"/>
+    </method>
+    <method name="StandInForSession">
+      <arg type="b" direction="out" name="ready"/>
+    </method>
+    <method name="LogoutCalls">
+      <arg type="s" direction="out" name="modes"/>
+    </method>
+    <method name="PearUpNotifications">
+      <arg type="s" direction="out" name="notifications"/>
+    </method>
     <method name="SaveStage">
       <arg type="s" direction="in" name="path"/>
       <arg type="b" direction="out" name="saved"/>
@@ -127,6 +156,26 @@ const IFACE = `
 </node>`;
 
 const PATH = '/io/github/maddinek/PearUpTestHook';
+
+// The one method of gnome-session that Pear Up's Log Out calls, answered by the
+// hook while a test asks for it: there is no gnome-session in the container.
+const SESSION_IFACE = `
+<node>
+  <interface name="org.gnome.SessionManager">
+    <method name="Logout">
+      <arg type="u" direction="in" name="mode"/>
+    </method>
+  </interface>
+</node>`;
+
+// The SystemActions property each action id reports through.
+const ACTION_PROPERTIES = {
+    'suspend': 'can-suspend',
+    'restart': 'can-restart',
+    'power-off': 'can-power-off',
+    'lock-screen': 'can-lock-screen',
+    'logout': 'can-logout',
+};
 
 // The shell promisifies these itself in screenshot.js; repeated here so the hook
 // does not depend on that module having been loaded first.
@@ -202,6 +251,7 @@ export default class TestHookExtension extends Extension {
     }
 
     disable() {
+        this.LogoutCalls();
         this.ReleaseLeftEdge();
         this._pointer = null;
         this._keyboard = null;
@@ -690,6 +740,112 @@ export default class TestHookExtension extends Extension {
         else
             Main.overview.endItemDrag(this);
         return true;
+    }
+
+    // What GNOME itself says about the system actions, which is what the System
+    // Menu's items have to follow. canLogout in particular is not "may this
+    // user log out": it is whether the shell offers an entry for it.
+    GetSystemActions() {
+        const actions = SystemActions.getDefault();
+        return JSON.stringify({
+            canLogout: actions.canLogout,
+            canSuspend: actions.canSuspend,
+            canRestart: actions.canRestart,
+            canPowerOff: actions.canPowerOff,
+            canLockScreen: actions.canLockScreen,
+        });
+    }
+
+    // Says what the shell would say for one action, as when the answers from
+    // gnome-session and polkit arrive after the menu was built — with the
+    // notification the shell sends for them, or without, as polkit's changes
+    // arrive. Reaches into the shell's own bookkeeping, which is the only way
+    // to put the answer where a real session has it.
+    SetSystemAction(id, available, notify) {
+        const actions = SystemActions.getDefault();
+        const action = actions._actions?.get(id);
+        if (!action)
+            return false;
+
+        action.available = available;
+        if (notify)
+            actions.notify(ACTION_PROPERTIES[id]);
+        return true;
+    }
+
+    // Opens the System Menu and reads it in the same call, before the shell
+    // gets back to its main loop: what the items say at the moment the menu
+    // appears, not what they come to say.
+    OpenSystemMenu() {
+        const menu = Main.panel.statusArea[LOGO_ROLE]?.menu;
+        if (!menu)
+            return JSON.stringify(null);
+
+        menu.open(false);
+        return JSON.stringify((menu._getMenuItems?.() ?? []).map(item => describeItem(item, false)));
+    }
+
+    CloseSystemMenu() {
+        Main.panel.statusArea[LOGO_ROLE]?.menu?.close();
+        return true;
+    }
+
+    // Activates an item of the System Menu by the start of its label, which runs
+    // what a click on it runs without needing a pointer.
+    ActivateSystemMenuItem(prefix) {
+        const item = (Main.panel.statusArea[LOGO_ROLE]?.menu?._getMenuItems?.() ?? [])
+            .find(candidate => labelOf(candidate)?.startsWith(prefix));
+        if (!item)
+            return false;
+
+        item.activate(Clutter.get_current_event());
+        return true;
+    }
+
+    // Answers for gnome-session until LogoutCalls() lets go of it, and records
+    // what Log Out asks it. Its name is claimed asynchronously, so the suite
+    // waits a moment after this before it clicks.
+    StandInForSession() {
+        if (this._session)
+            return true;
+
+        this._logoutModes = [];
+        this._sessionExport = Gio.DBusExportedObject.wrapJSObject(SESSION_IFACE, {
+            Logout: mode => {
+                this._logoutModes.push(mode);
+            },
+        });
+        this._sessionExport.export(Gio.DBus.session, '/org/gnome/SessionManager');
+        this._session = Gio.bus_own_name_on_connection(Gio.DBus.session,
+            'org.gnome.SessionManager', Gio.BusNameOwnerFlags.NONE, null, null);
+        return true;
+    }
+
+    // The modes Log Out has asked for since StandInForSession(), and the name back.
+    LogoutCalls() {
+        const modes = this._logoutModes ?? [];
+        if (this._session) {
+            Gio.bus_unown_name(this._session);
+            this._session = 0;
+        }
+        this._sessionExport?.unexport();
+        this._sessionExport = null;
+        this._logoutModes = null;
+        return JSON.stringify(modes);
+    }
+
+    // What Pear Up has put in the message tray: its notifications are how it
+    // says that something a click was meant to do could not be done.
+    PearUpNotifications() {
+        const found = [];
+        for (const source of Main.messageTray.getSources()) {
+            for (const notification of source.notifications ?? []) {
+                // `body` is newer than the banner text of the older releases.
+                if (notification.title === 'Pear Up')
+                    found.push(notification.body ?? notification.bannerBodyText ?? null);
+            }
+        }
+        return JSON.stringify(found);
     }
 
     // A picture of the stage, painted straight into an offscreen buffer. The
