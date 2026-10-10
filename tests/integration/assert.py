@@ -47,6 +47,24 @@ def check(label, condition, detail=""):
     return bool(condition)
 
 
+def pear_up_gsettings(*args):
+    return subprocess.run(
+        ["gsettings", *args],
+        env={**os.environ,
+             "GSETTINGS_SCHEMA_DIR":
+                 f"{os.environ.get('HOME', '/root')}/.local/share/gnome-shell"
+                 f"/extensions/{UUID}/schemas"},
+        capture_output=True, text=True, check=False)
+
+
+def pear_up_setting(key, value):
+    pear_up_gsettings("set", "org.gnome.shell.extensions.pear-up", key, value)
+
+
+def pear_up_value(key):
+    return pear_up_gsettings("get", "org.gnome.shell.extensions.pear-up", key).stdout.strip()
+
+
 def extension_info():
     return call("org.gnome.Shell", "/org/gnome/Shell",
                 "org.gnome.Shell.Extensions", "GetExtensionInfo",
@@ -270,15 +288,6 @@ if menus:
     # was inserted at fixed indices on the assumption that slot 0 belonged to
     # this extension, so every menu added pushed the System Menu one place
     # further right until it sat behind the whole bar.
-    def pear_up_setting(key, value):
-        subprocess.run(
-            ["gsettings", "set", "org.gnome.shell.extensions.pear-up", key, value],
-            env={**os.environ,
-                 "GSETTINGS_SCHEMA_DIR":
-                     f"{os.environ.get('HOME', '/root')}/.local/share/gnome-shell"
-                     f"/extensions/{UUID}/schemas"},
-            capture_output=True, check=False)
-
     try:
         call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "ClaimLeftEdge")
         # Rebuild the bar now that the decoy holds slot 0.
@@ -550,6 +559,74 @@ except FileNotFoundError:
 except GLib.Error as exc:
     check("Cmd+Q could be exercised", False, exc.message.splitlines()[0])
 
+# ------------------------------------------------ indicators that arrive late
+# The status area is spaced by a pass over the panel at start-up and after each
+# rebuild, so an indicator added in between kept the theme's padding until the
+# next lock and unlock: Vitals, which loads after Pear Up, or the tray icon of an
+# app that starts once the session is up. The padding is set to values that are
+# neither what the stylesheet falls back to (3px) nor the shell's own (12px), so
+# an indicator nobody spaced cannot pass by chance.
+def late_indicators():
+    """(padding of the Quick Settings button, padding of each test indicator),
+    each as (natural, minimum) in logical pixels."""
+    data = json.loads(call(HOOK_NAME, HOOK_PATH, HOOK_IFACE,
+                           "MeasureLateIndicators").unpack()[0])
+    scale = data["scale"] or 1
+
+    def logical(metrics):
+        return (round(metrics["natHPadding"] / scale, 2),
+                round(metrics["minHPadding"] / scale, 2))
+
+    return (logical(data["reference"]),
+            {name: logical(m) for name, m in data["indicators"].items()})
+
+
+def add_late_indicators(*names):
+    for name in names:
+        call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "AddLateIndicator", (name,), "(s)")
+    # They are spaced on an idle after they arrive.
+    GLib.usleep(800 * 1000)
+
+
+print()
+print("  indicators that arrive late:")
+original_padding = pear_up_value("status-icon-padding")
+if state:
+    try:
+        pear_up_setting("status-icon-padding", "8")
+        GLib.usleep(800 * 1000)
+
+        # A burst, as when an extension brings up several at once.
+        add_late_indicators("first", "second", "third")
+        reference, late = late_indicators()
+        check("indicators added after start-up take the status icon padding",
+              len(late) == 3 and all(m == (8, 0) for m in late.values()),
+              f"setting=8 shell-built={reference} added={late}")
+
+        pear_up_setting("status-icon-padding", "1")
+        GLib.usleep(800 * 1000)
+        reference, late = late_indicators()
+        check("and follow the setting afterwards",
+              all(m == (1, 0) for m in late.values()),
+              f"setting=1 shell-built={reference} added={late}")
+
+        # An extension that makes its indicator again, which is a new actor.
+        call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "RemoveLateIndicators")
+        add_late_indicators("again")
+        reference, late = late_indicators()
+        check("an indicator made again is spaced like the rest",
+              late == {"again": (1, 0)} and reference == (1, 0),
+              f"setting=1 shell-built={reference} added={late}")
+
+        # Left in place for the teardown below, which checks it is let go of.
+        call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, "RemoveLateIndicators")
+        add_late_indicators("survivor")
+    except GLib.Error as exc:
+        check("late indicators could be added and measured", False,
+              exc.message.splitlines()[0])
+    finally:
+        pear_up_setting("status-icon-padding", original_padding)
+
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
 # something consumes its output, and the shell's screenshot API returns an empty
@@ -654,6 +731,20 @@ try:
           f"visible={after_state['activitiesVisible']}")
 except GLib.Error as exc:
     check("panel state readable after disable", False, exc.message.splitlines()[0])
+
+# An indicator that arrived late was spaced like the rest, so it has to be let go
+# of like the rest. One made now, with Pear Up off, shows what the shell's own
+# padding is, and the Quick Settings button is what it was before Pear Up.
+if state:
+    try:
+        add_late_indicators("stock")
+        reference, late = late_indicators()
+        check("a late indicator is back to the shell's own padding once Pear Up is off",
+              late.get("survivor") == late.get("stock") == reference,
+              f"shell-built={reference} added-late={late}")
+    except GLib.Error as exc:
+        check("late indicators could be measured after disabling", False,
+              exc.message.splitlines()[0])
 
 if dock.ready:
     dock.check_left_nothing("Pear Up is disabled")

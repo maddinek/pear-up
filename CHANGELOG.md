@@ -8,6 +8,17 @@ human reads.
 
 ### Fixed
 
+- **Indicators that arrive late are spaced like the rest.** The status area
+  was spaced once at start-up and again after each panel rebuild, so an
+  indicator added in between kept the stylesheet's floor of 3px instead of
+  the Padding Around Each Item setting: Vitals, which loads after Pear Up,
+  the tray icon of an app started after login, or an indicator its extension
+  makes again. Unless the setting happened to be 3, the bar showed uneven
+  gaps until the next lock and unlock. They are spaced as they arrive now,
+  however many come at once, and let go of again when Pear Up is disabled.
+  The integration suite adds indicators after start-up, singly and in a
+  burst, and reads the padding each one gets.
+
 - **Cmd+Q quits the app.** It used to sit on GNOME's close binding, so it
   took one window and left the rest of the app running. GNOME has nothing
   that quits a whole app, so Pear Up now binds Cmd+Q itself and asks the app

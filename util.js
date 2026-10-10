@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
 
 export function spawnCommandLine(commandLine) {
     try {
@@ -19,4 +20,14 @@ export function quitApp(app, window = null) {
     if (app?.request_quit())
         return;
     window?.delete(global.get_current_time());
+}
+
+// The two signals an actor announces its children with. GNOME 45 still has them
+// from ClutterContainer, as actor-added and actor-removed; later releases call
+// them child-added and child-removed. Asked of the actor rather than decided by
+// shell version, so nothing here has to know which release made the change.
+export function childSignals(actor) {
+    return GObject.signal_lookup('child-added', actor.constructor.$gtype)
+        ? ['child-added', 'child-removed']
+        : ['actor-added', 'actor-removed'];
 }

@@ -41,9 +41,9 @@
 // Ubuntu Dock is Dash to Dock under another name and is covered the same way.
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
-import GObject from 'gi://GObject';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import { childSignals } from './util.js';
 
 const DOCK_ACTOR_NAME = 'dashtodockContainer';
 
@@ -124,12 +124,9 @@ export class DockMagnifier {
         // whenever its own edge, size or monitor settings change, and throws
         // them away when it is disabled or the screen locks. Each of those adds
         // or removes a child of the UI group, so watching that catches every
-        // case without knowing which one happened. GNOME 45 still announces
-        // children through ClutterContainer, whose signals have other names.
+        // case without knowing which one happened.
         const { uiGroup } = Main.layoutManager;
-        const [added, removed] = GObject.signal_lookup('child-added', uiGroup.constructor.$gtype)
-            ? ['child-added', 'child-removed']
-            : ['actor-added', 'actor-removed'];
+        const [added, removed] = childSignals(uiGroup);
         uiGroup.connectObject(
             added, (_group, child) => this._onUiGroupChanged(child),
             removed, (_group, child) => this._onUiGroupChanged(child),

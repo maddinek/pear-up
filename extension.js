@@ -8,7 +8,7 @@ import { MenuManager } from './menuManager.js';
 import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
 import { DockMagnifier } from './dockMagnifier.js';
-import { quitApp } from './util.js';
+import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
 // separate toggle so nothing about the stock top bar is changed silently.
@@ -105,6 +105,7 @@ export default class GlobalMenuExtension extends Extension {
         this._overviewRetries = 0;
         this._sessionModeId = 0;
         this._resyncId = 0;
+        this._indicatorPaddingId = 0;
         this._menuSyncId = 0;
         this._hiddenSpacers = [];
         this._gapped = new Set();
@@ -187,6 +188,11 @@ export default class GlobalMenuExtension extends Extension {
         // during startup, and on unlock — which discards our arrangement.
         this._sessionModeId = Main.sessionMode.connect('updated',
             () => this._queuePanelResync());
+
+        // A rebuild is not the only way an indicator reaches the panel: others
+        // arrive on their own, long after it. Connected before the first pass
+        // below, so none can slip in between.
+        this._guard('watching for late indicators', () => this._watchRightBox());
 
         // stylesheet.css is loaded by the shell itself for every enabled
         // extension, so there is nothing to do here but claim the class it
@@ -299,7 +305,7 @@ export default class GlobalMenuExtension extends Extension {
         this._releaseOverviewButton();
         this._hiddenSpacers = [];
         this._gapped.clear();
-        this._padded.clear();
+        this._releasePadded();
         this._spotlightMoved = null;
     }
 
@@ -354,7 +360,7 @@ export default class GlobalMenuExtension extends Extension {
 
         for (const button of this._statusAreaButtons()) {
             this._restyle(button, style);
-            this._padded.add(button);
+            this._remember(button);
 
             // Quick Settings puts several icons in a single button, so the room
             // between those comes from the box holding them, not from the
@@ -364,9 +370,35 @@ export default class GlobalMenuExtension extends Extension {
             const box = this._indicatorsBox(button);
             if (box) {
                 this._restyle(box, `spacing: ${padding * 2}px;`);
-                this._padded.add(box);
+                this._remember(box);
             }
         }
+    }
+
+    // Kept so disable() can put it back. An actor leaves the set as it is
+    // destroyed: tray icons are destroyed when their app quits and made again
+    // when it starts, so a set that kept every one would grow as long as the
+    // session lasts — and undoing one the shell has finished with is a call on
+    // a disposed object, which gjs reports as a critical rather than a throw.
+    _remember(actor) {
+        if (this._padded.has(actor))
+            return;
+
+        this._padded.add(actor);
+        actor.connectObject('destroy', () => this._padded.delete(actor), this);
+    }
+
+    // Stops remembering without undoing, for actors the panel is being rebuilt
+    // around.
+    _releasePadded() {
+        for (const actor of this._padded) {
+            try {
+                actor.disconnectObject(this);
+            } catch {
+                // Went away with a panel rebuild.
+            }
+        }
+        this._padded.clear();
     }
 
     _indicatorsBox(button) {
@@ -393,9 +425,10 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     _clearIconPadding() {
-        for (const button of this._padded) {
+        for (const actor of this._padded) {
             try {
-                this._restyle(button, null);
+                this._restyle(actor, null);
+                actor.disconnectObject(this);
             } catch {
                 // Went away with a panel rebuild.
             }
@@ -407,7 +440,13 @@ export default class GlobalMenuExtension extends Extension {
     // adds them in vfunc_get_preferred_width, so Clutter has no idea the width
     // it already cached depends on them: restyling alone updates the numbers and
     // changes nothing on screen. Asking for the relayout is what applies it.
+    //
+    // A button that already has the style is left alone: each late indicator
+    // runs this over the whole cluster again, and a relayout of all of it for
+    // buttons that are already right would be for nothing.
     _restyle(button, style) {
+        if ((button.get_style() ?? null) === style)
+            return;
         button.set_style(style);
         button.queue_relayout();
         button.get_parent()?.queue_relayout();
@@ -435,6 +474,40 @@ export default class GlobalMenuExtension extends Extension {
                 }
             })
             .filter(isButton);
+    }
+
+    // The padding above goes on once per pass over the panel, and the panel gets
+    // a pass at start-up and after each rebuild. An indicator that arrives
+    // between those is left with the theme's padding rather than the setting's,
+    // so it sits at the wrong distance from its neighbours until the next lock
+    // and unlock. Vitals is enabled after this extension, a tray icon appears
+    // whenever its app starts (AppIndicator adds them to this box), and an
+    // extension that makes its indicator again hands the panel a new one.
+    _watchRightBox() {
+        const rightBox = Main.panel._rightBox;
+        if (!rightBox)
+            return;
+
+        const [added] = childSignals(rightBox);
+        rightBox.connectObject(added, () => this._queueIndicatorPadding(), this);
+    }
+
+    // Nothing is touched from the signal itself: the box is part-way through
+    // taking the child, and on GNOME 50 changing actors while Clutter is
+    // delivering a signal can abort the shell. An indicator is also not finished
+    // when it arrives — its extension keeps building it for a moment longer — so
+    // waiting for idle lets it settle, and one pass covers a burst of them.
+    _queueIndicatorPadding() {
+        if (this._indicatorPaddingId)
+            return;
+
+        this._indicatorPaddingId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._indicatorPaddingId = 0;
+            // A queued signal can still arrive after disable() has run.
+            if (this._settings)
+                this._guard('padding a late indicator', () => this._applyIconPadding());
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _hideSpacers() {
@@ -981,6 +1054,7 @@ export default class GlobalMenuExtension extends Extension {
         global.display.disconnectObject(this);
         global.window_manager.disconnectObject(this);
         global.workspace_manager.disconnectObject(this);
+        this._guard('unwatching the right box', () => Main.panel._rightBox?.disconnectObject(this));
         this._unwatchMinimized();
 
         if (this._sessionModeId) {
@@ -988,7 +1062,7 @@ export default class GlobalMenuExtension extends Extension {
             this._sessionModeId = 0;
         }
 
-        for (const source of ['_resyncId', '_menuSyncId', '_powerRetryId', '_overviewRetryId']) {
+        for (const source of ['_resyncId', '_indicatorPaddingId', '_menuSyncId', '_powerRetryId', '_overviewRetryId']) {
             if (this[source]) {
                 GLib.source_remove(this[source]);
                 this[source] = 0;

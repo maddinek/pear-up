@@ -44,6 +44,16 @@ const IFACE = `
     <method name="LeftBoxOrder">
       <arg type="s" direction="out" name="roles"/>
     </method>
+    <method name="AddLateIndicator">
+      <arg type="s" direction="in" name="name"/>
+      <arg type="b" direction="out" name="added"/>
+    </method>
+    <method name="RemoveLateIndicators">
+      <arg type="b" direction="out" name="removed"/>
+    </method>
+    <method name="MeasureLateIndicators">
+      <arg type="s" direction="out" name="metrics"/>
+    </method>
     <method name="OpenSubMenu">
       <arg type="s" direction="in" name="label"/>
       <arg type="s" direction="out" name="items"/>
@@ -148,6 +158,13 @@ const PEAR_UP_UUID = 'pear-up@maddinek.github.io';
 const LOGO_ROLE = 'pearup-logo';
 const SEARCH_ROLE = 'pearup-search';
 const DECOY_ROLE = 'pear-up-test-decoy';
+const LATE_ROLE_PREFIX = 'pear-up-test-late-';
+
+// Kept here rather than on the extension object: disabling Pear Up makes the
+// shell disable and enable again every extension loaded after it, this one
+// included, so anything held per instance is lost exactly when the suite wants
+// to see what Pear Up left behind. The indicators are the suite's to remove.
+const lateIndicators = new Map();
 
 // The overlay Pear Up draws magnified dock icons into. Found by name, the same
 // way Looking Glass would find it.
@@ -341,6 +358,53 @@ export default class TestHookExtension extends Extension {
             return role ?? 'unknown';
         });
         return JSON.stringify(roles);
+    }
+
+    // Stand in for an extension that puts an indicator on the panel after Pear Up
+    // is enabled: Vitals, which loads later, or the tray icon of an app that
+    // starts once the session is up. Added the way they add theirs, through
+    // addToStatusArea into the right box, with nothing of Pear Up's involved.
+    AddLateIndicator(name) {
+        const role = `${LATE_ROLE_PREFIX}${name}`;
+        if (lateIndicators.has(name))
+            return false;
+
+        const button = new PanelMenu.Button(0.5, `Test Late Indicator ${name}`, true);
+        button.add_child(new St.Icon({
+            icon_name: 'start-here-symbolic',
+            style_class: 'system-status-icon',
+        }));
+        Main.panel.addToStatusArea(role, button, 0, 'right');
+        lateIndicators.set(name, button);
+        return true;
+    }
+
+    RemoveLateIndicators() {
+        for (const button of lateIndicators.values())
+            button.destroy();
+        lateIndicators.clear();
+        return true;
+    }
+
+    // The horizontal padding each button computed after the theme and any
+    // inline style, beside the Quick Settings button's, which the shell builds
+    // and Pear Up has long since spaced. In theme-node lengths, which are scaled
+    // by the monitor's scale factor, so that comes along to divide it out.
+    MeasureLateIndicators() {
+        const measure = button => {
+            const node = button.get_theme_node();
+            return {
+                natHPadding: node.get_length('-natural-hpadding'),
+                minHPadding: node.get_length('-minimum-hpadding'),
+            };
+        };
+
+        return JSON.stringify({
+            scale: St.ThemeContext.get_for_stage(global.stage).scale_factor,
+            reference: measure(Main.panel.statusArea.quickSettings),
+            indicators: Object.fromEntries(
+                [...lateIndicators].map(([name, button]) => [name, measure(button)])),
+        });
     }
 
     // The computed type size of the System Menu, after the theme and any
