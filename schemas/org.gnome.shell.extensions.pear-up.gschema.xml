@@ -27,6 +27,12 @@
       <description>JSON object mapping "schemaId:key" to the displaced GVariant, serialized so switching a set off can restore the user's own binding even after the preferences window has been closed and reopened.</description>
     </key>
 
+    <key name="displaced-settings" type="s">
+      <default>"{}"</default>
+      <summary>Desktop settings displaced while an Appearance switch is on</summary>
+      <description>JSON object mapping "schemaId:key" to the GVariant the key held before, serialized so switching the look off can give back the user's own fonts and accent even after the preferences window has been closed and reopened. null means the key was at its default and goes back to it.</description>
+    </key>
+
     <key name="show-logo-menu" type="b"><default>true</default><summary>Show the System Menu button</summary></key>
     <key name="logo-icon-name" type="s"><default>"start-here-symbolic"</default><summary>System icon name for the System Menu button</summary></key>
     <key name="logo-custom-icon-path" type="s">

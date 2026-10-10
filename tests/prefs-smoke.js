@@ -6,8 +6,8 @@
 // this libadwaita only shows up when the window is opened, and then it shows up
 // as an empty window with a stack trace in the journal. This opens it.
 //
-// It is a smoke test, deliberately: it asserts that the pages build, not that
-// they look right or that the controls do anything.
+// It is a smoke test, deliberately: it asserts that the pages build, and that
+// the rows which write settings write the right ones, not that they look right.
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
@@ -64,8 +64,12 @@ const titles = pages.map(page => page.title ?? '(untitled)');
 print(`  built ${pages.length} pages: ${titles.join(', ')}`);
 
 const problems = [];
-if (pages.length < 6)
-    problems.push(`expected at least 6 pages, got ${pages.length}`);
+if (pages.length < 7)
+    problems.push(`expected at least 7 pages, got ${pages.length}`);
+// Appearance drives settings of the desktop rather than of Pear Up, so it sits
+// with the other pages that do (Dock, Keyboard) and not among the bar's own.
+if (titles.join(', ') !== 'General, Menus, Custom Menus, Dock, Appearance, Keyboard, About')
+    problems.push(`the pages are in the wrong order: ${titles.join(', ')}`);
 for (const [index, title] of titles.entries()) {
     if (!title || title === '(untitled)')
         problems.push(`page ${index} has no title, so its tab would be blank`);
@@ -230,6 +234,213 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
                 print('  focus highlight: switch writes its key and follows outside changes');
         }
     }
+}
+
+// Appearance writes GNOME's own settings, not Pear Up's. Run here they land in
+// the in-memory backend, so driving them is safe; and since a switch has to
+// give back what it replaced, the checks that matter are the round trips: the
+// user's values go out and come back exactly, also through a second preferences
+// object, which stands in for the window having been closed and reopened.
+{
+    const INTERFACE = 'org.gnome.desktop.interface';
+    const WM = 'org.gnome.desktop.wm.preferences';
+    const interfaceSettings = preferences._settingsForSchema(INTERFACE);
+    const wmSettings = preferences._settingsForSchema(WM);
+    const pearUp = preferences.getSettings();
+    const problemsBefore = problems.length;
+
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`appearance: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+
+    // Pages keep their rows alive only while somebody holds the page.
+    const kept = [];
+    const rowOf = (prefs, title) => {
+        const page = prefs._buildAppearancePage();
+        kept.push(page);
+        return findWidget(page, widget => widget instanceof Adw.SwitchRow && widget.title === title);
+    };
+    // A new object is a new process as far as anything held in memory goes.
+    // `installed` stands in for the fonts the system has; without it Pango is
+    // asked, as in the real window.
+    const prefsWith = installed => {
+        const fresh = new Preferences(metadata);
+        if (installed)
+            fresh._fontFamilyInstalled = family => installed.includes(family);
+        return fresh;
+    };
+    const forgetDisplaced = () => pearUp.reset('displaced-settings');
+
+    if (!interfaceSettings || !wmSettings) {
+        problems.push('appearance: the GNOME interface or window schemas are missing in this container');
+    } else {
+        const TYPE_ROW = 'macOS-Like Type';
+        const typeKeys = [
+            [interfaceSettings, 'font-name'],
+            [interfaceSettings, 'document-font-name'],
+            [wmSettings, 'titlebar-font'],
+            [interfaceSettings, 'font-hinting'],
+        ];
+        const typeValues = () => typeKeys.map(([settings, key]) => settings.get_string(key));
+        // What the user set, as opposed to what is in effect: null is a key
+        // left at its default, which must come back as exactly that.
+        const typeUserValues = () => typeKeys.map(([settings, key]) =>
+            settings.get_user_value(key)?.unpack() ?? null);
+        const setType = values => typeKeys.forEach(([settings, key], index) => {
+            if (values[index] === null)
+                settings.reset(key);
+            else
+                settings.set_string(key, values[index]);
+        });
+        const typeFor = family => [`${family} 11`, `${family} 11`, `${family} Bold 11`, 'none'];
+        const unset = [null, null, null, null];
+        const mine = ['Previous Sans 12', 'Previous Serif 13', 'Previous Sans Bold 12', 'full'];
+
+        // Pango has to agree with fontconfig about what is installed, since
+        // that is the whole basis for choosing between the two fonts.
+        const [listed, listing] = GLib.spawn_command_line_sync('fc-list : family');
+        if (listed) {
+            const families = new Set(new TextDecoder().decode(listing).split(/[\n,]/)
+                .map(family => family.trim().toLowerCase()));
+            const expected = ['Adwaita Sans', 'Inter'].find(family => families.has(family.toLowerCase())) ?? null;
+            expect('the font Pango finds', preferences._macOSTypeFamily(), expected);
+            print(`  appearance: this system has ${expected ?? 'neither Adwaita Sans nor Inter'}`);
+        }
+
+        // Whichever of the two fonts is there, the same behaviour.
+        for (const family of ['Adwaita Sans', 'Inter']) {
+            const at = what => `${family}: ${what}`;
+
+            setType(mine);
+            forgetDisplaced();
+            let row = rowOf(prefsWith([family]), TYPE_ROW);
+            expect(at('the switch while the type is the user\'s own'), row.active, false);
+            expect(at('the switch can be turned on'), row.sensitive, true);
+            row.active = true;
+            expect(at('the four values after switching on'), typeValues(), typeFor(family));
+            expect(at('the switch after switching on'), row.active, true);
+
+            // The window closed and opened again: nothing but the stored note.
+            row = rowOf(prefsWith([family]), TYPE_ROW);
+            expect(at('the switch after reopening'), row.active, true);
+            row.active = false;
+            expect(at('the four values after switching off'), typeValues(), mine);
+            expect(at('the notes once handed back'), pearUp.get_string('displaced-settings'), '{}');
+
+            // Nothing set by the user comes back as nothing set by the user.
+            setType(unset);
+            forgetDisplaced();
+            const defaults = typeValues();
+            row = rowOf(prefsWith([family]), TYPE_ROW);
+            expect(at('the switch at the defaults'), row.active,
+                JSON.stringify(defaults) === JSON.stringify(typeFor(family)));
+            row.active = true;
+            expect(at('the four values after switching on from the defaults'), typeValues(), typeFor(family));
+            row = rowOf(prefsWith([family]), TYPE_ROW);
+            row.active = false;
+            expect(at('the user\'s values after switching off, back to the defaults'), typeUserValues(), unset);
+            expect(at('the values after switching off, back to the defaults'), typeValues(), defaults);
+
+            // One of them already in place is still the user's to get back.
+            const partial = [`${family} 11`, ...mine.slice(1)];
+            setType(partial);
+            forgetDisplaced();
+            row = rowOf(prefsWith([family]), TYPE_ROW);
+            expect(at('the switch with only one value in place'), row.active, false);
+            row.active = true;
+            row = rowOf(prefsWith([family]), TYPE_ROW);
+            row.active = false;
+            expect(at('the user\'s values after a partial match'), typeUserValues(), partial);
+
+            // Set by hand, before this switch existed: nothing was noted, and
+            // the default is the only thing there is to go back to.
+            setType(typeFor(family));
+            forgetDisplaced();
+            row = rowOf(prefsWith([family]), TYPE_ROW);
+            expect(at('the switch when all four already match'), row.active, true);
+            row.active = false;
+            expect(at('the user\'s values after switching off values set by hand'), typeUserValues(), unset);
+
+            // It follows the keys when they change somewhere else.
+            setType(typeFor(family));
+            forgetDisplaced();
+            row = rowOf(prefsWith([family]), TYPE_ROW);
+            interfaceSettings.set_string('font-hinting', 'slight');
+            expect(at('the switch after the hinting changed elsewhere'), row.active, false);
+            interfaceSettings.set_string('font-hinting', 'none');
+            expect(at('the switch after the hinting changed back'), row.active, true);
+        }
+
+        // Neither font: the row says why, rather than writing a font that is not there.
+        setType(mine);
+        forgetDisplaced();
+        let row = rowOf(prefsWith([]), TYPE_ROW);
+        expect('no font: the switch', [row.active, row.sensitive], [false, false]);
+        if (!/neither/.test(row.subtitle ?? ''))
+            problems.push(`appearance: no font: the subtitle does not say why (${row.subtitle})`);
+        row.active = true;
+        expect('no font: the values after trying to switch on', typeValues(), mine);
+        // ...but a type that is already macOS's can still be switched off.
+        setType(typeFor('Adwaita Sans'));
+        forgetDisplaced();
+        row = rowOf(prefsWith([]), TYPE_ROW);
+        expect('no font: the switch while the values are in place', [row.active, row.sensitive], [true, true]);
+
+        // The accent exists from GNOME 47; before that the row must not.
+        const ACCENT_ROW = 'Blue Accent, Like macOS';
+        if (!preferences._schemaHasKey(interfaceSettings, 'accent-color')) {
+            expect('the accent row on a release without accent colors',
+                rowOf(prefsWith(), ACCENT_ROW), null);
+        } else {
+            const accent = () => interfaceSettings.get_string('accent-color');
+            const accentUser = () => interfaceSettings.get_user_value('accent-color')?.unpack() ?? null;
+
+            interfaceSettings.set_string('accent-color', 'purple');
+            forgetDisplaced();
+            row = rowOf(prefsWith(), ACCENT_ROW);
+            expect('the accent switch while it is purple', row.active, false);
+            row.active = true;
+            expect('the accent after switching on', accent(), 'blue');
+            row = rowOf(prefsWith(), ACCENT_ROW);
+            expect('the accent switch after reopening', row.active, true);
+            row.active = false;
+            expect('the accent after switching off', accent(), 'purple');
+
+            interfaceSettings.reset('accent-color');
+            forgetDisplaced();
+            row = rowOf(prefsWith(), ACCENT_ROW);
+            row.active = true;
+            row = rowOf(prefsWith(), ACCENT_ROW);
+            row.active = false;
+            expect('the accent after switching off, back to the default', accentUser(), null);
+
+            interfaceSettings.set_string('accent-color', 'blue');
+            forgetDisplaced();
+            row = rowOf(prefsWith(), ACCENT_ROW);
+            expect('the accent switch when it is already blue', row.active, true);
+            interfaceSettings.set_string('accent-color', 'green');
+            expect('the accent switch after the accent changed elsewhere', row.active, false);
+
+            // Both switches share one note, and neither disturbs the other's.
+            setType(mine);
+            interfaceSettings.set_string('accent-color', 'purple');
+            forgetDisplaced();
+            const both = prefsWith(['Adwaita Sans']);
+            const typeSwitch = rowOf(both, TYPE_ROW);
+            const accentSwitch = rowOf(both, ACCENT_ROW);
+            typeSwitch.active = true;
+            accentSwitch.active = true;
+            accentSwitch.active = false;
+            expect('the accent with the type still on', accent(), 'purple');
+            expect('the type with the accent switched off', typeValues(), typeFor('Adwaita Sans'));
+            typeSwitch.active = false;
+            expect('the type after both are off', typeValues(), mine);
+        }
+    }
+
+    if (problems.length === problemsBefore)
+        print('  appearance: type and accent switches write their keys and hand the user\'s values back');
 }
 
 // A shortcut set stands conflicting grabs down while it is on, and has to give

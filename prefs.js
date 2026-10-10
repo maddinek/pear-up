@@ -7,6 +7,7 @@ import Gdk from 'gi://Gdk';
 import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import GLib from 'gi://GLib';
+import PangoCairo from 'gi://PangoCairo';
 
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
@@ -22,6 +23,23 @@ const PEAR_UP_SCHEMA = 'org.gnome.shell.extensions.pear-up';
 const WM_PREFERENCES_SCHEMA = 'org.gnome.desktop.wm.preferences';
 const INPUT_SOURCES_SCHEMA = 'org.gnome.desktop.input-sources';
 const SWAP_ALT_CMD_OPTION = 'altwin:swap_alt_win';
+
+// Fonts, accent, icons and cursor are GNOME-wide settings too, and the
+// Appearance page only sets them.
+const INTERFACE_SCHEMA = 'org.gnome.desktop.interface';
+
+// Our own settings keys that remember what a switch on these pages displaced,
+// so switching it off can hand the user's values back (see _getDisplacedMap).
+const DISPLACED_KEYBINDINGS = 'displaced-keybindings';
+const DISPLACED_SETTINGS = 'displaced-settings';
+
+// What macOS sets its text in is not available here. GNOME's own Inter fork,
+// Adwaita Sans, is the closest and ships from GNOME 48; Inter is what it was
+// forked from and is what older releases can have. The first one installed
+// wins. Whether one is installed is asked of Pango, not worked out from the
+// GNOME version: distributions package it separately, and an older release can
+// have it too.
+const MACOS_TYPE_FAMILIES = ['Adwaita Sans', 'Inter'];
 
 // A Magic Keyboard reports Cmd as Super, so binding the Super combinations
 // gives the real macOS chords rather than an approximation of them. Each entry
@@ -191,6 +209,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         window.add(this._buildMenusPage(settings));
         window.add(this._buildCustomMenuPage(settings));
         window.add(this._buildDockPage(settings));
+        window.add(this._buildAppearancePage());
         window.add(this._buildKeyboardPage());
         window.add(this._buildAboutPage());
 
@@ -436,6 +455,83 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         });
     }
 
+    // Type and color as macOS has them. None of it is Pear Up's own: these are
+    // GNOME's settings, which every app reads, so each switch remembers what it
+    // replaced and hands it back, and a row is absent on a system without the
+    // setting rather than shown and broken.
+    _buildAppearancePage() {
+        const page = new Adw.PreferencesPage({
+            title: 'Appearance',
+            icon_name: 'preferences-desktop-appearance-symbolic',
+        });
+
+        const lookGroup = new Adw.PreferencesGroup({
+            title: 'Look',
+            description: 'GNOME settings that every app shares, applied at once. ' +
+                'Switching one off puts back what it replaced',
+        });
+        const rows = [
+            this._addMacOSTypeRow(lookGroup),
+            this._addAccentRow(lookGroup),
+        ];
+        if (rows.some(row => row))
+            page.add(lookGroup);
+
+        return page;
+    }
+
+    // Whether a font family is installed, asked of Pango in this process: the
+    // same font map the window itself draws with.
+    _fontFamilyInstalled(family) {
+        const wanted = family.toLowerCase();
+        try {
+            return PangoCairo.FontMap.get_default().list_families()
+                .some(found => found.get_name().toLowerCase() === wanted);
+        } catch {
+            // No font map to ask: report it as absent rather than guess.
+            return false;
+        }
+    }
+
+    _macOSTypeFamily() {
+        return MACOS_TYPE_FAMILIES.find(family => this._fontFamilyInstalled(family)) ?? null;
+    }
+
+    // macOS does not hint its text — on a high-resolution screen the hinting
+    // only blurs it — and sets window titles bold. 11 is GNOME's own size.
+    _macOSTypeTargets(family) {
+        return [
+            [INTERFACE_SCHEMA, 'font-name', GLib.Variant.new_string(`${family} 11`)],
+            [INTERFACE_SCHEMA, 'document-font-name', GLib.Variant.new_string(`${family} 11`)],
+            [WM_PREFERENCES_SCHEMA, 'titlebar-font', GLib.Variant.new_string(`${family} Bold 11`)],
+            [INTERFACE_SCHEMA, 'font-hinting', GLib.Variant.new_string('none')],
+        ];
+    }
+
+    _addMacOSTypeRow(group) {
+        const family = this._macOSTypeFamily();
+        return this._addDisplacingSwitchRow(group, {
+            title: 'macOS-Like Type',
+            subtitle: `${family ?? MACOS_TYPE_FAMILIES[0]} for the interface, documents and ` +
+                'window titles, with font hinting off, as on macOS',
+            targets: this._macOSTypeTargets(family ?? MACOS_TYPE_FAMILIES[0]),
+            unavailable: family === null
+                ? `Needs ${MACOS_TYPE_FAMILIES.join(' or ')}, and this system has neither. ` +
+                    'Adwaita Sans comes with GNOME 48 and later'
+                : null,
+        });
+    }
+
+    // GNOME has had an accent color since 47; before that there is nothing to
+    // set, and the row is not shown.
+    _addAccentRow(group) {
+        return this._addDisplacingSwitchRow(group, {
+            title: 'Blue Accent, Like macOS',
+            subtitle: 'The color of selections, switches and buttons in apps that follow GNOME’s accent',
+            targets: [[INTERFACE_SCHEMA, 'accent-color', GLib.Variant.new_string('blue')]],
+        });
+    }
+
     _buildKeyboardPage() {
         const page = new Adw.PreferencesPage({
             title: 'Keyboard',
@@ -524,26 +620,34 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         return page;
     }
 
-    // Displaced bindings have to survive the preferences process exiting:
-    // keeping them only in a Map meant that closing the window between enabling
-    // a shortcut set and disabling it again fell back to settings.reset(), which
-    // clobbers the user's own binding with the schema default. They are stored
-    // in our own settings as JSON mapping '<schemaId>:<key>' to the displaced
-    // GVariant serialized with variant.print(true), which round-trips through
-    // GLib.Variant.parse.
-    _getDisplacedMap() {
-        if (!this._displacedValues) {
-            this._displacedValues = new Map();
+    // What a switch displaced has to survive the preferences process exiting:
+    // keeping it only in a Map meant that closing the window between enabling a
+    // shortcut set and disabling it again fell back to settings.reset(), which
+    // clobbers the user's own binding with the schema default. It is stored in
+    // our own settings under `storeKey` as JSON mapping '<schemaId>:<key>' to
+    // the displaced GVariant serialized with variant.print(true), which
+    // round-trips through GLib.Variant.parse. null stands for a key that was at
+    // its default, which has to go back to the default rather than to a copy of
+    // it: the user never set it.
+    _getDisplacedMap(storeKey = DISPLACED_KEYBINDINGS) {
+        this._displacedMaps ??= new Map();
+        if (!this._displacedMaps.has(storeKey)) {
+            const displaced = new Map();
+            this._displacedMaps.set(storeKey, displaced);
             try {
-                const parsed = JSON.parse(
-                    this.getSettings().get_string('displaced-keybindings') || '{}');
+                const parsed = JSON.parse(this.getSettings().get_string(storeKey) || '{}');
                 if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
                     for (const [id, serialized] of Object.entries(parsed)) {
+                        if (serialized === null) {
+                            displaced.set(id, null);
+                            continue;
+                        }
                         if (typeof serialized !== 'string')
                             continue;
                         try {
-                            this._displacedValues.set(id,
-                                GLib.Variant.parse(null, serialized, null, null));
+                            // All four arguments: GJS wants the out parameter
+                            // passed as well, and throws without it.
+                            displaced.set(id, GLib.Variant.parse(null, serialized, null, null));
                         } catch {
                             // One bad entry must not sink the rest; skip it.
                         }
@@ -554,17 +658,18 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 // than failing to build the page.
             }
         }
-        return this._displacedValues;
+        return this._displacedMaps.get(storeKey);
     }
 
-    _saveDisplacedMap() {
-        if (!this._displacedValues)
+    _saveDisplacedMap(storeKey = DISPLACED_KEYBINDINGS) {
+        const displaced = this._displacedMaps?.get(storeKey);
+        if (!displaced)
             return;
         const serialized = {};
-        for (const [id, variant] of this._displacedValues.entries())
-            serialized[id] = variant.print(true);
+        for (const [id, variant] of displaced.entries())
+            serialized[id] = variant === null ? null : variant.print(true);
         try {
-            this.getSettings().set_string('displaced-keybindings', JSON.stringify(serialized));
+            this.getSettings().set_string(storeKey, JSON.stringify(serialized));
         } catch {
             // Losing durability is better than losing the page; the in-memory
             // map still covers this session.
@@ -658,6 +763,119 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             // Persist the displacement bookkeeping so it outlives this process.
             this._saveDisplacedMap();
         });
+    }
+
+    // One switch that sets some GNOME settings to given values and, switched
+    // off, puts each back as it was. `targets` are [schemaId, key, GLib.Variant].
+    // It reads on when every key already holds its value, whoever put it there,
+    // and follows the keys when they change elsewhere. A target this system
+    // cannot take — schema or key absent, a value outside the key's range, a
+    // key locked down — is left out, and the row with it when none is left.
+    //
+    // `unavailable` is the reason the switch cannot be turned on here, when
+    // there is one. The row still shows it, and still turns off while it holds.
+    _addDisplacingSwitchRow(group, { title, subtitle, targets, unavailable = null }) {
+        targets = targets.filter(([schemaId, key, value]) => {
+            const settings = this._settingsForSchema(schemaId);
+            if (!this._schemaHasKey(settings, key) || !settings.is_writable(key))
+                return false;
+            const schemaKey = settings.settings_schema.get_key(key);
+            return value.is_of_type(schemaKey.get_value_type()) && schemaKey.range_check(value);
+        });
+        if (targets.length === 0)
+            return null;
+
+        const displaced = this._getDisplacedMap(DISPLACED_SETTINGS);
+        const idOf = ([schemaId, key]) => `${schemaId}:${key}`;
+        const holds = ([schemaId, key, value]) =>
+            this._settingsForSchema(schemaId).get_value(key).equal(value);
+
+        const row = new Adw.SwitchRow({ title, subtitle });
+        group.add(row);
+
+        // The row is written from two directions: the keys, and the user. Each
+        // key notifies as it lands, so while this row is writing them it must
+        // not read half-written state back into itself, and showing the keys
+        // must not count as the user turning it on.
+        let busy = false;
+        const refresh = () => {
+            if (busy)
+                return;
+            busy = true;
+            const on = targets.every(holds);
+            const blocked = unavailable !== null && !on;
+            row.set_active(on);
+            row.set_sensitive(!blocked);
+            row.set_subtitle(blocked ? unavailable : subtitle);
+            busy = false;
+        };
+        refresh();
+
+        const switchOn = () => {
+            for (const target of targets) {
+                const [schemaId, key, value] = target;
+                const settings = this._settingsForSchema(schemaId);
+                // Note what is there, once. A key that already holds our value
+                // and has a note keeps it: that note is the older, truer one.
+                // Anything else is noted as it stands — even a match, which may
+                // be a user's own choice or only the key's default. The user
+                // value is null while the key is at its default, and that is
+                // what has to come back.
+                if (!displaced.has(idOf(target)) || !holds(target))
+                    displaced.set(idOf(target), settings.get_user_value(key));
+                if (!holds(target))
+                    settings.set_value(key, value);
+            }
+            this._saveDisplacedMap(DISPLACED_SETTINGS);
+        };
+
+        const switchOff = () => {
+            for (const target of targets) {
+                const [schemaId, key] = target;
+                const settings = this._settingsForSchema(schemaId);
+                // A key that has changed since is the user's newer choice and
+                // stays. One that still holds our value gets its note back; with
+                // no note it was set outside this window, so the only thing
+                // known about what came before is the default.
+                if (holds(target)) {
+                    const before = displaced.get(idOf(target)) ?? null;
+                    if (before)
+                        settings.set_value(key, before);
+                    else
+                        settings.reset(key);
+                }
+                displaced.delete(idOf(target));
+            }
+            this._saveDisplacedMap(DISPLACED_SETTINGS);
+        };
+
+        row.connect('notify::active', () => {
+            if (busy)
+                return;
+            busy = true;
+            try {
+                // Greyed out is not enough: whatever sets `active` gets here.
+                if (!row.active)
+                    switchOff();
+                else if (unavailable === null)
+                    switchOn();
+            } finally {
+                busy = false;
+            }
+            // Show what was stored, not what was asked for.
+            refresh();
+        });
+
+        const watched = targets.map(([schemaId, key]) => {
+            const settings = this._settingsForSchema(schemaId);
+            return [settings, settings.connect(`changed::${key}`, refresh)];
+        });
+        row.connect('destroy', () => {
+            for (const [settings, id] of watched)
+                settings.disconnect(id);
+        });
+
+        return row;
     }
 
     // Label accelerators the way the keys are printed on an Apple keyboard,

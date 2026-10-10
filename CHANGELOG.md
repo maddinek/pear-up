@@ -103,6 +103,29 @@ human reads.
 
 ### Added
 
+- **An Appearance page, starting with type and the accent.** macOS-Like Type
+  sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
+  own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns
+  font hinting off, which macOS does not use and a high-resolution screen has
+  no need of. Without Adwaita Sans it uses Inter; with neither, the row says
+  so and stays off. Whether a family is installed is asked of Pango in the
+  preferences process, not inferred from the GNOME version, since an older
+  release can have either and a newer one can lack it. Blue Accent, Like macOS
+  sets GNOME's accent color, which exists from GNOME 47 and is not offered
+  before that. These are GNOME's settings, not Pear Up's, so each switch
+  remembers what it replaced in a new `displaced-settings` key — the same
+  durable JSON note the shortcut sets use for their conflicts — and switching
+  off puts the user's own values back, also after Preferences was closed and
+  reopened. A key the user never set goes back to its default rather than to a
+  copy of it. A switch reads on whenever every value already matches, whoever
+  put them there, and follows them when they change elsewhere.
+- **The preferences smoke test drives the Appearance switches.** Against the
+  container's own in-memory settings it switches type and accent on and off
+  through a second preferences object and expects each value back exactly,
+  including keys left at their default, a value that already matched, values
+  set by hand with nothing noted, and the accent and type switches sharing one
+  note. It forces each branch of the font choice, Adwaita Sans, Inter and
+  neither, and checks Pango's answer against fontconfig's.
 - **Vitals sits closer and a size smaller, like macOS stat apps.** Its
   readouts are spaced 11px apart in the bar's type; with Vitals installed they
   are now 5px apart, set in 12px regular against the bar's 13px. These were
