@@ -8,6 +8,23 @@ human reads.
 
 ### Fixed
 
+- **The clock stays in the corner when another extension moves it.** Just
+  Perfection, at its defaults, moves the clock back to the centre of the bar
+  whenever it is enabled: at login, at every unlock, and when it is installed
+  in the middle of a session, which is where this was seen. Pear Up placed the
+  clock once, and the shell's layout still said right, so nothing put it back
+  until the next logout. The clock is watched now, and taken back to the end of
+  the right-hand side, on the next idle tick, whenever something moves it to
+  the centre or the left; a clock moved within the right-hand side, or into
+  a panel of someone else's, is left where it was put, and so is the lock
+  screen's, which has it in the centre. An extension that holds the clock
+  where it wants it, moving it back each time it is moved, gets it after five
+  returns in ten seconds, with a line in the journal, rather than the two of
+  them taking turns for the rest of the session. The integration suite moves
+  the clock to the centre and to the left the way Just Perfection does and
+  expects it back on the right, then holds it in the centre and expects Pear
+  Up to give up after a few rounds and stay active.
+
 - **The menu bar stays while a dialog is in front.** With Pear Up's own
   preferences open the bar showed the pear and nothing else, no app name and no
   menus. Not an app the shell could not place: the Extensions app opens an

@@ -225,6 +225,8 @@
     "removeKeybinding",
     "_rightBox",
     "_centerBox",
+    "_leftBox",
+    "dateMenu",
     "addToStatusArea",
     "get_current_time",
     "statusArea",

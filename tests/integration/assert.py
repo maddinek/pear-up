@@ -81,6 +81,10 @@ def menu_tree():
     return json.loads(raw)
 
 
+def hook(method, args=None, signature="()"):
+    return call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, method, args, signature).unpack()[0]
+
+
 # ------------------------------------------------------------ enabled state
 info = extension_info()
 # 1 is ACTIVE in the shell's own enumeration.
@@ -792,6 +796,64 @@ if state:
     except GLib.Error as exc:
         check("Vitals' readouts could be measured", False, exc.message.splitlines()[0])
 
+# ------------------------------------------------------ the clock stays put
+# Just Perfection, at its defaults, moves the clock to the centre whenever it is
+# enabled — at login, at every unlock, and when it is installed mid-session — and
+# the shell's layout still said right, so nothing ever put it back. The hook moves
+# it the way Just Perfection does. Then it holds it in the centre the way Just
+# Perfection does with a clock position of its own, moving it back each time it
+# is moved: Pear Up has to let it have the clock after a few rounds rather than
+# fight for as long as the session lasts.
+print()
+print("  the clock in the corner:")
+if state:
+    def clock_after(method, box, wait=800):
+        hook(method, (box,), "(s)")
+        GLib.usleep(wait * 1000)
+        return panel_state()
+
+    try:
+        placed = panel_state()
+        check("the clock is the last item on the right of the bar",
+              placed.get("clockBox") == "right" and placed.get("clockIsLastOnRight"),
+              f"box={placed.get('clockBox')} last={placed.get('clockIsLastOnRight')}")
+
+        for box in ("center", "left"):
+            moved = clock_after("MoveClock", box)
+            check(f"moved to the {box} box by another extension, the clock comes back to the corner",
+                  moved.get("clockBox") == "right" and moved.get("clockIsLastOnRight"),
+                  f"box={moved.get('clockBox')} last={moved.get('clockIsLastOnRight')}")
+
+        held = clock_after("HoldClock", "center", wait=3000)
+        moves = hook("ReleaseClock")
+        info = extension_info()
+        check("held in the centre by another extension, Pear Up lets it have the clock "
+              "after a few returns instead of fighting on",
+              0 < moves <= 5 and held.get("clockBox") == "center"
+              and info.get("state") == 1 and not info.get("error"),
+              f"the other side moved it back {moves} times; clock in {held.get('clockBox')}; "
+              f"state={info.get('state')} error={info.get('error') or 'none'}")
+    except GLib.Error as exc:
+        check("the clock could be moved", False, exc.message.splitlines()[0])
+    finally:
+        try:
+            hook("ReleaseClock")
+        except GLib.Error:
+            pass
+
+    # Placing it from scratch takes it back, and wins it back from a fight.
+    pear_up_setting("clock-on-the-right", "false")
+    GLib.usleep(800 * 1000)
+    pear_up_setting("clock-on-the-right", "true")
+    GLib.usleep(1500 * 1000)
+    try:
+        replaced = panel_state()
+        check("switching Clock on the Right off and on puts it back in the corner",
+              replaced.get("clockBox") == "right" and replaced.get("clockIsLastOnRight"),
+              f"box={replaced.get('clockBox')}")
+    except GLib.Error as exc:
+        check("the clock could be read after placing it again", False, exc.message.splitlines()[0])
+
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
 # something consumes its output, and the shell's screenshot API returns an empty
@@ -892,6 +954,8 @@ try:
           not after_state.get("dockPlainFocus"))
     check("clock returned to the centre", after_state["clockInCentre"],
           f"right={after_state['clockInRight']}")
+    check("and the clock itself is in the centre box", after_state.get("clockBox") == "center",
+          f"box={after_state.get('clockBox')}")
     check("Activities button shown again", after_state["activitiesVisible"] is True,
           f"visible={after_state['activitiesVisible']}")
 except GLib.Error as exc:

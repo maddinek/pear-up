@@ -10,6 +10,7 @@
 // anything else would, so it stays useful even as Pear Up changes.
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import Shell from 'gi://Shell';
@@ -152,6 +153,17 @@ const IFACE = `
       <arg type="s" direction="in" name="path"/>
       <arg type="b" direction="out" name="saved"/>
     </method>
+    <method name="MoveClock">
+      <arg type="s" direction="in" name="box"/>
+      <arg type="b" direction="out" name="moved"/>
+    </method>
+    <method name="HoldClock">
+      <arg type="s" direction="in" name="box"/>
+      <arg type="b" direction="out" name="holding"/>
+    </method>
+    <method name="ReleaseClock">
+      <arg type="i" direction="out" name="moves"/>
+    </method>
   </interface>
 </node>`;
 
@@ -221,6 +233,46 @@ const LATE_ROLE_PREFIX = 'pear-up-test-late-';
 // to see what Pear Up left behind. The indicators are the suite's to remove.
 const lateIndicators = new Map();
 let vitalsStandIn = null;
+
+// A stand-in for an extension that keeps the clock where it wants it — Just
+// Perfection with a position of its own, say — by moving it back whenever it is
+// moved. Module-level for the same reason as the indicators: it has to outlive
+// the re-enable that disabling Pear Up causes, so that it can be let go of.
+let clockHolder = null;
+
+// The panel box an actor is in, by the name Pear Up's settings and the shell's
+// session layouts use for it.
+function panelBoxOf(actor) {
+    const parent = actor?.get_parent?.() ?? null;
+    if (parent === Main.panel._leftBox)
+        return 'left';
+    if (parent === Main.panel._centerBox)
+        return 'center';
+    if (parent === Main.panel._rightBox)
+        return 'right';
+    return parent ? 'elsewhere' : null;
+}
+
+function panelBox(name) {
+    return { left: Main.panel._leftBox, center: Main.panel._centerBox, right: Main.panel._rightBox }[name] ?? null;
+}
+
+// As Just Perfection moves it: out of wherever it is and into a box at index 0.
+function moveClockTo(name) {
+    const container = Main.panel.statusArea.dateMenu?.container;
+    const box = panelBox(name);
+    if (!container || !box)
+        return false;
+    container.get_parent()?.remove_child(container);
+    box.insert_child_at_index(container, 0);
+    return true;
+}
+
+// The child-added signal, under the name this release gives it.
+function childAddedSignal(actor) {
+    return GObject.signal_lookup('child-added', actor.constructor.$gtype)
+        ? 'child-added' : 'actor-added';
+}
 
 // The overlay Pear Up draws magnified dock icons into. Found by name, the same
 // way Looking Glass would find it.
@@ -310,6 +362,10 @@ export default class TestHookExtension extends Extension {
             dockPlainFocus: Main.layoutManager.uiGroup.has_style_class_name('pearup-dock-plain-focus'),
             clockInRight: (layout.right ?? []).includes('dateMenu'),
             clockInCentre: (layout.center ?? []).includes('dateMenu'),
+            // Where the clock actually is, which another extension can change
+            // without touching the layout above.
+            clockBox: panelBoxOf(dateMenu?.container),
+            clockIsLastOnRight: Main.panel._rightBox.get_last_child() === dateMenu?.container,
             powerIconFound: !!powerIcon,
             powerIconVisible: powerIcon ? powerIcon.visible : null,
             powerIconName: powerIcon?.icon_name ?? null,
@@ -965,6 +1021,56 @@ export default class TestHookExtension extends Extension {
             // For a failure message: what is there when no dock is found.
             uiGroup: children.map(actor => actor.name || actor.constructor.name),
         });
+    }
+
+    // Moves the clock the way Just Perfection does at its defaults whenever it
+    // is enabled: once, into the centre box, with nothing left watching.
+    MoveClock(name) {
+        return moveClockTo(name);
+    }
+
+    // Keeps the clock in a box by moving it back whenever it lands anywhere
+    // else, watching every box's child-added as Just Perfection does with a
+    // clock position of its own. Its moves wait for idle, as anything moving
+    // actors on GNOME 50 has to, so the two sides take turns rather than
+    // recursing.
+    HoldClock(name) {
+        if (clockHolder || !panelBox(name))
+            return false;
+
+        const holder = { name, moves: 0, sourceId: 0, boxes: [] };
+        const hold = () => {
+            if (holder.sourceId)
+                return;
+            holder.sourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                holder.sourceId = 0;
+                const container = Main.panel.statusArea.dateMenu?.container;
+                if (container && panelBoxOf(container) !== holder.name) {
+                    holder.moves++;
+                    moveClockTo(holder.name);
+                }
+                return GLib.SOURCE_REMOVE;
+            });
+        };
+        for (const box of ['left', 'center', 'right'].map(panelBox))
+            holder.boxes.push([box, box.connect(childAddedSignal(box), hold)]);
+        clockHolder = holder;
+        moveClockTo(name);
+        return true;
+    }
+
+    // Stops holding it, and says how many times it had to move it back.
+    ReleaseClock() {
+        const holder = clockHolder;
+        clockHolder = null;
+        if (!holder)
+            return -1;
+
+        for (const [box, id] of holder.boxes)
+            box.disconnect(id);
+        if (holder.sourceId)
+            GLib.source_remove(holder.sourceId);
+        return holder.moves;
     }
 
     // Opens a submenu by label and reports what appeared in it. Submenus whose

@@ -35,6 +35,12 @@ const PANEL_GAPS = [
 // for it, which covers the power icon and the Activities button both.
 const PANEL_RETRY_LIMIT = 20;
 
+// How often the clock is taken back from another extension before that one is
+// left to have it: five times in ten seconds is a fight, not a change of mind.
+// See _holdClock().
+const CLOCK_RETURN_LIMIT = 5;
+const CLOCK_RETURN_WINDOW_US = 10 * GLib.USEC_PER_SEC;
+
 // Nothing here reports state for tests. The suite loads a separate extension
 // that inspects the panel from outside, so this one carries no test surface and
 // no way in for anything else.
@@ -93,6 +99,10 @@ export default class GlobalMenuExtension extends Extension {
         this._clockMoved = false;
         this._clockSessionBackup = null;
         this._clockLayout = null;
+        this._clockWatched = null;
+        this._clockHoldId = 0;
+        this._clockReturns = [];
+        this._clockLetGo = false;
         this._powerIndicator = null;
         this._powerVisibleId = 0;
         this._powerIconId = 0;
@@ -255,6 +265,7 @@ export default class GlobalMenuExtension extends Extension {
             this._guard('moving the clock', () => this._moveClockToRight());
         else if (!clockOnRight && this._clockMoved)
             this._guard('restoring the clock', () => this._restoreClock());
+        this._guard('watching the clock', () => this._watchClock());
 
         if (this._settings.get_boolean('hide-power-button'))
             this._guard('hiding the power icon', () => this._hidePowerButton());
@@ -621,6 +632,10 @@ export default class GlobalMenuExtension extends Extension {
     // Must update sessionMode.panel then _updatePanel(), otherwise Shell
     // restores the centered dateMenu on the next layout pass.
     _moveClockToRight() {
+        // Placed anew, so whatever was let go of in a fight is ours again.
+        this._clockReturns = [];
+        this._clockLetGo = false;
+
         let layout = Main.sessionMode?.panel;
         if (!layout) {
             this._moveClockFallback();
@@ -812,6 +827,91 @@ export default class GlobalMenuExtension extends Extension {
         this._clockMoved = false;
         this._clockSessionBackup = null;
         this._clockLayout = null;
+    }
+
+    // The clock is put in the corner once, by the layout above, and another
+    // extension can take it away again afterwards: Just Perfection, at its
+    // defaults, moves it back to the centre whenever it is enabled — at login,
+    // at every unlock, and when it is installed mid-session — and the layout
+    // still says right, so nothing would ever put it back. So the clock is
+    // watched for being moved, by anyone.
+    //
+    // The clock is one actor for the life of the shell, but it is asked for
+    // again on every pass rather than remembered, in case a rebuild ever makes
+    // a new one.
+    _watchClock() {
+        const container = Main.panel.statusArea.dateMenu?.container ?? null;
+        if (container === this._clockWatched)
+            return;
+
+        this._unwatchClock();
+        if (!container)
+            return;
+
+        container.connectObject('parent-set', () => this._queueClockHold(), this);
+        this._clockWatched = container;
+    }
+
+    _unwatchClock() {
+        try {
+            this._clockWatched?.disconnectObject(this);
+        } catch {
+            // Disposed with the panel at logout.
+        }
+        this._clockWatched = null;
+    }
+
+    // Nothing moves from the signal itself: it arrives while the other side is
+    // half-way through reparenting the clock, and on GNOME 50 changing the
+    // actor tree during a signal can abort the shell. Our own rebuilds move it
+    // too, and the check on idle finds it where it belongs and does nothing.
+    _queueClockHold() {
+        if (this._clockHoldId)
+            return;
+
+        this._clockHoldId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._clockHoldId = 0;
+            this._guard('keeping the clock on the right', () => this._holdClock());
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Puts the clock back at the end of the right box if something has moved
+    // it to the centre or the left. Only from those two: anywhere else is a
+    // panel someone else has built, and a clock moved within the right box was
+    // placed there on purpose. And only while the layout that says right is
+    // the live one — the lock screen's has the clock in the centre, rightly.
+    //
+    // An extension that holds the clock where it wants it, by moving it back
+    // each time it is moved, would have the two at it for as long as the
+    // session lasts. So after a few returns in quick succession the clock is
+    // left where the other one put it, until it is next placed from scratch.
+    _holdClock() {
+        if (!this._settings?.get_boolean('clock-on-the-right') || !this._clockMoved || this._clockLetGo)
+            return;
+        if (this._clockLayout && this._clockLayout !== Main.sessionMode?.panel)
+            return;
+
+        const container = Main.panel.statusArea.dateMenu?.container;
+        const rightBox = Main.panel._rightBox;
+        const parent = container?.get_parent();
+        if (!parent || !rightBox || parent === rightBox)
+            return;
+        if (parent !== Main.panel._centerBox && parent !== Main.panel._leftBox)
+            return;
+
+        const now = GLib.get_monotonic_time();
+        this._clockReturns = this._clockReturns.filter(time => now - time < CLOCK_RETURN_WINDOW_US);
+        if (this._clockReturns.length >= CLOCK_RETURN_LIMIT) {
+            this._clockLetGo = true;
+            console.warn(`[${this.metadata.uuid}] Something keeps moving the clock out of the corner; ` +
+                'leaving it there until the next unlock, or until Clock on the Right is switched off and on.');
+            return;
+        }
+        this._clockReturns.push(now);
+
+        parent.remove_child(container);
+        rightBox.add_child(container);
     }
 
     _syncLogoButton() {
@@ -1055,6 +1155,7 @@ export default class GlobalMenuExtension extends Extension {
         global.window_manager.disconnectObject(this);
         global.workspace_manager.disconnectObject(this);
         this._guard('unwatching the right box', () => Main.panel._rightBox?.disconnectObject(this));
+        this._unwatchClock();
         this._unwatchMinimized();
 
         if (this._sessionModeId) {
@@ -1062,7 +1163,8 @@ export default class GlobalMenuExtension extends Extension {
             this._sessionModeId = 0;
         }
 
-        for (const source of ['_resyncId', '_indicatorPaddingId', '_menuSyncId', '_powerRetryId', '_overviewRetryId']) {
+        for (const source of ['_resyncId', '_indicatorPaddingId', '_menuSyncId', '_powerRetryId', '_overviewRetryId',
+            '_clockHoldId']) {
             if (this[source]) {
                 GLib.source_remove(this[source]);
                 this[source] = 0;
