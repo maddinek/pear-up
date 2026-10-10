@@ -245,6 +245,43 @@ human reads.
   lock. Nothing here touches it, and with either of them doing its own the
   shell never calls what is stood in for. Takes effect at the next login.
 
+- **Smooth Automatic Brightness.** With Automatic Screen Brightness on, GNOME
+  50 moves the screen to each new light level in one step, and often a large
+  one. gnome-settings-daemon smooths the light sensor's readings by the time
+  since the last change, so the first change after a quiet spell — a lamp
+  switched on, a cloud past the window — gets almost none, and the shell
+  applies every level it is sent the moment it arrives. The level now fades
+  there instead, by a share of the way left on each tick: most of the way in
+  about 1.5 seconds when brightening and 3 when darkening, as macOS fades
+  slowly into the dark, and by at least a small step, so the end is not drawn
+  out. Only the automatic level fades. The brightness slider and keys still
+  act at once, on top of wherever the fade has got to, and so does dimming
+  when idle; automatic brightness switched off, or the screen blanked, applies
+  at once and stops the fade, and switched on again it starts from where the
+  screen is. The fade sets the shell's own level, ticking 25 times a second
+  while it moves, and stops when it arrives; it changes nothing on screen
+  itself.
+
+  With it, a race in GNOME's own reading of the backlight is patched (gnome-
+  shell MR !4467, still open). Each level the shell writes reaches the
+  backlight a moment later, and while one is on its way mutter can report the
+  one before as a change made by the system. The shell took that level, which
+  has the automatic level in it, for the slider's, so the automatic level
+  counted twice from then on, and it stopped dimming, which a change from
+  outside is meant to end. A fade writes many levels in a row, which would make
+  that common. A level read back that is one of the last sixteen written, in
+  the last two seconds, is now let pass, and a real change from outside has the
+  automatic level taken off before it goes to the slider, as that MR does, so
+  the screen stays where it was put.
+
+  The shell sets the brightness itself from GNOME 49. Before, gnome-settings-
+  daemon does, out of the shell's reach: there the switch is not offered, and
+  Pear Up says once in the journal that there is nothing to smooth. Pear Up is
+  off on the lock screen, as it has no session modes of its own, so there the
+  levels step as GNOME's do until the unlock; a fade under way when the
+  screen locks goes straight to where it was heading. On by default, in the
+  Desktop group.
+
 - **The integration suite checks each of them, and that they are given
   back.** It expects the session to have started on the desktop, the
   overview never to have begun to show once Pear Up was in place, its state
@@ -260,6 +297,27 @@ human reads.
   methods the shell's own again, read from their source. Then it enables Pear
   Up once more, as an unlock does, and disables it, and expects the same:
   patched twice over, one disable would have left a wrapper behind.
+
+- **And the brightness fading, on the shell's own brightness code.** The
+  container has no backlight, so on GNOME 49 and later the suite has the
+  shell's brightness manager build a monitor scale, of the shell's own class,
+  for a stand-in screen whose backlight behaves as mutter's does and records
+  every level written to it, and sends levels through the shell's own D-Bus
+  interface, as gnome-settings-daemon does. It expects automatic brightness,
+  switched on, to fade in from where the screen was; a step from 80% to 30%
+  to fade down with no step over 5% and to be half-way after one to three
+  seconds; the slider to apply at once with nothing fading after it; idle
+  dimming to cap the screen at once, and a level of the shell's own read back
+  while dimmed to leave the dimming and the slider alone; a change from
+  outside to stay where it was put; and switching off part-way through a
+  fade to apply at once and stop it. Disabled part-way through a fade, where
+  it was heading applies at once, the shell's own accessor and methods are
+  back, and a level sent then applies once with no timer left writing; enabled
+  again, it fades again, and disabled again, it leaves nothing behind. On 45
+  and 48 it expects Pear Up to have said once that there is nothing to smooth.
+  The preferences smoke test expects the switch from GNOME 49 and not before,
+  and the API check looks for the brightness manager's internals where the
+  shell has one.
 
 - **A Glass group on the Dock page, for a frosted-glass dock.** The floating,
   frosted pill macOS has is [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/)

@@ -9,6 +9,7 @@ import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
 import { DockMagnifier } from './dockMagnifier.js';
 import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
+import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
 import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
@@ -97,6 +98,7 @@ export default class GlobalMenuExtension extends Extension {
         this._searchButton = null;
         this._dockMagnifier = null;
         this._shellTweaks = null;
+        this._smoothBrightness = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -184,6 +186,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._guard('updating the dock highlight', () => this._syncDockFocusHighlight());
             else if (SHELL_TWEAK_KEYS.includes(key))
                 this._shellTweaks?.sync();
+            else if (key === SMOOTH_BRIGHTNESS_KEY)
+                this._smoothBrightness?.sync();
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -229,6 +233,12 @@ export default class GlobalMenuExtension extends Extension {
         // left out on its own.
         this._guard('applying the shell tweaks', () => {
             this._shellTweaks = new ShellTweaks(this.metadata.uuid, this._settings);
+        });
+
+        // Automatic brightness that fades rather than jumps, where the shell
+        // sets the brightness itself (GNOME 49 on).
+        this._guard('smoothing automatic brightness', () => {
+            this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
         });
 
         // GNOME can close a window from the keyboard but has nothing that
@@ -1213,6 +1223,10 @@ export default class GlobalMenuExtension extends Extension {
 
         this._guard('restoring the shell tweaks', () => this._shellTweaks?.destroy());
         this._shellTweaks = null;
+
+        // Stops the fade and applies where it was heading.
+        this._guard('restoring automatic brightness', () => this._smoothBrightness?.destroy());
+        this._smoothBrightness = null;
 
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one

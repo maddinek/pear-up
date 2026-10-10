@@ -54,7 +54,11 @@ Just Perfection does at its defaults whenever it is enabled.
 the clock, and the bubble a volume or brightness key brings up sits there too, under the bar, rather
 than at the bottom of the screen. Switching desktops slides the desktop across with no popup, and the
 overview always shows the desktops along its top, as Mission Control shows its Spaces, where GNOME
-hides them until two are in use. And a login starts on the desktop rather than in the overview. Each
+hides them until two are in use. And a login starts on the desktop rather than in the overview. With
+Automatic Screen Brightness on, the screen fades to each new light level over a few seconds, quicker
+brightening than darkening, as on macOS, rather than jumping there; the slider, the brightness keys
+and dimming when idle still act at once. That one is for GNOME 49 and later, where the shell sets the
+brightness itself. Each
 is a switch of its own in the Desktop group of the General page, on by default, and switching one off
 gives back what GNOME does.
 [Just Perfection](https://extensions.gnome.org/extension/3843/just-perfection/) is no longer needed
@@ -223,7 +227,8 @@ desktop you are using.
 extension the way a login would, and checks what it actually did to the panel: the clock moved, and
 back in its corner after another extension moves it, notifications and the volume bubble in the top
 right corner, no popup when switching desktops, the overview's desktops always shown, the session
-starting on the desktop, the System Menu appeared with its entries, the power icon is hidden but a
+starting on the desktop, automatic brightness fading with no step over 5% while the slider and dimming
+act at once, the System Menu appeared with its entries, the power icon is hidden but a
 battery is not, the titles and clock are regular weight with the app name bold, an indicator added
 after start-up is spaced like the rest, Vitals' readouts take Pear Up's spacing and type over their
 own stylesheet's, the bar stays bare while nothing is in front, the File, Edit, View, Go, Window and

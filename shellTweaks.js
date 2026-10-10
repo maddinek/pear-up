@@ -68,7 +68,7 @@ const warned = new Set();
 // throw away theirs. So it stays in their chain, passing calls through, and is
 // taken out only while it is the one installed. Turned on again in that state,
 // a fresh wrapper goes on top; the one left in the chain still passes through.
-class MethodPatch {
+export class MethodPatch {
     constructor(owner, name, replacement) {
         // A function, so that a class this shell does not have is found missing
         // when the tweak is applied rather than when this module is loaded.

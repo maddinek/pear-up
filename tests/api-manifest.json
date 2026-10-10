@@ -81,7 +81,12 @@
       "get_user_name",
       "get_user_data_dir",
       "build_filenamev",
-      "get_monotonic_time"
+      "get_monotonic_time",
+      "timeout_add",
+      "PRIORITY_DEFAULT",
+      "SOURCE_CONTINUE",
+      "USEC_PER_SEC",
+      "Source"
     ]
   },
 
@@ -299,6 +304,34 @@
     "_stateAdjustment",
     "ControlsState"
   ],
+
+  "shellInternalsWith": {
+    "comment": [
+      "Internals of a part of the shell that not every release has, checked only",
+      "where it is: the name each list is filed under says whether it is there.",
+      "The shell sets the brightness itself from GNOME 49; before, gnome-settings-",
+      "daemon does, and Smooth Automatic Brightness has nothing to do."
+    ],
+    "brightnessManager.js": [
+      "brightnessManager",
+      "autoBrightnessTarget",
+      "_abTarget",
+      "_sync",
+      "get scales",
+      "globalScale",
+      "_monitorScales",
+      "_monitorsChanged",
+      "setBacklight",
+      "syncWithBacklight",
+      "_getBacklights",
+      "_getRelativeBrightness",
+      "_currentBacklightBrightness",
+      "_dimmingTarget",
+      "SetAutoBrightnessTarget",
+      "SetDimming",
+      "screen-brightness-up"
+    ]
+  },
 
   "absent": {
     "comment": [

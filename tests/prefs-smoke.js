@@ -1892,6 +1892,28 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             problems.push(`desktop group: ${label} is ${got}, expected ${wanted}`);
     };
 
+    // Smooth Automatic Brightness is there only where the shell sets the
+    // brightness itself, from GNOME 49; before, gnome-settings-daemon does. The
+    // page asks the shell's keybindings, so the release is asked here instead,
+    // of the shell this container has.
+    const brightnessTitle = 'Smooth Automatic Brightness';
+    let release = NaN;
+    try {
+        const [, out] = GLib.spawn_command_line_sync('gnome-shell --version');
+        release = Number(/(\d+)\.\d+/.exec(new TextDecoder().decode(out))?.[1]);
+    } catch {
+        // Reported below.
+    }
+    const brightnessRow = page && findWidget(page, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === brightnessTitle);
+    if (!Number.isFinite(release))
+        problems.push('desktop group: could not tell which GNOME this is');
+    else if (release >= 49)
+        rows.push([brightnessTitle, 'smooth-auto-brightness']);
+    else if (brightnessRow)
+        problems.push(`desktop group: GNOME ${release} leaves the brightness to gnome-settings-daemon, ` +
+            `yet the General page offers "${brightnessTitle}"`);
+
     for (const [title, key] of rows) {
         const row = page && findWidget(page, widget =>
             widget instanceof Adw.SwitchRow && widget.title === title);
@@ -1908,7 +1930,8 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         settings.reset(key);
     }
     if (problems.length === problemsBefore)
-        print(`  desktop group: ${rows.length} switches, on by default, each writing its own key`);
+        print(`  desktop group: ${rows.length} switches, on by default, each writing its own key; ` +
+            `GNOME ${release}, so ${release >= 49 ? 'with' : 'without'} ${brightnessTitle}`);
 }
 
 if (problems.length > 0) {

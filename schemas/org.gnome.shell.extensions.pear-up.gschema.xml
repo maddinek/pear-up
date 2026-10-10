@@ -157,6 +157,15 @@
       <description>GNOME opens the overview at login; macOS shows the desktop. Takes effect at the next login.</description>
     </key>
 
+    <!-- Only where the shell sets the brightness itself, GNOME 49 on; earlier,
+         gnome-settings-daemon does, and the switch is left out of the
+         preferences. -->
+    <key name="smooth-auto-brightness" type="b">
+      <default>true</default>
+      <summary>Fade automatic brightness changes instead of jumping</summary>
+      <description>With Automatic Screen Brightness on, the screen moves to each new light level over a few seconds, brightening faster than it darkens, as on macOS. The brightness slider and keys still act at once, and so does dimming when idle.</description>
+    </key>
+
     <!-- The panel button is this extension's own, so it works with no search
          extension installed at all. What it opens is left open: GNOME's search
          needs nothing, and anything else people already use can be named. -->

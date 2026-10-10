@@ -28,6 +28,16 @@ const SWAP_ALT_CMD_OPTION = 'altwin:swap_alt_win';
 // Appearance page only sets them.
 const INTERFACE_SCHEMA = 'org.gnome.desktop.interface';
 
+// The shell sets the brightness itself from GNOME 49, the release in which its
+// own keybindings took the brightness keys over from gnome-settings-daemon.
+// Asked of those, so that the preferences know without a shell to ask.
+const SHELL_KEYBINDINGS_SCHEMA = 'org.gnome.shell.keybindings';
+
+function shellSetsBrightness() {
+    const schema = Gio.SettingsSchemaSource.get_default()?.lookup(SHELL_KEYBINDINGS_SCHEMA, true);
+    return schema?.has_key('screen-brightness-up') ?? false;
+}
+
 // Our own settings keys that remember what a switch on these pages displaced,
 // so switching it off can hand the user's values back (see _getDisplacedMap).
 const DISPLACED_KEYBINDINGS = 'displaced-keybindings';
@@ -2393,6 +2403,17 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             const row = new Adw.SwitchRow({ title, subtitle });
             group.add(row);
             settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        }
+
+        // Before GNOME 49 the brightness is gnome-settings-daemon's to set, and
+        // there is nothing here to switch.
+        if (shellSetsBrightness()) {
+            const row = new Adw.SwitchRow({
+                title: 'Smooth Automatic Brightness',
+                subtitle: 'Fades to each new light level; only while Automatic Screen Brightness is on',
+            });
+            group.add(row);
+            settings.bind('smooth-auto-brightness', row, 'active', Gio.SettingsBindFlags.DEFAULT);
         }
     }
 

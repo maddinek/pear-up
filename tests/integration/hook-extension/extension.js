@@ -195,6 +195,26 @@ const IFACE = `
     <method name="GetStartupState">
       <arg type="s" direction="out" name="state"/>
     </method>
+    <method name="AddFakeBacklight">
+      <arg type="s" direction="out" name="result"/>
+    </method>
+    <method name="RemoveFakeBacklight">
+      <arg type="b" direction="out" name="removed"/>
+    </method>
+    <method name="GetBrightnessState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="ClearBrightnessWrites">
+      <arg type="b" direction="out" name="cleared"/>
+    </method>
+    <method name="SetBrightnessSlider">
+      <arg type="d" direction="in" name="value"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="ReadBackBacklight">
+      <arg type="i" direction="in" name="brightness"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
   </interface>
 </node>`;
 
@@ -294,6 +314,78 @@ function watchStartup() {
         Main.layoutManager.disconnect(completeId);
     });
 }
+
+// A built-in screen for the brightness checks: the container's virtual monitor
+// has no backlight, so the shell has no brightness to set. GNOME 49 and later
+// set it through a monitor scale per backlit monitor, of a class the shell does
+// not export; the shell is made to build one of its own for a monitor that
+// stands in for a laptop's, whose backlight is this one. It behaves as mutter's
+// does where the shell can see it: an int property, which GJS truncates a
+// number to, clamped to its range, announced and written only when it changes.
+// The range is framy's. Module-level, like the indicators above.
+const FAKE_BACKLIGHT_MAX = 65535;
+const brightnessTest = { backlight: null, writes: [] };
+let FakeBacklight = null;
+
+function fakeBacklight() {
+    FakeBacklight ??= GObject.registerClass({
+        GTypeName: 'PearUpTestFakeBacklight',
+        Properties: {
+            'brightness': GObject.ParamSpec.int('brightness', null, null,
+                GObject.ParamFlags.READWRITE, 0, GLib.MAXINT32, 0),
+        },
+    }, class FakeBacklight extends GObject.Object {
+        constructor() {
+            super();
+            this._target = Math.trunc(FAKE_BACKLIGHT_MAX / 2);
+        }
+
+        get brightnessMin() {
+            return 0;
+        }
+
+        get brightnessMax() {
+            return FAKE_BACKLIGHT_MAX;
+        }
+
+        get brightness() {
+            return this._target;
+        }
+
+        set brightness(value) {
+            const target = Math.min(FAKE_BACKLIGHT_MAX, Math.max(0, Math.trunc(value)));
+            if (target === this._target)
+                return;
+            this._target = target;
+            brightnessTest.writes.push([GLib.get_monotonic_time() / 1000, target]);
+            this.notify('brightness');
+        }
+
+        // What mutter does when udev says the backlight changed: it reads the
+        // level, and takes it for its own if it differs — one of the shell's
+        // earlier writes, while a later one is still on its way, or a change
+        // from outside.
+        readBack(value) {
+            if (value === this._target)
+                return;
+            this._target = value;
+            this.notify('brightness');
+        }
+    });
+    brightnessTest.backlight ??= new FakeBacklight();
+    return brightnessTest.backlight;
+}
+
+const fakeMonitor = {
+    get_backlight: () => brightnessTest.backlight,
+    is_active: () => true,
+    get_display_name: () => 'Built-in display (Pear Up test)',
+};
+
+const fakeLogicalMonitor = {
+    get_monitors: () => [fakeMonitor],
+    get_number: () => 0,
+};
 
 // The panel box an actor is in, by the name Pear Up's settings and the shell's
 // session layouts use for it.
@@ -1257,6 +1349,78 @@ export default class TestHookExtension extends Extension {
             standIn: Object.hasOwn(Main.overview, 'runStartupAnimation'),
             panelStyle: Main.panel.style,
         });
+    }
+
+    // Has the brightness manager build its monitor scales for the stand-in
+    // screen, through its own handler for a change of monitors: the monitor
+    // manager's list is answered with that screen for the length of the call,
+    // and nothing else runs in between.
+    AddFakeBacklight() {
+        const manager = Main.brightnessManager;
+        if (typeof manager?._monitorsChanged !== 'function')
+            return JSON.stringify({ added: false, reason: 'no brightness manager' });
+
+        fakeBacklight();
+        const monitorManager = global.backend.get_monitor_manager();
+        monitorManager.get_logical_monitors = () => [fakeLogicalMonitor];
+        try {
+            manager._monitorsChanged();
+        } finally {
+            delete monitorManager.get_logical_monitors;
+        }
+        const scale = manager.scales[0];
+        return JSON.stringify({ added: scale?.monitor === fakeLogicalMonitor, scaleClass: scale?.constructor?.name ?? null });
+    }
+
+    // The same handler with the container's own monitors, none with a backlight.
+    RemoveFakeBacklight() {
+        Main.brightnessManager?._monitorsChanged?.();
+        return true;
+    }
+
+    // What the brightness manager has applied and to what, every level written
+    // to the stand-in backlight with the time in milliseconds, and whether the
+    // monitor scales' methods are the shell's own, read from their source.
+    GetBrightnessState() {
+        const manager = Main.brightnessManager;
+        if (!manager)
+            return JSON.stringify({ manager: false });
+
+        const scale = manager.scales?.[0] ?? null;
+        const proto = scale ? Object.getPrototypeOf(scale) : null;
+        const source = name => proto?.[name]?.toString() ?? '';
+        return JSON.stringify({
+            manager: true,
+            fake: scale?.monitor === fakeLogicalMonitor,
+            abTarget: manager._abTarget,
+            ownAccessor: Object.hasOwn(manager, 'autoBrightnessTarget'),
+            dimming: manager.dimming,
+            dimmingTarget: manager._dimmingTarget,
+            slider: scale?.value ?? null,
+            globalSlider: manager.globalScale?.value ?? null,
+            backlight: brightnessTest.backlight?.brightness ?? null,
+            max: FAKE_BACKLIGHT_MAX,
+            setBacklightIsShells: source('setBacklight').includes('_setRelativeBrightness'),
+            syncWithBacklightIsShells: source('syncWithBacklight').includes('_getRelativeBrightness'),
+            writes: brightnessTest.writes,
+            now: GLib.get_monotonic_time() / 1000,
+        });
+    }
+
+    ClearBrightnessWrites() {
+        brightnessTest.writes = [];
+        return true;
+    }
+
+    // As the slider in Quick Settings sets it, or the brightness keys.
+    SetBrightnessSlider(value) {
+        Main.brightnessManager.globalScale.value = value;
+        return this.GetBrightnessState();
+    }
+
+    ReadBackBacklight(value) {
+        brightnessTest.backlight?.readBack(value);
+        return this.GetBrightnessState();
     }
 
     // Opens a submenu by label and reports what appeared in it. Submenus whose

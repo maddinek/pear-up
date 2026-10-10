@@ -1026,6 +1026,206 @@ if state:
             desktop_window.wait()
             GLib.usleep(800 * 1000)
 
+# ------------------------------------------------------- automatic brightness
+# From GNOME 49 the shell sets the backlight itself, and gnome-settings-daemon
+# sends it a target level over D-Bus whenever the light changes. The container
+# has no backlight and no daemon, so the hook has the shell build a monitor scale
+# of its own class for a stand-in screen, and the levels are sent here, through
+# the shell's own D-Bus interface, the way the daemon sends them. Every level the
+# shell writes to the stand-in backlight is recorded, with the time.
+BRIGHTNESS = ("org.gnome.Shell.Brightness", "/org/gnome/Shell/Brightness",
+              "org.gnome.Shell.Brightness")
+
+
+def auto_brightness(target):
+    call(*BRIGHTNESS, "SetAutoBrightnessTarget", (float(target),), "(d)")
+
+
+def set_dimming(on):
+    call(*BRIGHTNESS, "SetDimming", (bool(on),), "(b)")
+
+
+def brightness_state():
+    return json.loads(hook("GetBrightnessState"))
+
+
+def brightness_slider(value):
+    return json.loads(hook("SetBrightnessSlider", (float(value),), "(d)"))
+
+
+def read_back(value):
+    return json.loads(hook("ReadBackBacklight", (int(value),), "(i)"))
+
+
+def level(bright, value=None):
+    """A backlight level, as a share of its range."""
+    return (bright["backlight"] if value is None else value) / bright["max"]
+
+
+def expected_level(bright):
+    """What the shell applies: the automatic level plus the slider's share, or
+    the slider alone, capped while dimmed."""
+    target = bright["slider"] if bright["abTarget"] < 0 else \
+        min(1.0, max(0.0, bright["abTarget"] + bright["slider"] - 0.5))
+    return min(bright["dimmingTarget"], target) if bright["dimming"] else target
+
+
+def at_expected(bright):
+    # Two units: GJS truncates the share to the backlight's integer.
+    return abs(bright["backlight"] - expected_level(bright) * bright["max"]) <= 2
+
+
+def fade_to(target, timeout=20):
+    """Sends a target and waits for the automatic level to get there. The
+    levels written on the way as (ms after sending, share), the state before and
+    the state at the end, None if it never arrived."""
+    hook("ClearBrightnessWrites")
+    before = brightness_state()
+    auto_brightness(target)
+    arrived = None
+    for _ in range(timeout * 10):
+        current = brightness_state()
+        if current["abTarget"] == target:
+            arrived = current
+            break
+        GLib.usleep(100 * 1000)
+    after = arrived or brightness_state()
+    writes = [(time - before["now"], level(before, value)) for time, value in after["writes"]]
+    return writes, before, arrived
+
+
+def writes_since(bright, since):
+    return [value for time, value in bright["writes"] if time >= since]
+
+
+def describe(writes):
+    if not writes:
+        return "nothing written"
+    steps = [abs(b - a) for (_, a), (_, b) in zip(writes, writes[1:])]
+    return (f"{len(writes)} levels {writes[0][1]:.3f} -> {writes[-1][1]:.3f} over "
+            f"{writes[-1][0] / 1000:.1f}s, largest step {max(steps, default=0):.3f}")
+
+
+print()
+print("  automatic brightness:")
+bright = None
+brightness_log = f"{ARTIFACTS}/shell.log"
+if state:
+    try:
+        bright = brightness_state()
+    except GLib.Error as exc:
+        check("the brightness could be read", False, exc.message.splitlines()[0])
+
+if bright and not bright["manager"]:
+    print("  note: this shell leaves the brightness to gnome-settings-daemon, "
+          "so there is nothing to smooth")
+elif bright:
+    try:
+        added = json.loads(hook("AddFakeBacklight"))
+        GLib.usleep(300 * 1000)
+        bright = brightness_state()
+        check("a stand-in screen has a monitor scale of the shell's own class",
+              added["added"] and bright["fake"], f"{added}")
+        check("Pear Up stands in for the automatic level and watches what is read back",
+              bright["ownAccessor"] and not bright["setBacklightIsShells"]
+              and not bright["syncWithBacklightIsShells"],
+              f"own accessor: {bright['ownAccessor']}, setBacklight the shell's: "
+              f"{bright['setBacklightIsShells']}, syncWithBacklight the shell's: "
+              f"{bright['syncWithBacklightIsShells']}")
+
+        # Switched on with the screen at the slider's level: it starts from
+        # there rather than jumping to the first target.
+        writes, before, arrived = fade_to(0.8)
+        start = level(before)
+        check("switched on, automatic brightness fades in from where the screen was",
+              before["abTarget"] < 0 and arrived and at_expected(arrived) and writes
+              and abs(writes[0][1] - start) <= 0.05
+              and all(b >= a for (_, a), (_, b) in zip(writes, writes[1:])),
+              f"from {start:.3f}: {describe(writes)}")
+
+        # The jump this is for: a lamp switched off, from 80% to 30%.
+        writes, before, arrived = fade_to(0.3)
+        start = level(before)
+        path = [start] + [value for _, value in writes]
+        steps = [b - a for a, b in zip(path, path[1:])]
+        half = next((time for time, value in writes if value <= (start + 0.3) / 2), None)
+        check("a step from 80% to 30% fades down with no step over 5%",
+              arrived and at_expected(arrived) and len(writes) >= 20
+              and all(step <= 0 for step in steps) and max(-step for step in steps) <= 0.05,
+              describe(writes))
+        check("and takes seconds, not a frame: half-way after one to three",
+              half is not None and 1000 <= half <= 3000,
+              f"half-way after {half / 1000:.2f}s" if half is not None else "never half-way")
+
+        # The slider moves the screen at once, with the automatic level as it is.
+        hook("ClearBrightnessWrites")
+        moved = brightness_slider(0.7)
+        GLib.usleep(600 * 1000)
+        settled = brightness_state()
+        check("the slider applies at once, with nothing fading after it",
+              moved["abTarget"] == 0.3 and at_expected(moved)
+              and abs(level(moved) - 0.5) <= 0.001 and len(settled["writes"]) == 1,
+              f"slider 0.7 -> level {level(moved):.3f}, {len(settled['writes'])} levels written")
+
+        # Idle dimming caps it at once, and a level of the shell's own read back
+        # while it is dimmed — the race — neither ends the dimming nor moves the
+        # slider.
+        undimmed = brightness_slider(0.9)
+        set_dimming(True)
+        GLib.usleep(200 * 1000)
+        dimmed = brightness_state()
+        check("idle dimming caps the screen at once",
+              dimmed["dimming"] and abs(level(dimmed) - dimmed["dimmingTarget"]) <= 0.001,
+              f"level {level(undimmed):.3f} -> {level(dimmed):.3f}, cap {dimmed['dimmingTarget']}")
+        # The level the slider wrote a moment ago, as mutter reports it when the
+        # write for the cap is still on its way.
+        read_back(undimmed["backlight"])
+        GLib.usleep(200 * 1000)
+        raced = brightness_state()
+        check("a level of its own read back while dimmed leaves dimming on and the slider where it was",
+              raced["dimming"] and abs(raced["slider"] - 0.9) <= 1e-6 and at_expected(raced),
+              f"dimming {raced['dimming']}, slider {raced['slider']:.3f}, level {level(raced):.3f}")
+        set_dimming(False)
+        GLib.usleep(200 * 1000)
+        check("and undimming gives the level back at once", at_expected(brightness_state()))
+        brightness_slider(0.5)
+
+        # A change from outside: the screen stays where it was put, and the
+        # automatic level is taken off it before it becomes the slider's.
+        outside = round(0.62 * bright["max"]) + 1
+        changed = read_back(outside)
+        GLib.usleep(200 * 1000)
+        changed = brightness_state()
+        slider_then = level(changed, outside) - (changed["abTarget"] - 0.5)
+        check("a change from outside stays put, with the automatic level taken off the slider",
+              abs(changed["backlight"] - outside) <= 2 and abs(changed["slider"] - slider_then) <= 1e-3,
+              f"set {level(changed, outside):.3f} from outside -> level {level(changed):.3f}, "
+              f"slider {changed['slider']:.3f}, expected {slider_then:.3f}")
+        brightness_slider(0.5)
+
+        # Off, or the screen blanked, part-way through a fade: at once, and the
+        # fade stops there.
+        hook("ClearBrightnessWrites")
+        auto_brightness(0.9)
+        GLib.usleep(400 * 1000)
+        fading = brightness_state()
+        auto_brightness(-1)
+        off = brightness_state()
+        GLib.usleep(600 * 1000)
+        settled = brightness_state()
+        after_off = writes_since(settled, off["now"])
+        check("turned off part-way through a fade, the slider's level applies at once and the fade stops",
+              0.3 < fading["abTarget"] < 0.9 and off["abTarget"] == -1 and at_expected(off)
+              and not after_off,
+              f"was at {fading['abTarget']:.3f}, then {level(off):.3f}; "
+              f"{len(after_off)} levels written after")
+    except GLib.Error as exc:
+        check("automatic brightness could be exercised", False, exc.message.splitlines()[0])
+        bright = None
+
+# Whether the checks after disabling have a stand-in screen to read.
+smoothing = bool(bright and bright["manager"])
+
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
 # something consumes its output, and the shell's screenshot API returns an empty
@@ -1104,6 +1304,17 @@ try:
 except GLib.Error as exc:
     check("the dock could be hovered before disabling", False, exc.message.splitlines()[0])
 
+# Part-way through a fade, so that disabling has one to stop.
+fading_at_disable = None
+if smoothing:
+    try:
+        hook("ClearBrightnessWrites")
+        auto_brightness(0.8)
+        GLib.usleep(300 * 1000)
+        fading_at_disable = brightness_state()["abTarget"]
+    except GLib.Error as exc:
+        check("a fade could be started before disabling", False, exc.message.splitlines()[0])
+
 call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
      "DisableExtension", (UUID,), "(s)")
 GLib.usleep(2 * 1000 * 1000)
@@ -1158,6 +1369,47 @@ try:
           f"visible={after_state['activitiesVisible']}")
 except GLib.Error as exc:
     check("panel state readable after disable", False, exc.message.splitlines()[0])
+
+# Disabled part-way through a fade: where it was heading applies at once, the
+# shell's own accessor and methods are back, and no timer is left behind — a
+# level sent now applies at once, and nothing is written after it.
+if smoothing:
+    try:
+        stopped = brightness_state()
+        check("disabled part-way through a fade, where it was heading applies at once",
+              fading_at_disable is not None and fading_at_disable < 0.8
+              and stopped["abTarget"] == 0.8 and at_expected(stopped),
+              f"was at {fading_at_disable}, now {stopped['abTarget']} at level {level(stopped):.3f}")
+        check("the shell's own accessor and monitor scale methods are back",
+              not stopped["ownAccessor"] and stopped["setBacklightIsShells"]
+              and stopped["syncWithBacklightIsShells"],
+              f"own accessor: {stopped['ownAccessor']}, setBacklight the shell's: "
+              f"{stopped['setBacklightIsShells']}, syncWithBacklight the shell's: "
+              f"{stopped['syncWithBacklightIsShells']}")
+        hook("ClearBrightnessWrites")
+        auto_brightness(0.4)
+        jumped = brightness_state()
+        GLib.usleep(600 * 1000)
+        quiet = brightness_state()
+        check("with Pear Up off a level applies at once, and no timer is left writing",
+              jumped["abTarget"] == 0.4 and at_expected(jumped) and len(quiet["writes"]) == 1,
+              f"{len(quiet['writes'])} levels written")
+
+        # GNOME's own race, which the patch is for: reported, not asserted, as a
+        # release that fixes it is no failure of Pear Up's.
+        brightness_slider(0.9)
+        own_level = brightness_state()["backlight"]
+        set_dimming(True)
+        GLib.usleep(200 * 1000)
+        read_back(own_level)
+        GLib.usleep(200 * 1000)
+        print("  note: with Pear Up off, a level of the shell's own read back while dimmed "
+              f"{'ends' if not brightness_state()['dimming'] else 'leaves'} the dimming")
+        set_dimming(False)
+        brightness_slider(0.5)
+    except GLib.Error as exc:
+        check("automatic brightness could be read after disabling", False,
+              exc.message.splitlines()[0])
 
 # An indicator that arrived late was spaced like the rest, so it has to be let go
 # of like the rest. One made now, with Pear Up off, shows what the shell's own
@@ -1240,6 +1492,17 @@ if state:
         if moved["active"] != desktops["active"]:
             switch_desktop("Page_Up")
         check("notifications go to the right again", banner_state()["alignment"] == END)
+        if smoothing:
+            again_bright = brightness_state()
+            hook("ClearBrightnessWrites")
+            auto_brightness(0.7)
+            GLib.usleep(500 * 1000)
+            fading = brightness_state()
+            check("automatic brightness fades again, with its patches in place once",
+                  again_bright["ownAccessor"] and not again_bright["setBacklightIsShells"]
+                  and not again_bright["syncWithBacklightIsShells"]
+                  and len(fading["writes"]) >= 3 and 0.4 < fading["abTarget"] < 0.7,
+                  f"{len(fading['writes'])} levels in 0.5s, at {fading['abTarget']:.3f}")
 
         call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
              "DisableExtension", (UUID,), "(s)")
@@ -1255,12 +1518,47 @@ if state:
               banner_state()["alignment"] == CENTER and not osd["styled"]
               and all(w["xAlign"] == CENTER and w["yAlign"] == END and w["onWorkArea"] is False
                       for w in osd["windows"]))
+        if smoothing:
+            stopped = brightness_state()
+            check("and the brightness is the shell's own, at where the fade was heading",
+                  not stopped["ownAccessor"] and stopped["setBacklightIsShells"]
+                  and stopped["syncWithBacklightIsShells"] and stopped["abTarget"] == 0.7
+                  and at_expected(stopped),
+                  f"own accessor: {stopped['ownAccessor']}, at {stopped['abTarget']}")
     except GLib.Error as exc:
         check("Pear Up could be enabled and disabled again", False, exc.message.splitlines()[0])
     finally:
         if desktop_window:
             desktop_window.terminate()
             desktop_window.wait()
+
+# The stand-in screen goes, and the brightness is left as the container had it.
+if smoothing:
+    try:
+        auto_brightness(-1)
+        set_dimming(False)
+        hook("RemoveFakeBacklight")
+    except GLib.Error:
+        pass
+
+# What Pear Up said about brightness in the journal: once per session at most,
+# however often it was enabled, and only where there is nothing to smooth.
+BRIGHTNESS_WORDS = ("automatic brightness", "backlight", "the brightness", "new brightness")
+try:
+    with open(brightness_log, encoding="utf-8", errors="replace") as handle:
+        lines = [line.strip() for line in handle
+                 if f"[{UUID}]" in line and any(word in line for word in BRIGHTNESS_WORDS)]
+    said = [line for line in lines if "failed" not in line]
+    failed = [line for line in lines if "failed" in line]
+    if smoothing:
+        check("Pear Up had nothing to say about this shell's brightness",
+              not said and not failed, "; ".join(said + failed) or "nothing")
+    elif bright is not None:
+        check("Pear Up says once per session that there is no brightness here to smooth",
+              len(said) == 1 and "gnome-settings-daemon" in said[0] and not failed,
+              "; ".join(said + failed) or "nothing")
+except OSError as exc:
+    print(f"  note: the shell's log could not be read ({exc})")
 
 # ------------------------------------------------------------------ summary
 failures = [label for label, ok, _ in results if not ok]
