@@ -106,6 +106,27 @@ const ROUNDED_CORNERS_RADIUS = { lower: 0, upper: 40 };
 const MAGIC_LAMP_UUID = 'compiz-alike-magic-lamp-effect@hermes83.github.com';
 const MAGIC_LAMP_URL = 'https://extensions.gnome.org/extension/3740/compiz-alike-magic-lamp-effect/';
 
+// The Dock page's Glass group drives one component of Blur my Shell, the one
+// that blurs Dash to Dock, and nothing else of it: its panel, overview and
+// popup components are other schemas and are never written. Like the two
+// extensions above it is not Pear Up's to install, so when it is absent the
+// group is a link. Its number cannot be had from the uuid either.
+const BLUR_MY_SHELL_UUID = 'blur-my-shell@aunetx';
+const BLUR_DOCK_SCHEMA = 'org.gnome.shell.extensions.blur-my-shell.dash-to-dock';
+const BLUR_MY_SHELL_URL = 'https://extensions.gnome.org/extension/3193/blur-my-shell/';
+
+// What the Dock component calls its three looks, as `style-dash-to-dock`:
+// the background it draws over the blur is nothing, white at 58% or a dark
+// grey at 22%, the last two with a hairline border.
+const GLASS_TINTS = [
+    { title: 'Transparent', style: 0 },
+    { title: 'Light', style: 1 },
+    { title: 'Dark', style: 2 },
+];
+const GLASS_TINT_OTHER = 'Set in Blur my Shell';
+const GLASS_BRIGHTNESS = 0.9;
+const GLASS_BRIGHTNESS_RANGE = { lower: 50, upper: 100 };
+
 // Smaller window buttons are CSS in the user's own gtk.css, one file per GTK
 // major version, because an app reads the one for the toolkit it was built
 // with: gtk-4.0 reaches libadwaita apps, gtk-3.0 reaches GTK 3 apps and the
@@ -207,6 +228,7 @@ const DOCK_FUNCTION_KEY_CONFLICTS = [
 const EXTENSION_SCHEMA_OWNERS = {
     [DASH_TO_DOCK_SCHEMA]: DASH_TO_DOCK_UUID,
     [ROUNDED_CORNERS_SCHEMA]: ROUNDED_CORNERS_UUID,
+    [BLUR_DOCK_SCHEMA]: BLUR_MY_SHELL_UUID,
 };
 
 const BUTTON_LAYOUT_LEFT = 'close,minimize,maximize:appmenu';
@@ -510,6 +532,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         }
 
         this._buildDockMagnificationGroup(page, settings);
+        this._buildGlassGroup(page);
 
         if (has('dock-fixed') && has('autohide') && has('intellihide')) {
             const visibilityGroup = new Adw.PreferencesGroup({ title: 'Visibility' });
@@ -1597,10 +1620,21 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // cannot take — schema or key absent, a value outside the key's range, a
     // key locked down — is left out, and the row with it when none is left.
     //
+    // A target may take two more entries. The value can be a function, asked
+    // each time it is written, for one that depends on something that can change
+    // while the window is open. And a fourth, `reads(variant)`, says whether what
+    // the key holds already amounts to the look: the switch then reads on for it
+    // and takes it back off, while it still writes the value it was given. That is
+    // for a switch with controls of its own beside it, such as a slider for the
+    // brightness the switch sets: moving the slider is no reason to switch off.
+    //
     // `unavailable` is the reason the switch cannot be turned on here, when
     // there is one. The row still shows it, and still turns off while it holds.
     _addDisplacingSwitchRow(group, { title, subtitle, targets, unavailable = null }) {
-        targets = targets.filter(([schemaId, key, value]) => {
+        const valueOf = ([, , value]) => typeof value === 'function' ? value() : value;
+        targets = targets.filter(target => {
+            const [schemaId, key] = target;
+            const value = valueOf(target);
             const settings = this._settingsForSchema(schemaId);
             if (!this._schemaHasKey(settings, key) || !settings.is_writable(key))
                 return false;
@@ -1612,8 +1646,13 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         const displaced = this._getDisplacedMap(DISPLACED_SETTINGS);
         const idOf = ([schemaId, key]) => `${schemaId}:${key}`;
-        const holds = ([schemaId, key, value]) =>
-            this._settingsForSchema(schemaId).get_value(key).equal(value);
+        const isSet = target => this._settingsForSchema(target[0]).get_value(target[1]).equal(valueOf(target));
+        const holds = target => {
+            const reads = target[3];
+            return reads
+                ? reads(this._settingsForSchema(target[0]).get_value(target[1]))
+                : isSet(target);
+        };
 
         const row = new Adw.SwitchRow({ title, subtitle });
         group.add(row);
@@ -1638,7 +1677,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         const switchOn = () => {
             for (const target of targets) {
-                const [schemaId, key, value] = target;
+                const [schemaId, key] = target;
                 const settings = this._settingsForSchema(schemaId);
                 // Note what is there, once. A key that already holds our value
                 // and has a note keeps it: that note is the older, truer one.
@@ -1648,8 +1687,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 // what has to come back.
                 if (!displaced.has(idOf(target)) || !holds(target))
                     displaced.set(idOf(target), settings.get_user_value(key));
-                if (!holds(target))
-                    settings.set_value(key, value);
+                if (!isSet(target))
+                    settings.set_value(key, valueOf(target));
             }
             this._saveDisplacedMap(DISPLACED_SETTINGS);
         };
@@ -1759,6 +1798,159 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             strengthRow.row.set_sensitive(settings.get_boolean('dock-magnification'));
         syncStrengthSensitivity();
         settings.connect('changed::dock-magnification', syncStrengthSensitivity);
+    }
+
+    // Whether the dock is dark glass or light glass when Frosted Glass is switched
+    // on: Blur my Shell's dark tint with GNOME's dark colour scheme, its light one
+    // otherwise, since a dark pill on a light desktop is not the macOS look.
+    _glassStyle() {
+        const interfaceSettings = this._settingsForSchema(INTERFACE_SCHEMA);
+        const dark = this._schemaHasKey(interfaceSettings, 'color-scheme')
+            ? interfaceSettings.get_string('color-scheme') === 'prefer-dark'
+            : true;
+        return dark ? 2 : 1;
+    }
+
+    // Blur my Shell blurs what is behind the dock. This group sets how: the blur
+    // on, a glass tint over it and how bright it is, the three things that make
+    // the dock a frosted pill, in that component's own keys. The panel, overview
+    // and popup components have schemas of their own and are not touched, and
+    // neither is how the dock is blurred. As on the Appearance and Windows pages
+    // the keys are not Pear Up's, so the switch remembers what it replaced and
+    // reads on whenever the look is there, whoever made it.
+    _buildGlassGroup(page) {
+        const group = new Adw.PreferencesGroup({ title: 'Glass' });
+        page.add(group);
+
+        if (!this._extensionInstalled(BLUR_MY_SHELL_UUID)) {
+            group.set_description('A frosted-glass dock, as macOS has it');
+            this._addExtensionMissingRow(group, {
+                title: 'Blur my Shell is not installed',
+                subtitle: 'It blurs and tints what is behind the dock. Install it from the GNOME ' +
+                    'Extensions site and log out and back in: this page then makes the dock ' +
+                    'frosted glass and sets its tint and brightness.',
+                url: BLUR_MY_SHELL_URL,
+            });
+            return;
+        }
+
+        const blur = this._settingsForSchema(BLUR_DOCK_SCHEMA);
+        const has = key => this._schemaHasKey(blur, key);
+        if (!has('blur') || !has('style-dash-to-dock')) {
+            group.set_description('A frosted-glass dock, as macOS has it');
+            this._addExtensionMissingRow(group, {
+                title: 'Blur my Shell has no dock settings Pear Up knows',
+                subtitle: 'Its settings for the dock were not found. Update it from the GNOME ' +
+                    'Extensions site and log out and back in.',
+                url: BLUR_MY_SHELL_URL,
+            });
+            return;
+        }
+
+        // Blur my Shell does nothing while it is switched off, which is the one
+        // thing here a user would not guess. The settings are still written.
+        const shell = this._settingsForSchema(SHELL_SCHEMA);
+        const describe = () => {
+            group.set_description(this._extensionEnabled(BLUR_MY_SHELL_UUID)
+                ? 'Blur my Shell blurs what is behind the dock; its blur of the panel, overview ' +
+                    'and menus is left alone. Switching Frosted Glass off puts back what it replaced'
+                : 'Blur my Shell is installed but switched off, so none of this shows until it is ' +
+                    'switched on in the Extensions app');
+        };
+        describe();
+        const watchedShell = ['enabled-extensions', 'disabled-extensions', 'disable-user-extensions']
+            .filter(key => this._schemaHasKey(shell, key))
+            .map(key => shell.connect(`changed::${key}`, describe));
+        group.connect('destroy', () => {
+            for (const id of watchedShell)
+                shell.disconnect(id);
+        });
+
+        // The switch is the preset: blur on, the dark or light tint, the
+        // brightness of the macOS Dock. It reads on for any glass tint and any
+        // brightness the slider can set, so that moving them leaves it on; it
+        // writes the preset's own values. Blur my Shell only draws the tint
+        // while it overrides the dock's background, so that is part of it too.
+        this._addDisplacingSwitchRow(group, {
+            title: 'Frosted Glass, Like macOS',
+            subtitle: 'Blurs what is behind the dock and tints it, dark or light to match the colour scheme',
+            targets: [
+                [BLUR_DOCK_SCHEMA, 'blur', GLib.Variant.new_boolean(true)],
+                [BLUR_DOCK_SCHEMA, 'override-background', GLib.Variant.new_boolean(true)],
+                [BLUR_DOCK_SCHEMA, 'style-dash-to-dock', () => GLib.Variant.new_int32(this._glassStyle()),
+                    current => current.get_int32() !== 0],
+                [BLUR_DOCK_SCHEMA, 'brightness', GLib.Variant.new_double(GLASS_BRIGHTNESS),
+                    current => current.get_double() >= GLASS_BRIGHTNESS_RANGE.lower / 100 &&
+                        current.get_double() <= GLASS_BRIGHTNESS_RANGE.upper / 100],
+            ],
+        });
+
+        const tints = Gtk.StringList.new(GLASS_TINTS.map(tint => tint.title));
+        const tintRow = new Adw.ComboRow({
+            title: 'Tint',
+            subtitle: 'Light and Dark add a hairline border',
+            model: tints,
+        });
+        group.add(tintRow);
+
+        // A style Blur my Shell has and this list does not gets an entry of its
+        // own, as the running indicator does, rather than reading as one of ours.
+        // Changing the list can move the selection, which is not the user choosing.
+        let syncingTint = false;
+        const syncTint = () => {
+            const index = GLASS_TINTS.findIndex(tint => tint.style === blur.get_int('style-dash-to-dock'));
+            syncingTint = true;
+            tints.splice(GLASS_TINTS.length, tints.get_n_items() - GLASS_TINTS.length,
+                index < 0 ? [GLASS_TINT_OTHER] : []);
+            tintRow.set_selected(index < 0 ? GLASS_TINTS.length : index);
+            syncingTint = false;
+        };
+        syncTint();
+        tintRow.connect('notify::selected', () => {
+            const tint = GLASS_TINTS[tintRow.selected];
+            if (!syncingTint && tint)
+                blur.set_int('style-dash-to-dock', tint.style);
+        });
+
+        const brightnessOf = () => Math.round(Math.min(GLASS_BRIGHTNESS_RANGE.upper / 100,
+            Math.max(GLASS_BRIGHTNESS_RANGE.lower / 100, blur.get_double('brightness'))) * 100);
+        let brightness = null;
+        if (has('brightness')) {
+            brightness = this._addScaleRow(group, 'Brightness', {
+                lower: GLASS_BRIGHTNESS_RANGE.lower, upper: GLASS_BRIGHTNESS_RANGE.upper,
+                marks: [50, 60, 70, 80, 90, 100], unit: '%', pageStep: 10,
+                value: brightnessOf(),
+                onChange: value => blur.set_double('brightness', value / 100),
+            });
+        }
+
+        // The brightness is the dynamic blur's own. Static blur, which is
+        // Blur my Shell's default, takes its brightness from the pipeline it
+        // draws with, which by default the popup menus use too, and ignores this
+        // key: moving the slider would change nothing, so it says so instead.
+        // Nothing is tinted or blurred at all while blur is off.
+        const staticBlurSubtitle = 'Only dynamic blur uses this. Static blur’s brightness belongs to a ' +
+            'pipeline that other parts of Blur my Shell share. Set the dock’s blur to dynamic there to use this.';
+        const syncSensitivity = () => {
+            const blurred = blur.get_boolean('blur');
+            const dynamic = !has('static-blur') || !blur.get_boolean('static-blur');
+            tintRow.set_sensitive(blurred);
+            if (brightness) {
+                brightness.row.set_sensitive(blurred && dynamic);
+                brightness.row.set_subtitle(blurred && !dynamic ? staticBlurSubtitle : '');
+            }
+        };
+        syncSensitivity();
+
+        const watched = [
+            ['blur', syncSensitivity], ['static-blur', syncSensitivity],
+            ['style-dash-to-dock', syncTint],
+            ['brightness', () => brightness?.setValue(brightnessOf())],
+        ].filter(([key]) => has(key)).map(([key, handler]) => blur.connect(`changed::${key}`, handler));
+        group.connect('destroy', () => {
+            for (const id of watched)
+                blur.disconnect(id);
+        });
     }
 
     // Which of RUNNING_INDICATORS the stored keys amount to, or -1 for a style

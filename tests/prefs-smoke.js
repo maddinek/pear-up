@@ -1468,6 +1468,342 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     }
 }
 
+// The Dock page's Glass group drives one component of Blur my Shell, the one
+// that blurs Dash to Dock, and is a link where that is not installed. The
+// runner arranges which: with PREFS_SMOKE_BLUR=full it has put the extension
+// where Bazzite does, in a system directory, with the schemas of the components
+// that matter here; with `settingless` it has put its metadata alone in the
+// user's data directory; with neither there is none. What matters with it is
+// what is written and handed back, and that the other components are not
+// written to at all, so every key of theirs is read from the settings and has
+// to have no value of the user's at the end. The backend is in memory.
+{
+    const mode = GLib.getenv('PREFS_SMOKE_BLUR');
+    const BLUR_UUID = 'blur-my-shell@aunetx';
+    const BLUR_URL = 'https://extensions.gnome.org/extension/3193/blur-my-shell/';
+    const DOCK_SCHEMA = 'org.gnome.shell.extensions.blur-my-shell.dash-to-dock';
+    const OTHERS = [
+        'org.gnome.shell.extensions.blur-my-shell.panel',
+        'org.gnome.shell.extensions.blur-my-shell.popup',
+    ];
+    const problemsBefore = problems.length;
+    const expect = (what, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`glass: ${what} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+
+    const kept = [];
+    const glassOf = prefs => {
+        const page = prefs._buildDockPage(prefs.getSettings());
+        kept.push(page);
+        const group = findWidget(page, widget => widget instanceof Adw.PreferencesGroup && widget.title === 'Glass');
+        const titled = (type, title) => findWidget(page, widget => widget instanceof type && widget.title === title);
+        const brightness = titled(Adw.ActionRow, 'Brightness');
+        return {
+            group,
+            switchRow: titled(Adw.SwitchRow, 'Frosted Glass, Like macOS'),
+            tint: titled(Adw.ComboRow, 'Tint'),
+            brightness,
+            scale: brightness && findWidget(brightness, widget => widget instanceof Gtk.Scale),
+            link: group && findWidget(group, widget => widget instanceof Gtk.LinkButton),
+        };
+    };
+
+    if (!preferences._dashToDockSettings()) {
+        // Without a dock there is no Dock page to speak of, and nothing to glaze.
+        expect('the Glass group without Dash to Dock', !!glassOf(new Preferences(metadata)).group, false);
+    } else if (!mode) {
+        const glass = glassOf(new Preferences(metadata));
+        expect('the Glass group without Blur my Shell', !!glass.group, true);
+        expect('the link to Blur my Shell', glass.link?.uri, BLUR_URL);
+        expect('the switch, tint and brightness without Blur my Shell',
+            [!!glass.switchRow, !!glass.tint, !!glass.brightness], [false, false, false]);
+        if (problems.length === problemsBefore)
+            print('  glass: Blur my Shell is not installed, so the group shows where to get it and nothing else');
+    } else if (mode === 'settingless') {
+        const glass = glassOf(new Preferences(metadata));
+        expect('the Glass group with Blur my Shell but no settings', !!glass.group, true);
+        expect('the link, to update it', glass.link?.uri, BLUR_URL);
+        expect('the switch, tint and brightness without its settings',
+            [!!glass.switchRow, !!glass.tint, !!glass.brightness], [false, false, false]);
+        if (problems.length === problemsBefore)
+            print('  glass: Blur my Shell without a dock component is said so, not built into rows');
+    } else if (mode === 'full') {
+        const blur = preferences._settingsForSchema(DOCK_SCHEMA);
+        const pearUp = preferences.getSettings();
+        const interfaceSettings = preferences._settingsForSchema('org.gnome.desktop.interface');
+        const shell = preferences._settingsForSchema('org.gnome.shell');
+        const userValue = key => blur.get_user_value(key)?.deepUnpack() ?? null;
+        const stored = () => Object.fromEntries(
+            ['blur', 'override-background', 'style-dash-to-dock', 'brightness'].map(key => [key, userValue(key)]));
+        const resetAll = () => {
+            for (const key of blur.settings_schema.list_keys())
+                blur.reset(key);
+            pearUp.reset('displaced-settings');
+            interfaceSettings.set_string('color-scheme', 'prefer-dark');
+            shell.reset('enabled-extensions');
+        };
+        // What the keys hold, which is not what is stored: a key that already
+        // holds the value the switch writes is left as it is, at its default.
+        const current = () => ({
+            'blur': blur.get_boolean('blur'),
+            'override-background': blur.get_boolean('override-background'),
+            'style-dash-to-dock': blur.get_int('style-dash-to-dock'),
+            'brightness': blur.get_double('brightness'),
+        });
+        // The notes as the page keeps them, printed GVariants: a double is
+        // printed as the shortest text that reads back as it, which for 0.7 is not "0.7".
+        const noted = () => Object.fromEntries(Object.entries(JSON.parse(pearUp.get_string('displaced-settings')))
+            .map(([id, text]) => [id, text !== null && id.endsWith(':brightness') ? Number(text) : text]));
+        // The page has no use for the other components' schemas, so Pear Up cannot
+        // be asked for them: read them from where the runner put them. Not finding
+        // them would make "never written" prove nothing, so it fails.
+        const componentSettings = id => {
+            for (const dir of [GLib.get_user_data_dir(), ...GLib.get_system_data_dirs()]) {
+                const schemaDir = `${dir}/gnome-shell/extensions/${BLUR_UUID}/schemas`;
+                if (!GLib.file_test(schemaDir, GLib.FileTest.IS_DIR))
+                    continue;
+                const found = Gio.SettingsSchemaSource.new_from_directory(
+                    schemaDir, Gio.SettingsSchemaSource.get_default(), false).lookup(id, true);
+                if (found)
+                    return new Gio.Settings({ settings_schema: found });
+            }
+            problems.push(`glass: the fixture schema ${id} was not found`);
+            return null;
+        };
+        const others = OTHERS.map(id => [id, componentSettings(id)]).filter(([, settings]) => settings);
+        const PRESET_DARK = { 'blur': true, 'override-background': true, 'style-dash-to-dock': 2, 'brightness': 0.9 };
+        const AT_DEFAULTS = { 'blur': null, 'override-background': null, 'style-dash-to-dock': null, 'brightness': null };
+        // Every key of the dock component but the four the switch writes, and
+        // every key of the other components, must have no value of the user's.
+        const untouched = (label, except = []) => {
+            const written = [];
+            for (const key of blur.settings_schema.list_keys()) {
+                if (!['blur', 'override-background', 'style-dash-to-dock', 'brightness', ...except].includes(key) &&
+                    blur.get_user_value(key) !== null)
+                    written.push(`${DOCK_SCHEMA}:${key}`);
+            }
+            for (const [id, other] of others) {
+                for (const key of other.settings_schema.list_keys()) {
+                    if (other.get_user_value(key) !== null)
+                        written.push(`${id}:${key}`);
+                }
+            }
+            expect(`the keys written outside the four, ${label}`, written, []);
+        };
+
+        if (!blur) {
+            problems.push('glass: the Blur my Shell fixture schema was not found');
+        } else {
+            resetAll();
+            expect('the fixture directory is where GNOME would search', preferences._extensionInstalled(BLUR_UUID), true);
+
+            // Opened, it only reads. Out of the box the dock is blurred, a
+            // transparent glass, and brightness is the static blur's to ignore.
+            let glass = glassOf(new Preferences(metadata));
+            if (!glass.group || !glass.switchRow || !glass.tint || !glass.brightness || !glass.scale) {
+                problems.push('glass: Blur my Shell is installed but the group lacks its switch, tint or brightness');
+            } else {
+                expect('the link with Blur my Shell installed', !!glass.link, false);
+                expect('nothing written by opening the page', stored(), AT_DEFAULTS);
+                expect('the switch out of the box', glass.switchRow.active, false);
+                expect('the tint out of the box', [glass.tint.selected, glass.tint.selected_item.string], [0, 'Transparent']);
+                expect('the tints offered', Array.from({ length: glass.tint.model.get_n_items() },
+                    (_, index) => glass.tint.model.get_item(index).string), ['Transparent', 'Light', 'Dark']);
+                expect('the slider at the extension\'s default', glass.scale.get_value(), 60);
+                const adjustment = glass.scale.get_adjustment();
+                expect('the slider bounds', [adjustment.lower, adjustment.upper], [50, 100]);
+                expect('the tint with blur on', glass.tint.sensitive, true);
+
+                // Static blur, the default, ignores the key: the slider says so
+                // rather than moving something that does nothing.
+                expect('the slider with static blur', glass.brightness.sensitive, false);
+                if (!/dynamic/.test(glass.brightness.subtitle))
+                    problems.push(`glass: the slider does not say static blur ignores it (${JSON.stringify(glass.brightness.subtitle)})`);
+
+                // Switched off in the shell, it does nothing, and the group says so.
+                if (!/switched off/.test(glass.group.description))
+                    problems.push(`glass: the group does not say Blur my Shell is off (${JSON.stringify(glass.group.description)})`);
+                shell.set_strv('enabled-extensions', [BLUR_UUID]);
+                if (/switched off/.test(glass.group.description))
+                    problems.push('glass: the group still says Blur my Shell is off once it is on');
+                shell.set_boolean('disable-user-extensions', true);
+                if (!/switched off/.test(glass.group.description))
+                    problems.push('glass: the group does not say so when extensions are switched off as a whole');
+                shell.reset('disable-user-extensions');
+
+                // On: blur, the background it tints, dark glass with the dark
+                // colour scheme, and the brightness of the macOS Dock. What each
+                // key held is noted, defaults as null.
+                glass.switchRow.active = true;
+                expect('the keys after switching on', current(), PRESET_DARK);
+                expect('the notes after switching on', noted(), Object.fromEntries(
+                    Object.keys(PRESET_DARK).map(key => [`${DOCK_SCHEMA}:${key}`, null])));
+                expect('the tint after switching on', glass.tint.selected, 2);
+                expect('the slider after switching on', glass.scale.get_value(), 90);
+                untouched('after switching on');
+
+                // Off: the defaults, which is what was there, and no notes.
+                glass.switchRow.active = false;
+                expect('the keys after switching off', stored(), AT_DEFAULTS);
+                expect('the notes after switching off', noted(), {});
+                expect('the tint after switching off', glass.tint.selected, 0);
+                untouched('after switching off');
+
+                // A light colour scheme gets the light glass, and it is read
+                // when the switch is flipped, not when the page was built.
+                for (const scheme of ['default', 'prefer-light']) {
+                    interfaceSettings.set_string('color-scheme', scheme);
+                    glass.switchRow.active = true;
+                    expect(`the style with the colour scheme ${scheme}`, userValue('style-dash-to-dock'), 1);
+                    glass.switchRow.active = false;
+                }
+                interfaceSettings.set_string('color-scheme', 'prefer-dark');
+                glass.switchRow.active = true;
+                expect('the style with the colour scheme dark again', userValue('style-dash-to-dock'), 2);
+                interfaceSettings.set_string('color-scheme', 'default');
+                glass.switchRow.active = false;
+                glass.switchRow.active = true;
+                expect('the style after the colour scheme changed with the page open', userValue('style-dash-to-dock'), 1);
+                glass.switchRow.active = false;
+                expect('the keys after all that', stored(), AT_DEFAULTS);
+                interfaceSettings.set_string('color-scheme', 'prefer-dark');
+            }
+
+            // The user's own values go out and come back exactly, also through a
+            // second preferences object, which stands in for the window having
+            // been closed and opened again. Their blur is off, so the switch is
+            // off, and their light glass is only the style the switch replaces.
+            resetAll();
+            blur.set_boolean('blur', false);
+            blur.set_boolean('override-background', false);
+            blur.set_int('style-dash-to-dock', 1);
+            blur.set_double('brightness', 0.7);
+            blur.set_boolean('static-blur', false);
+            const own = stored();
+            glass = glassOf(new Preferences(metadata));
+            expect('the switch with blur off', glass.switchRow.active, false);
+            expect('the tint and slider with blur off', [glass.tint.sensitive, glass.brightness.sensitive], [false, false]);
+            glass.switchRow.active = true;
+            expect('the keys after switching on over the user\'s own', stored(), PRESET_DARK);
+            expect('the notes of the user\'s own', noted(), {
+                [`${DOCK_SCHEMA}:blur`]: 'false',
+                [`${DOCK_SCHEMA}:override-background`]: 'false',
+                [`${DOCK_SCHEMA}:style-dash-to-dock`]: '1',
+                [`${DOCK_SCHEMA}:brightness`]: 0.7,
+            });
+            expect('the tint and slider once blur is on', [glass.tint.sensitive, glass.brightness.sensitive], [true, true]);
+            const reopened = glassOf(new Preferences(metadata));
+            expect('the switch after reopening', reopened.switchRow.active, true);
+            reopened.switchRow.active = false;
+            expect('the user\'s own values after switching off', stored(), own);
+            expect('the notes once handed back', noted(), {});
+            expect('the switch already open, after the other one switched off', glass.switchRow.active, false);
+            untouched('after the user\'s own values came back', ['static-blur']);
+
+            // Made by hand, as on a machine set up before this switch existed: it
+            // reads on, there is nothing noted, and the default is all there is
+            // to go back to.
+            resetAll();
+            for (const [key, value] of Object.entries(PRESET_DARK))
+                blur.set_value(key, typeof value === 'boolean' ? GLib.Variant.new_boolean(value)
+                    : Number.isInteger(value) ? GLib.Variant.new_int32(value) : GLib.Variant.new_double(value));
+            glass = glassOf(new Preferences(metadata));
+            expect('the switch for a look made by hand', glass.switchRow.active, true);
+            expect('the tint for a look made by hand', glass.tint.selected, 2);
+            glass.switchRow.active = false;
+            expect('the keys after switching off a look made by hand', stored(), AT_DEFAULTS);
+
+            // Moving the controls beside the switch is no reason to switch it off.
+            resetAll();
+            glass = glassOf(new Preferences(metadata));
+            glass.switchRow.active = true;
+            glass.tint.selected = 1;
+            expect('the style after choosing Light', userValue('style-dash-to-dock'), 1);
+            expect('the switch after choosing Light', glass.switchRow.active, true);
+            glass.tint.selected = 2;
+            expect('the style after choosing Dark', userValue('style-dash-to-dock'), 2);
+            blur.set_boolean('static-blur', false);
+            expect('the slider with dynamic blur', [glass.brightness.sensitive, glass.brightness.subtitle], [true, '']);
+            for (const value of [100, 50, 75]) {
+                glass.scale.set_value(value);
+                expect(`the brightness after the slider moved to ${value}`, userValue('brightness'), value / 100);
+                expect(`the switch with the slider at ${value}`, glass.switchRow.active, true);
+            }
+            expect('the value label', glass.scale.get_layout()?.get_text(), '75%');
+            expect('the keys after the controls were moved', current(), { ...PRESET_DARK, 'brightness': 0.75 });
+
+            // Choosing Transparent takes the glass off, and the controls stay usable.
+            glass.tint.selected = 0;
+            expect('the style after choosing Transparent', userValue('style-dash-to-dock'), 0);
+            expect('the switch with a transparent tint', glass.switchRow.active, false);
+            expect('the tint and slider with a transparent tint', [glass.tint.sensitive, glass.brightness.sensitive], [true, true]);
+
+            // Switched on from there it writes its own values over the tweaks. The
+            // notes taken at the first switch-on are still there, and are the
+            // older, truer ones: the brightness goes back to what it was before
+            // any glass, not to the tweak, while the style, which was changed
+            // since, is noted as it stood.
+            glass.switchRow.active = true;
+            expect('the keys after switching on over a tweaked look', current(), PRESET_DARK);
+            glass.switchRow.active = false;
+            expect('the keys after switching that off', stored(),
+                { ...AT_DEFAULTS, 'style-dash-to-dock': 0 });
+
+            // The keys changing elsewhere, as when Blur my Shell's own window is used.
+            blur.set_int('style-dash-to-dock', 1);
+            expect('the tint after the style changed elsewhere', glass.tint.selected, 1);
+            expect('the switch after the style changed elsewhere', glass.switchRow.active, true);
+            blur.set_double('brightness', 0.55);
+            expect('the slider after the brightness changed elsewhere', glass.scale.get_value(), 55);
+            blur.set_double('brightness', 0.2);
+            expect('the slider with a brightness below its range', glass.scale.get_value(), 50);
+            expect('the brightness key, which showing it does not write', userValue('brightness'), 0.2);
+            expect('the switch with a brightness below the slider\'s range', glass.switchRow.active, false);
+            blur.set_double('brightness', 0.9);
+
+            // A style Blur my Shell may have and this list does not is shown as such.
+            blur.set_int('style-dash-to-dock', 7);
+            expect('the tint for a style of Blur my Shell\'s own', [
+                glass.tint.model.get_n_items(), glass.tint.selected, glass.tint.selected_item.string,
+            ], [4, 3, 'Set in Blur my Shell']);
+            expect('the style, which showing it does not write', userValue('style-dash-to-dock'), 7);
+            expect('the switch for a style of Blur my Shell\'s own', glass.switchRow.active, true);
+            glass.tint.selected = 1;
+            expect('the style after choosing a tint over it', userValue('style-dash-to-dock'), 1);
+            blur.set_int('style-dash-to-dock', 2);
+            expect('the entry goes when the style is one of ours again', [
+                glass.tint.model.get_n_items(), glass.tint.selected,
+            ], [3, 2]);
+            expect('the reopened tint for a style of Blur my Shell\'s own', (() => {
+                blur.set_int('style-dash-to-dock', 9);
+                const again = glassOf(new Preferences(metadata)).tint;
+                return [again.model.get_n_items(), again.selected_item.string];
+            })(), [4, 'Set in Blur my Shell']);
+
+            // Blur off, in Blur my Shell: nothing is blurred or tinted, so the
+            // controls rest, and the slider says nothing about static blur.
+            resetAll();
+            glass = glassOf(new Preferences(metadata));
+            blur.set_boolean('blur', false);
+            expect('the controls with blur off', [glass.switchRow.active, glass.tint.sensitive, glass.brightness.sensitive],
+                [false, false, false]);
+            expect('the slider\'s subtitle with blur off', glass.brightness.subtitle, '');
+            blur.set_boolean('blur', true);
+            expect('the controls with blur back on', [glass.tint.sensitive, glass.brightness.sensitive], [true, false]);
+
+            // Whatever was done above, the panel, the popups and the dock's other
+            // settings were never written.
+            blur.reset('static-blur');
+            untouched('at the end');
+            resetAll();
+
+            if (problems.length === problemsBefore)
+                print('  glass: switch, tint and brightness write the dock\'s keys, hand the user\'s own back, and write nothing else');
+        }
+    }
+}
+
 // The About page names the release as people do. `version` is the integer GNOME
 // compares, which printed as "Version 2" for 0.2.0; it is only what is shown
 // where metadata.json has no version-name.

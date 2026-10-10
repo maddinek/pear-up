@@ -163,6 +163,50 @@ human reads.
 
 ### Added
 
+- **A Glass group on the Dock page, for a frosted-glass dock.** The floating,
+  frosted pill macOS has is [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/)
+  blurring and tinting what is behind Dash to Dock, and the group sets how. It is
+  there when Blur my Shell is installed, in the user's data directory or a system
+  one, and is a row linking to its page on extensions.gnome.org when it is not,
+  as the Windows page does for Rounded Window Corners Reborn. Frosted Glass, Like
+  macOS switches on the blur, Blur my Shell's override of the dock's background,
+  which its tint needs, a dark glass tint, a light one when GNOME's colour scheme
+  is not dark, and a brightness of 0.9. Below it are a Tint choice, Transparent,
+  Light or Dark, which are the three values of `style-dash-to-dock`, and a
+  Brightness slider from 50 to 100%. These are keys of the Dash to Dock
+  component of Blur my Shell, `blur`, `override-background`,
+  `style-dash-to-dock` and `brightness`, and nothing else is written: not its
+  panel, overview or popup components, and not whether the dock's blur is static
+  or dynamic. As on Appearance and Windows the switch notes what it replaced in
+  `displaced-settings` and gives the user's own values back, and reads on whenever
+  the look is there, whoever put it there. Any glass tint and any brightness the
+  slider reaches count as the look, so moving Tint or Brightness does not switch it
+  off; choosing Transparent does, as it takes the glass away. Blur my Shell
+  installed but switched off is said in the group's description, since none of it
+  shows then, and one with no dock settings is said so, with the link, rather
+  than built into rows that would fail. One thing about the slider, found by
+  measuring it: `brightness` is the key of Blur my Shell's dynamic blur. Static
+  blur, its default, draws with the pipeline the dock names, a dictionary other
+  parts of Blur my Shell use too and that nothing here may rewrite, and ignores
+  the key: the dock's pixels were identical at 0.6, 0.9 and 1.0. So
+  while the dock's blur is static the slider is greyed out and says so, and it
+  works once Blur my Shell's own preferences set the dock to dynamic blur. Tint
+  is drawn in both. The switch is the existing displacing switch, which
+  gained two options for this: a value that is asked for when it is written,
+  for the colour scheme, and a test of what counts as already being the look.
+- **The preferences smoke test drives the Glass group.** In three runs: with
+  Blur my Shell absent, where the group is the link and nothing else; installed
+  as Bazzite ships it, in a system directory, with the schemas of the dock, panel
+  and popup components as version 74 has them; and installed with no schemas, in
+  the user's data directory. With it installed the switch is flipped on and off
+  against the defaults, against light and dark colour schemes, one that changes
+  while the page is open, and values of the user's own, through a second
+  preferences object as after a reopen, and against a look made by hand, which
+  has to read on. Tint and brightness are driven, including a style of Blur my
+  Shell's own that the list lacks, a brightness outside the slider, a switch that
+  has to stay on while they move and a slider that follows the key. At the end
+  every key of the panel and popup components, and every key of the dock's but the
+  four, has to have no value of the user's.
 - **A Windows page, after Appearance.** What macOS does with its windows, in
   four groups: the buttons, how new windows open, rounded corners and the
   minimize effect. Window Buttons on the Left moves here from General, with the

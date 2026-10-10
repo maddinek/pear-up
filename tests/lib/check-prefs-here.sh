@@ -187,3 +187,143 @@ XDG_DATA_HOME="$HELPERS/data" \
     XDG_DATA_DIRS="$HELPERS/share:/usr/local/share:/usr/share" \
     PREFS_SMOKE_HELPERS="$HELPERS" \
     "${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
+
+# And with Blur my Shell, which the Dock page's Glass group drives. Bazzite ships
+# it in a system directory, as here. The schemas are those of the three of its
+# components that matter to the test, as version 74 has them: the dock one the
+# group writes, in full, and the panel and popup ones, which it must never write,
+# with a few of their keys. The real file also holds the other components and
+# the pipelines the dock's blur draws from; the group reads none of those.
+BLUR="$WORK/blur-fixtures"
+rm -rf "$BLUR"
+
+blur_ext="$BLUR/share/gnome-shell/extensions/blur-my-shell@aunetx"
+mkdir -p "$blur_ext/schemas"
+cat > "$blur_ext/metadata.json" <<'JSON'
+{
+  "uuid": "blur-my-shell@aunetx",
+  "name": "Blur my Shell (fixture)",
+  "description": "Stands in for the extension in tests/lib/check-prefs-here.sh",
+  "settings-schema": "org.gnome.shell.extensions.blur-my-shell",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "version": 74
+}
+JSON
+cat > "$blur_ext/schemas/org.gnome.shell.extensions.blur-my-shell.gschema.xml" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+    <schema id="org.gnome.shell.extensions.blur-my-shell.dash-to-dock"
+        path="/org/gnome/shell/extensions/blur-my-shell/dash-to-dock/">
+        <key type="b" name="blur">
+            <default>true</default>
+            <summary>Boolean, whether to blur activate the blur for this component or not</summary>
+        </key>
+        <key type="s" name="pipeline">
+            <default>"pipeline_default_rounded"</default>
+            <summary>String, the name of the pipeline to use. It must exist, else "pipeline_default" will be used</summary>
+        </key>
+        <key type="b" name="customize">
+            <default>false</default>
+            <summary>Boolean, whether to customize the blur effect sigma/brightness or use general values</summary>
+        </key>
+        <key type="i" name="sigma">
+            <default>30</default>
+            <summary>Gaussian sigma to use for the blur effect</summary>
+        </key>
+        <key type="d" name="brightness">
+            <default>0.6</default>
+            <summary>Brightness to use for the blur effect</summary>
+        </key>
+        <key type="(dddd)" name="color">
+            <default>(0.,0.,0.,0.)</default>
+            <summary>Color to mix with the blur effect</summary>
+        </key>
+        <key type="d" name="noise-amount">
+            <default>0.</default>
+            <summary>Amount of noise to add to the blur effect</summary>
+        </key>
+        <key type="d" name="noise-lightness">
+            <default>0.</default>
+            <summary>Lightness of the noise added to the blur effect</summary>
+        </key>
+        <key type="b" name="static-blur">
+            <default>true</default>
+            <summary>Boolean, whether to use static or dynamic blur for this component</summary>
+        </key>
+        <key type="b" name="override-background">
+            <default>true</default>
+            <summary>Boolean, whether to override the background or not</summary>
+        </key>
+        <key type="i" name="style-dash-to-dock">
+            <default>0</default>
+            <summary>Enum to select the style of dash to dock (0 transparent, 1 light, 2 dark)</summary>
+        </key>
+        <key type="b" name="unblur-in-overview">
+            <default>false</default>
+            <summary>Boolean, whether to disable blur from this component when opening the overview or not</summary>
+        </key>
+        <key type="i" name="corner-radius">
+            <default>18</default>
+            <summary>Radius for the corner rounding effect</summary>
+        </key>
+    </schema>
+
+    <schema id="org.gnome.shell.extensions.blur-my-shell.panel"
+        path="/org/gnome/shell/extensions/blur-my-shell/panel/">
+        <key type="b" name="blur">
+            <default>true</default>
+            <summary>Boolean, whether to blur activate the blur for this component or not</summary>
+        </key>
+        <key type="d" name="brightness">
+            <default>0.6</default>
+            <summary>Brightness to use for the blur effect</summary>
+        </key>
+        <key type="b" name="static-blur">
+            <default>true</default>
+            <summary>Boolean, whether to use static or dynamic blur for this component</summary>
+        </key>
+    </schema>
+
+    <schema id="org.gnome.shell.extensions.blur-my-shell.popup"
+        path="/org/gnome/shell/extensions/blur-my-shell/popup/">
+        <key type="b" name="blur">
+            <default>true</default>
+            <summary>Boolean, whether to blur popup menus, notifications, switchers, and dialogs or not</summary>
+        </key>
+        <key type="b" name="static-blur">
+            <default>false</default>
+            <summary>Boolean, whether to use a static blur on popup surfaces</summary>
+        </key>
+        <key type="d" name="brightness">
+            <default>0.6</default>
+            <summary>Brightness to use for the blur effect</summary>
+        </key>
+        <key type="i" name="menu-corner-radius">
+            <default>20</default>
+            <summary>Radius for popup menu corner rounding</summary>
+        </key>
+        <key type="i" name="style-popup">
+            <default>3</default>
+            <summary>Enum to select the style of popup surfaces (0 transparent, 1 light, 2 dark, 3 automatic)</summary>
+        </key>
+    </schema>
+</schemalist>
+XML
+glib-compile-schemas "$blur_ext/schemas"
+
+echo "  with Dash to Dock and Blur my Shell installed:"
+XDG_DATA_DIRS="$BLUR/share:/usr/local/share:/usr/share" \
+    PREFS_SMOKE_BLUR=full \
+    "${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
+
+# Installed and unreadable: the metadata of an extension in the user's data
+# directory with no schemas, as a download that is only half there, or one so
+# old it has no dock component. The group has to say so, not fail.
+blur_half="$BLUR/data/gnome-shell/extensions/blur-my-shell@aunetx"
+mkdir -p "$blur_half"
+sed 's/ (fixture)/ (fixture, without schemas)/' "$blur_ext/metadata.json" > "$blur_half/metadata.json"
+
+echo "  with Blur my Shell installed but without its settings:"
+XDG_DATA_HOME="$BLUR/data" \
+    PREFS_SMOKE_BLUR=settingless \
+    "${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"

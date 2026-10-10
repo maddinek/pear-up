@@ -88,6 +88,16 @@ until you switch it on, and a slider then runs from weak to strong. Pear Up draw
 to Dock without changing any of Dash to Dock's settings, and clicks and drag-and-drop still go to
 Dash to Dock's own icons.
 
+**A frosted-glass dock.** With [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/)
+installed, a Glass group on the same page turns the dock into the floating, frosted pill macOS has. One
+switch sets the blur, a dark glass tint — a light one when GNOME's colour scheme is not dark — and the
+brightness together; a Tint choice (transparent, light or dark) and a Brightness slider adjust it. Only the
+dock's own blur is written: Blur my Shell's panel, overview and menu blur are left as they are, and so is
+whether the dock's blur is static or dynamic. Switching it off puts back what it replaced. Pear Up installs
+nothing; without Blur my Shell the group is a link to it. One catch, which the slider says: the brightness is
+a setting of Blur my Shell's dynamic blur, and its static blur, the default, takes its brightness from a
+pipeline of its own and ignores it.
+
 | Right edge, always visible | Bottom edge, larger icons |
 | --- | --- |
 | ![Dock on the right edge](assets/screenshots/dock-right.jpg) | ![Dock along the bottom](assets/screenshots/dock-bottom.jpg) |
@@ -145,6 +155,8 @@ no extension can add one. Installing puts a **Pear Up Settings** application ent
 - Optional: [Rounded Window Corners Reborn](https://extensions.gnome.org/extension/7048/rounded-window-corners-reborn/)
   and [Magic Lamp](https://extensions.gnome.org/extension/3740/compiz-alike-magic-lamp-effect/) for the rounded
   corners and the genie effect on the Windows page. Without them that page says so and links to them.
+- Optional: [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/) for the frosted
+  glass of the Dock page. Without it that group says so and links to it.
 - Optional: [Search Light](https://extensions.gnome.org/extension/5489/search-light/) for
   Spotlight-style search — but note it **ends a Wayland session on GNOME 50** when its icon is
   clicked, until the fix in [`contrib/`](contrib/README.md) is applied. The search button here
@@ -186,7 +198,8 @@ wrote, printing what was restored. What the Appearance page set is not among the
 type and accent off there first if you want your old ones back, and pick the icon and cursor
 theme again. The same goes for the Windows page: switch Small Window Buttons off there to take its
 block out of the two `gtk.css` files, Don't Maximize New Windows to put GNOME's value back, and the
-rounded corners and the genie effect off to leave those extensions as you found them.
+rounded corners and the genie effect off to leave those extensions as you found them; and for Frosted
+Glass on the Dock page, which puts back the blur, tint and brightness it replaced.
 
 ## Testing
 
@@ -251,11 +264,14 @@ deliberate statement rather than a grep result.
 them: a property libadwaita dropped, or a method that never existed, shows up only when the window is
 opened — as an empty window and a stack trace in the journal. This builds every page headlessly and
 fails on the first throw, then drives the rows that change settings of the desktop itself — the
-Appearance and Windows switches and pickers and the shortcut sets — against the container's own
-in-memory settings, and checks that the values the user had come back. The pickers are run once more
-with fixture icon and cursor themes dropped into the container's XDG directories, and the Windows page
-once more with the two extensions it drives installed. Its `gtk.css` switch works on a config directory
-the runner makes, and the check is that every byte outside the block is as it was.
+Appearance and Windows switches and pickers, the Dock page's frosted glass and the shortcut sets —
+against the container's own in-memory settings, and checks that the values the user had come back. The
+pickers are run once more with fixture icon and cursor themes dropped into the container's XDG
+directories, and the Windows page once more with the two extensions it drives installed. Its `gtk.css`
+switch works on a config directory the runner makes, and the check is that every byte outside the block
+is as it was. The Dock page is run with Blur my Shell absent, installed with the schemas of its dock,
+panel and popup components, and installed without them, and the check for the second is that nothing but
+the dock's four keys is ever written.
 
 ```bash
 tests/run-prefs-smoke.sh            # every version in the table
