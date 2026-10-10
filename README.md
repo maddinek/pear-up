@@ -56,11 +56,15 @@ search when that thing is unavailable, so the button is never a dead end.
 
 **Window buttons on the left.** Close, minimize and maximize in macOS order.
 
-**macOS type and accent.** One switch sets the interface, document and window-title fonts to Adwaita
-Sans — GNOME's own fork of Inter, shipped from GNOME 48, or Inter itself where that is what is
-installed — with font hinting off, which is how macOS draws text; another sets the accent color to
-blue. They are ordinary GNOME settings and reach every app, and switching either off puts back what
-was there before rather than a default.
+**macOS type, accent, icons and cursor.** One switch sets the interface, document and window-title
+fonts to Adwaita Sans — GNOME's own fork of Inter, shipped from GNOME 48, or Inter itself where that
+is what is installed — with font hinting off, which is how macOS draws text; another sets the accent
+color to blue. Two pickers choose the icon and cursor theme from what is installed, with
+[MacTahoe](https://github.com/vinceliuice/MacTahoe-icon-theme),
+[WhiteSur](https://github.com/vinceliuice/WhiteSur-icon-theme) and the
+[macOS cursors](https://github.com/ful1e5/apple_cursor) first, and say where to get them, and how to
+install them without root, when none is there. They are ordinary GNOME settings and reach every app,
+and a switch, turned off again, puts back what was there before rather than a default.
 
 **Dock control.** [Dash to Dock](https://extensions.gnome.org/extension/307/dash-to-dock/) is
 configured from the same window: which screen edge it sits on, icon size, how much of the edge it may
@@ -106,8 +110,8 @@ keyboard shortcuts.
 
 ## Settings
 
-Everything lives in one window — the panel layout, which menus appear, the dock, the type and accent,
-and your custom menus. Open it by pressing <kbd>Super</kbd> and typing "pear", from the app grid, or
+Everything lives in one window — the panel layout, which menus appear, the dock, the type, accent,
+icons and cursor, and your custom menus. Open it by pressing <kbd>Super</kbd> and typing "pear", from the app grid, or
 through the Extensions app.
 
 These settings cannot appear in GNOME Settings beside Appearance, which is where they arguably
@@ -164,8 +168,9 @@ bash uninstall.sh --reset-settings
 
 That removes exactly the accelerators this extension added (leaving any of your own on the
 same actions alone) and resets the other keys only while they still hold the values it
-wrote, printing what was restored. The fonts and accent chosen on the Appearance page are
-not among them: switch them off there first if you want your old ones back.
+wrote, printing what was restored. What the Appearance page set is not among them: switch the
+type and accent off there first if you want your old ones back, and pick the icon and cursor
+theme again.
 
 ## Testing
 
@@ -230,8 +235,9 @@ deliberate statement rather than a grep result.
 them: a property libadwaita dropped, or a method that never existed, shows up only when the window is
 opened — as an empty window and a stack trace in the journal. This builds every page headlessly and
 fails on the first throw, then drives the rows that change settings of the desktop itself — the
-Appearance switches and the shortcut sets — against the container's own in-memory settings, and
-checks that the values the user had come back.
+Appearance switches and pickers and the shortcut sets — against the container's own in-memory
+settings, and checks that the values the user had come back. The pickers are run once more with
+fixture icon and cursor themes dropped into the container's XDG directories.
 
 ```bash
 tests/run-prefs-smoke.sh            # every version in the table

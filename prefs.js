@@ -41,6 +41,54 @@ const DISPLACED_SETTINGS = 'displaced-settings';
 // have it too.
 const MACOS_TYPE_FAMILIES = ['Adwaita Sans', 'Inter'];
 
+// The two theme pickers differ only in which key they write, which themes
+// count as a theme of that kind, and what to say when no macOS-style one is
+// installed. `macOS` matches by name, because that is all a theme directory
+// gives away; the families are MacTahoe and WhiteSur for icons, and the
+// ful1e5 macOS cursors, whose names start with macOS, besides.
+const THEME_PICKERS = [
+    {
+        key: 'icon-theme',
+        kind: 'icons',
+        groupTitle: 'Icons',
+        rowTitle: 'Icon Theme',
+        macOS: /^(MacTahoe|WhiteSur)/i,
+        missing: {
+            title: 'No macOS-style icon theme installed',
+            subtitle: 'Clone MacTahoe or WhiteSur and run ./install.sh: it installs into ' +
+                '~/.local/share/icons and needs no root',
+            links: [
+                ['MacTahoe', 'https://github.com/vinceliuice/MacTahoe-icon-theme'],
+                ['WhiteSur', 'https://github.com/vinceliuice/WhiteSur-icon-theme'],
+            ],
+        },
+    },
+    {
+        key: 'cursor-theme',
+        kind: 'cursors',
+        groupTitle: 'Cursor',
+        rowTitle: 'Cursor Theme',
+        macOS: /^(macOS|MacTahoe|WhiteSur)/i,
+        missing: {
+            title: 'No macOS-style cursor theme installed',
+            subtitle: 'Download macOS.tar.xz from the apple_cursor releases and unpack it into ' +
+                '~/.local/share/icons: no root needed',
+            links: [
+                ['apple_cursor', 'https://github.com/ful1e5/apple_cursor'],
+            ],
+        },
+    },
+];
+
+// Directories under icons/ that are not themes to pick: the fallbacks every
+// theme inherits from, and the X11 name for whichever cursor is the default.
+const THEMES_NEVER_OFFERED = new Set(['hicolor', 'locolor', 'default']);
+
+// Adwaita is the stock choice and what the key holds until it is changed, but
+// its icon theme marks itself Hidden, as fallbacks do. A hidden theme is
+// otherwise left out, except the one in use, which has to be shown to be read.
+const STOCK_THEME = 'Adwaita';
+
 // A Magic Keyboard reports Cmd as Super, so binding the Super combinations
 // gives the real macOS chords rather than an approximation of them. Each entry
 // is added alongside GNOME's own binding instead of replacing it, so Print and
@@ -455,10 +503,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         });
     }
 
-    // Type and color as macOS has them. None of it is Pear Up's own: these are
-    // GNOME's settings, which every app reads, so each switch remembers what it
-    // replaced and hands it back, and a row is absent on a system without the
-    // setting rather than shown and broken.
+    // Type, color, icons and cursor as macOS has them. None of it is Pear Up's
+    // own: these are GNOME's settings, which every app reads, so each switch
+    // remembers what it replaced and hands it back, and a row is absent on a
+    // system without the setting rather than shown and broken.
     _buildAppearancePage() {
         const page = new Adw.PreferencesPage({
             title: 'Appearance',
@@ -477,7 +525,160 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         if (rows.some(row => row))
             page.add(lookGroup);
 
+        const installed = this._installedThemes();
+        for (const picker of THEME_PICKERS)
+            this._addThemePicker(page, picker, installed);
+
         return page;
+    }
+
+    // Where icon and cursor themes are looked for: the places GTK and the
+    // cursor loader look. A name found in more than one is offered once.
+    _themeDirs() {
+        return [...new Set([
+            GLib.build_filenamev([GLib.get_user_data_dir(), 'icons']),
+            GLib.build_filenamev([GLib.get_home_dir(), '.icons']),
+            ...GLib.get_system_data_dirs().map(dir => GLib.build_filenamev([dir, 'icons'])),
+        ])];
+    }
+
+    // What every theme directory says about itself, by name: whether it has
+    // icons (an index.theme naming Directories, which a cursor-only theme
+    // lacks), whether it hides itself, and whether it has a cursors/ directory.
+    // An unreadable directory or index is skipped, so the worst a broken theme
+    // can do is leave itself out.
+    _installedThemes() {
+        const found = new Map();
+        for (const dir of this._themeDirs()) {
+            for (const name of this._directoryNames(dir)) {
+                const themeDir = GLib.build_filenamev([dir, name]);
+                if (THEMES_NEVER_OFFERED.has(name) || !GLib.file_test(themeDir, GLib.FileTest.IS_DIR))
+                    continue;
+
+                const theme = found.get(name) ?? { icons: false, hidden: false, cursors: false };
+                found.set(name, theme);
+
+                if (!theme.icons) {
+                    try {
+                        const index = new GLib.KeyFile();
+                        index.load_from_file(
+                            GLib.build_filenamev([themeDir, 'index.theme']), GLib.KeyFileFlags.NONE);
+                        // Throws for a missing group or key, which is the answer.
+                        if (index.get_value('Icon Theme', 'Directories')) {
+                            theme.icons = true;
+                            try {
+                                theme.hidden = index.get_boolean('Icon Theme', 'Hidden');
+                            } catch {
+                                // No Hidden key, which is the usual case.
+                            }
+                        }
+                    } catch {
+                        // No index.theme, or not one that can be read.
+                    }
+                }
+                theme.cursors ||= GLib.file_test(
+                    GLib.build_filenamev([themeDir, 'cursors']), GLib.FileTest.IS_DIR);
+            }
+        }
+        return found;
+    }
+
+    // What a directory holds, by name. Empty when it is missing or unreadable,
+    // which is the common case for most of the places themes are looked for.
+    _directoryNames(dir) {
+        const names = [];
+        try {
+            const listing = Gio.File.new_for_path(dir).enumerate_children(
+                'standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            for (let info = listing.next_file(null); info; info = listing.next_file(null))
+                names.push(info.get_name());
+            listing.close(null);
+        } catch {
+            // Whatever was read before an error stands.
+        }
+        return names;
+    }
+
+    // The names to offer for one picker: macOS-style first, then the rest,
+    // each in alphabetical order.
+    _offeredThemes(installed, picker, current) {
+        const offered = [...installed]
+            .filter(([name, theme]) => picker.kind === 'icons'
+                ? theme.icons && (!theme.hidden || name === STOCK_THEME || name === current)
+                : theme.cursors)
+            .map(([name]) => name);
+        const rank = name => picker.macOS.test(name) ? 0 : 1;
+        const order = name => name.toLowerCase();
+        return offered.sort((a, b) =>
+            rank(a) - rank(b) || (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0));
+    }
+
+    // A drop-down of the installed themes of one kind that writes one key, with
+    // a pointer to where to get a macOS-style one when there is none. Absent
+    // altogether where the key is.
+    _addThemePicker(page, picker, installed) {
+        const settings = this._settingsForSchema(INTERFACE_SCHEMA);
+        if (!this._schemaHasKey(settings, picker.key) || !settings.is_writable(picker.key))
+            return;
+
+        const current = settings.get_string(picker.key);
+        const offered = this._offeredThemes(installed, picker, current);
+
+        // The theme in use is always in the list, installed or not, so the row
+        // never shows a theme that is not the one in effect.
+        const names = [...offered];
+        const labelOf = name => name === ''
+            ? 'Not set'
+            : (offered.includes(name) ? name : `${name} (not installed)`);
+        if (!names.includes(current))
+            names.push(current);
+
+        const group = new Adw.PreferencesGroup({
+            title: picker.groupTitle,
+            description: 'Installed on this system, with the macOS-style themes first',
+        });
+        page.add(group);
+
+        const model = Gtk.StringList.new(names.map(labelOf));
+        const row = new Adw.ComboRow({
+            title: picker.rowTitle,
+            model,
+            selected: names.indexOf(current),
+        });
+        group.add(row);
+
+        // The row is written from the key and from the user; showing the key
+        // must not write it back.
+        let following = false;
+        row.connect('notify::selected', () => {
+            const name = names[row.selected];
+            if (!following && name && name !== settings.get_string(picker.key))
+                settings.set_string(picker.key, name);
+        });
+
+        const watched = settings.connect(`changed::${picker.key}`, () => {
+            const now = settings.get_string(picker.key);
+            if (!names.includes(now)) {
+                names.push(now);
+                model.append(labelOf(now));
+            }
+            following = true;
+            row.set_selected(names.indexOf(now));
+            following = false;
+        });
+        row.connect('destroy', () => settings.disconnect(watched));
+
+        if (!offered.some(name => picker.macOS.test(name))) {
+            const missing = new Adw.ActionRow({
+                title: picker.missing.title,
+                subtitle: picker.missing.subtitle,
+            });
+            missing.set_subtitle_lines(0);
+            for (const [label, uri] of picker.missing.links) {
+                missing.add_suffix(new Gtk.LinkButton({ uri, label, valign: Gtk.Align.CENTER }));
+            }
+            group.add(missing);
+        }
     }
 
     // Whether a font family is installed, asked of Pango in this process: the

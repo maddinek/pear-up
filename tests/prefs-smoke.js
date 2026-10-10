@@ -443,6 +443,172 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         print('  appearance: type and accent switches write their keys and hand the user\'s values back');
 }
 
+// The icon and cursor pickers list what is installed, macOS-style themes first,
+// and write the key they were asked for. What is installed is whatever the scan
+// finds, so this runs three ways: against the container as it is, against
+// directories with nothing in them, and — when the runner has dropped fixture
+// themes into its XDG directories, as tests/lib/check-prefs-here.sh does —
+// against those, whose names and layout are known.
+{
+    const INTERFACE = 'org.gnome.desktop.interface';
+    const settings = preferences._settingsForSchema(INTERFACE);
+    const fixtures = GLib.getenv('PREFS_SMOKE_THEMES');
+    const problemsBefore = problems.length;
+
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`themes: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+
+    const pickers = [
+        {
+            kind: 'icons', key: 'icon-theme', title: 'Icon Theme',
+            macOS: name => /^(MacTahoe|WhiteSur)/i.test(name),
+            links: ['vinceliuice/MacTahoe-icon-theme', 'vinceliuice/WhiteSur-icon-theme'],
+        },
+        {
+            kind: 'cursors', key: 'cursor-theme', title: 'Cursor Theme',
+            macOS: name => /^(macOS|MacTahoe|WhiteSur)/i.test(name),
+            links: ['ful1e5/apple_cursor'],
+        },
+    ];
+
+    const kept = [];
+    const pageWith = dirs => {
+        const fresh = new Preferences(metadata);
+        if (dirs)
+            fresh._themeDirs = () => dirs;
+        const page = fresh._buildAppearancePage();
+        kept.push(page);
+        return page;
+    };
+    const rowOf = (page, picker) => findWidget(page, widget =>
+        widget instanceof Adw.ComboRow && widget.title === picker.title);
+    const labelsOf = row => Array.from({ length: row.model.get_n_items() },
+        (_, index) => row.model.get_string(index));
+    const linkTo = (page, target) => findWidget(page, widget =>
+        widget instanceof Gtk.LinkButton && widget.uri.endsWith(target));
+
+    const emptyDir = GLib.dir_make_tmp('pear-up-no-themes-XXXXXX');
+
+    if (!settings) {
+        problems.push('themes: the GNOME interface schema is missing in this container');
+    } else {
+        for (const picker of pickers) {
+            const at = what => `${picker.kind}: ${what}`;
+            const present = (labels, name) => labels.includes(name);
+
+            // 1. Whatever this container (and the runner's fixtures) have.
+            settings.reset(picker.key);
+            let page = pageWith();
+            let row = rowOf(page, picker);
+            if (!row) {
+                problems.push(at('there is no picker row'));
+                continue;
+            }
+            let labels = labelsOf(row);
+            const offered = labels.filter(label => !label.endsWith(' (not installed)'));
+
+            expect(at('every name once'), new Set(offered).size, offered.length);
+            for (const never of ['hicolor', 'locolor', 'default'])
+                expect(at(`${never} offered`), present(offered, never), false);
+
+            // macOS-style first, each group alphabetical.
+            const styled = offered.filter(picker.macOS);
+            const others = offered.filter(name => !picker.macOS(name));
+            expect(at('macOS-style themes come first'), offered, [...styled, ...others]);
+            for (const group of [styled, others]) {
+                const lowered = group.map(name => name.toLowerCase());
+                expect(at('a group is in alphabetical order'), lowered, [...lowered].sort());
+            }
+
+            // The stock theme is the key's own default, whether or not it hides.
+            expect(at('the selected row is the current theme'),
+                labels[row.selected].replace(/ \(not installed\)$/, ''), settings.get_string(picker.key));
+            const stock = picker.kind === 'icons' ? 'index.theme' : 'cursors';
+            if (GLib.file_test(`/usr/share/icons/Adwaita/${stock}`, GLib.FileTest.EXISTS))
+                expect(at('Adwaita, installed here, is offered'), present(offered, 'Adwaita'), true);
+
+            // The link to where a macOS-style theme comes from shows exactly
+            // when there is none to pick.
+            for (const target of picker.links)
+                expect(at(`the link to ${target}`), !!linkTo(page, target), styled.length === 0);
+
+            // Picking writes the key; the key moving moves the row. With a
+            // single theme installed there is nothing to pick between.
+            if (offered.length > 1) {
+                const other = offered.findIndex(name => name !== settings.get_string(picker.key));
+                row.selected = other;
+                expect(at('the key after picking an entry'), settings.get_string(picker.key), offered[other]);
+                const back = other === 0 ? 1 : 0;
+                settings.set_string(picker.key, offered[back]);
+                expect(at('the row after the key changed elsewhere'), row.selected, back);
+            }
+            settings.set_string(picker.key, 'Gone-Theme');
+            expect(at('the row names a theme that is not installed'),
+                labelsOf(row)[row.selected], 'Gone-Theme (not installed)');
+            if (offered.length > 0) {
+                settings.set_string(picker.key, offered[0]);
+                expect(at('the row when it comes back'), row.selected, 0);
+            }
+
+            // 2. Nothing installed anywhere: nothing offered but the theme in
+            // use, marked as missing, and the way to get one is shown.
+            settings.set_string(picker.key, 'Adwaita');
+            page = pageWith([emptyDir]);
+            row = rowOf(page, picker);
+            expect(at('with no themes installed'), labelsOf(row), ['Adwaita (not installed)']);
+            for (const target of picker.links)
+                expect(at(`the link to ${target} with no themes installed`), !!linkTo(page, target), true);
+            settings.reset(picker.key);
+        }
+
+        // 3. The runner's fixtures, whose names and layout are known.
+        if (fixtures) {
+            const dirs = preferences._themeDirs();
+            for (const wanted of [`${fixtures}/data/icons`, `${fixtures}/home/.icons`, `${fixtures}/share/icons`])
+                expect('the directories scanned include the fixtures\' ' + wanted, dirs.includes(wanted), true);
+
+            const [icons, cursors] = pickers;
+            const iconsPage = pageWith();
+            const iconNames = labelsOf(rowOf(iconsPage, icons));
+            const cursorNames = labelsOf(rowOf(pageWith(), cursors));
+
+            // The fixtures, in the order they must come: macOS-style first.
+            // Each name is in two places or reached by a link, and is found
+            // once. WhiteSur-Test has icons and cursors both.
+            const iconFixtures = ['MacTahoe-Test', 'WhiteSur-Test', 'Alpha-Icons', 'Linked-Icons', 'Zeta-Icons'];
+            const cursorFixtures = ['macOS-Test', 'WhiteSur-Test', 'Alpha-Cursors', 'Plain-Cursors'];
+            const fixtureNames = [...new Set([...iconFixtures, ...cursorFixtures, 'Hidden-Icons'])];
+            expect('icon themes found, macOS-style first',
+                iconNames.filter(name => fixtureNames.includes(name)), iconFixtures);
+            expect('cursor themes found, macOS-style first',
+                cursorNames.filter(name => fixtureNames.includes(name)), cursorFixtures);
+
+            // Nothing to point to once a macOS-style theme is installed.
+            for (const target of [...icons.links, ...cursors.links])
+                expect(`the link to ${target} with its theme installed`, !!linkTo(iconsPage, target), false);
+
+            // A hidden theme is still shown while it is the one in use.
+            settings.set_string('icon-theme', 'Hidden-Icons');
+            const hiddenRow = rowOf(pageWith(), icons);
+            expect('the hidden theme in use', labelsOf(hiddenRow)[hiddenRow.selected], 'Hidden-Icons');
+            settings.reset('icon-theme');
+
+            // Picking one of the fixtures writes it.
+            const row = rowOf(iconsPage, icons);
+            row.selected = iconNames.indexOf('MacTahoe-Test');
+            expect('the icon theme after picking MacTahoe-Test', settings.get_string('icon-theme'), 'MacTahoe-Test');
+            settings.reset('icon-theme');
+        }
+    }
+
+    GLib.rmdir(emptyDir);
+
+    if (problems.length === problemsBefore)
+        print(`  themes: icon and cursor pickers list what is installed${fixtures ? ', fixtures included,' : ''} and write their keys`);
+}
+
 // A shortcut set stands conflicting grabs down while it is on, and has to give
 // them back as the user had them. The window set displaces the shortcut that
 // reveals Dash to Dock. The note of what was there is read back from our own

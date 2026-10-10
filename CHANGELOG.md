@@ -119,6 +119,20 @@ human reads.
   reopened. A key the user never set goes back to its default rather than to a
   copy of it. A switch reads on whenever every value already matches, whoever
   put them there, and follows them when they change elsewhere.
+- **Icon and cursor theme pickers on the Appearance page.** Each lists the
+  themes installed on the system, macOS-style ones first — MacTahoe and
+  WhiteSur, and for cursors the macOS set — and writes `icon-theme` or
+  `cursor-theme` when one is picked. They look where GTK does: the user's data
+  directory, `~/.icons`, and the `icons` directory of each system data
+  directory. A directory counts as an icon theme if its `index.theme` names
+  directories, which a cursor-only theme's does not, and as a cursor theme if it
+  has a `cursors/` directory; hicolor, locolor and default are never offered,
+  and neither are themes that mark themselves Hidden, except Adwaita, which is
+  the stock choice, and the theme in use. A theme in use that is not installed
+  is listed as such rather than replaced by the first entry. With no
+  macOS-style theme installed, a row links to MacTahoe and WhiteSur, or to
+  apple_cursor, and says in a line how to install one into `~/.local/share/icons`
+  without root. An unreadable directory or index just leaves a theme out.
 - **The preferences smoke test drives the Appearance switches.** Against the
   container's own in-memory settings it switches type and accent on and off
   through a second preferences object and expects each value back exactly,
@@ -126,6 +140,15 @@ human reads.
   set by hand with nothing noted, and the accent and type switches sharing one
   note. It forces each branch of the font choice, Adwaita Sans, Inter and
   neither, and checks Pango's answer against fontconfig's.
+- **The preferences smoke test drops themes into the container's XDG
+  directories.** A third run installs fixture icon and cursor themes into the
+  user data directory, `~/.icons` and a system data directory — one that is
+  both, one that hides itself, the three names never offered, a name found in
+  two places and one reached through a symlink — and checks what each picker
+  lists and in what order. The same page is also built over empty directories,
+  where the links to where to get a theme must show, and over the container's
+  own themes. Picking an entry writes the key; the key changing elsewhere moves
+  the row.
 - **Vitals sits closer and a size smaller, like macOS stat apps.** Its
   readouts are spaced 11px apart in the bar's type; with Vitals installed they
   are now 5px apart, set in 12px regular against the bar's 13px. These were

@@ -41,3 +41,63 @@ dnf install -q -y gnome-shell-extension-dash-to-dock >/dev/null 2>&1
 glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null
 echo "  with Dash to Dock $(rpm -q --qf '%{VERSION}' gnome-shell-extension-dash-to-dock):"
 PREFS_SMOKE_DOCK=1 xvfb-run -a gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
+
+# And once more with icon and cursor themes dropped into the XDG directories
+# the Appearance page scans: the user's data directory, ~/.icons and a system
+# data directory, as this container has them. The fixtures are as small as a
+# theme can be and cover what the scan has to tell apart — icon themes, cursor
+# themes, a theme that is both, one that hides itself, the fallbacks that are
+# never offered, a name found in two places, and one reached through a symlink.
+# tests/prefs-smoke.js knows these names.
+THEMES="$WORK/theme-fixtures"
+rm -rf "$THEMES"
+
+icon_theme() {      # <icons dir> <name> [extra key in [Icon Theme]]
+    local dir="$1/$2"
+    mkdir -p "$dir/16x16/apps"
+    printf '[Icon Theme]\nName=%s\nDirectories=16x16/apps\n%s\n\n[16x16/apps]\nSize=16\nType=Fixed\n' \
+        "$2" "${3:-}" > "$dir/index.theme"
+}
+cursor_theme() {    # <icons dir> <name>: the cursors directory is all that makes one
+    mkdir -p "$1/$2/cursors"
+    : > "$1/$2/cursors/left_ptr"
+}
+cursor_index() {    # <icons dir> <name>: the index.theme a cursor-only theme has
+    printf '[Icon Theme]\nName=%s\nInherits=hicolor\n' "$2" > "$1/$2/index.theme"
+}
+
+user_icons="$THEMES/data/icons"
+home_icons="$THEMES/home/.icons"
+system_icons="$THEMES/share/icons"
+
+icon_theme "$user_icons" MacTahoe-Test
+icon_theme "$user_icons" Zeta-Icons
+icon_theme "$user_icons" Hidden-Icons 'Hidden=true'
+cursor_theme "$user_icons" macOS-Test
+cursor_index "$user_icons" macOS-Test
+cursor_theme "$user_icons" Plain-Cursors
+icon_theme "$user_icons" hicolor
+cursor_theme "$user_icons" hicolor
+icon_theme "$user_icons" locolor
+cursor_theme "$user_icons" default
+icon_theme "$THEMES/elsewhere" Linked-Icons
+ln -s "$THEMES/elsewhere/Linked-Icons" "$user_icons/Linked-Icons"
+
+icon_theme "$home_icons" WhiteSur-Test
+cursor_theme "$home_icons" WhiteSur-Test
+icon_theme "$home_icons" Zeta-Icons
+
+icon_theme "$system_icons" Alpha-Icons
+cursor_theme "$system_icons" Alpha-Cursors
+icon_theme "$system_icons" MacTahoe-Test
+
+# The same run has Inter installed, the font the Appearance page falls back on
+# where Adwaita Sans is not (it comes with GNOME 48). Without it the releases
+# before that would never see Pango find a font at all, only not find one.
+dnf install -q -y rsms-inter-fonts >/dev/null 2>&1 || echo "  (Inter is not installable here)"
+
+echo "  with Inter and icon and cursor themes installed:"
+HOME="$THEMES/home" XDG_DATA_HOME="$THEMES/data" \
+    XDG_DATA_DIRS="$THEMES/share:/usr/local/share:/usr/share" \
+    PREFS_SMOKE_THEMES="$THEMES" \
+    xvfb-run -a gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
