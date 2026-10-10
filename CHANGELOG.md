@@ -8,6 +8,17 @@ human reads.
 
 ### Fixed
 
+- **The menu bar stays while a dialog is in front.** With Pear Up's own
+  preferences open the bar showed the pear and nothing else, no app name and no
+  menus. Not an app the shell could not place: the Extensions app opens an
+  extension's preferences as a modal dialog, and the bar was built only for
+  windows of the normal type, so a dialog of any app emptied it. A dialog and a
+  modal dialog are their app's window like any other, and the bar now speaks for
+  them, with the app's name — Extensions, for these preferences — and the usual
+  menus. The integration suite opens a modal window of its own and expects the
+  menus; on GNOME 45 and 50 the shell classes it as a modal dialog, and the bar
+  was empty without the change.
+
 - **The preferences read cleanly at the default width.** Four things that
   showed in the 820px window at scale 2. The Dock page's Indicator dropdown was
   squeezed to "One Dot, Like m…" by its own 81-character subtitle, which shares

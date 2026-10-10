@@ -587,6 +587,51 @@ if menus:
     else:
         check("System Menu was found", False, "no pearup-logo role")
 
+# ------------------------------------------- a dialog is its app's window too
+# GNOME's Extensions app opens an extension's preferences, Pear Up's own among
+# them, as a modal dialog. The bar was built only for windows of the normal type,
+# so with those preferences in front it showed the pear and nothing else: no app
+# name, no menus. A dialog belongs to its app as much as any other window.
+DIALOG_CLASS = "io.github.maddinek.PearUpTestDialog"
+print()
+print("  Dialogs:")
+dialog = None
+try:
+    dialog = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-dialog.js"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    focus = None
+    for _ in range(40):
+        GLib.usleep(500 * 1000)
+        focus = (panel_state().get("focusWindow") or {})
+        if focus.get("wmClass") == DIALOG_CLASS:
+            break
+    if focus.get("wmClass") != DIALOG_CLASS:
+        check("a modal window could be put in front", False, f"focus={focus}")
+    elif focus.get("windowType") not in (3, 4):
+        # Whether a modal window is classed as a dialog is up to the compositor,
+        # and the older ones are not told it is modal at all.
+        print(f"  note: this release classes the modal window as type "
+              f"{focus.get('windowType')}, not as a dialog, so there is nothing to check")
+    else:
+        titles = set()
+        for _ in range(20):
+            GLib.usleep(250 * 1000)
+            titles = {m["label"] for m in menu_tree() if m["label"]}
+            if "File" in titles:
+                break
+        check("the menu bar stays while a dialog is in front",
+              {"File", "Edit", "Window"} <= titles,
+              f"window type {focus['windowType']}, bar shows {sorted(titles)}")
+except FileNotFoundError:
+    print("  note: gjs missing, cannot open a dialog")
+except GLib.Error as exc:
+    check("a dialog could be exercised", False, exc.message.splitlines()[0])
+finally:
+    if dialog:
+        dialog.terminate()
+        dialog.wait()
+        GLib.usleep(800 * 1000)
+
 # ------------------------------------------------------------ Cmd+Q quits
 # Two windows of one app, then Cmd+Q: both have to go. Closing only the one in
 # front is what GNOME's own close binding does, and what Cmd+Q used to do here.
