@@ -79,6 +79,13 @@ human reads.
 
 ### Changed
 
+- **The preferences window opens at 820px wide, up from 680.** With eight pages
+  the switcher along the bottom gives each an eighth of the width, and 680 cut
+  "Custom Menus" to "Custom Me…" in Adwaita Sans 11. 780 is where that font
+  fits; 820 leaves room for a size up. The content is clamped, so the extra
+  width is margin.
+- **Window Buttons on the Left is on the Windows page**, not General.
+
 - **Title Padding defaults to 6px**, between the old default and the packed
   look, now that the slider moves the spacing it claims to.
 
@@ -103,6 +110,56 @@ human reads.
 
 ### Added
 
+- **A Windows page, after Appearance.** What macOS does with its windows, in
+  two groups so far: the buttons, and how new windows open. Window Buttons on
+  the Left moves here from General, with the same switch and the same two
+  layouts. As on Appearance, none of it is Pear Up's own setting, so each row
+  reads the state of the thing it drives, whoever put it there, and follows it
+  when it changes elsewhere.
+- **Small Window Buttons.** Shrinks the close, minimize and maximize buttons to
+  about the size macOS draws them, in every app that draws its own title bar.
+  The size is CSS, and Pear Up keeps one block of it in each of
+  `~/.config/gtk-4.0/gtk.css` and `~/.config/gtk-3.0/gtk.css`, between two
+  marker lines, `/* >>> pear-up window buttons >>> */` and
+  `/* <<< pear-up window buttons <<< */`. The GTK 4 file reaches libadwaita
+  apps; the GTK 3 one reaches GTK 3 apps and the Electron ones that draw GTK 3
+  title buttons, such as Claude, ChatGPT and Cursor. Apps pick it up when they
+  next start. Switching on creates the files and directories that are missing
+  and puts the block after whatever is there; switching off removes the block
+  and the one blank line that set it off, and nothing else, so a file comes
+  back byte for byte as it was, bar a final newline it lacked. Doing either
+  twice changes nothing. A start marker without an end, or an end without a
+  start, is the user's text and is left alone. A file that is not UTF-8, or
+  that cannot be read back exactly as it is read, is not touched, and neither
+  is the other file: every file is read before any is written, and if a write
+  fails the ones already written are put back. A symlink, as a dotfile manager
+  leaves, is followed to its target and stays a link. Rules of the user's own
+  that already size these buttons count as the switch being on, and are never
+  removed: with only those in place the row is greyed out and says where they
+  are, and with Pear Up's block beside them it says they are left as they
+  are. Whatever the file holds, comments do not count as rules.
+- **Don't Maximize New Windows.** Sets mutter's `auto-maximize` to false, so a
+  window that opens nearly as large as the screen is left the size it asked
+  for, as on macOS. It remembers what it replaced in `displaced-settings`, as
+  the Appearance switches do, and switching off gives the user's own value back,
+  or the default if there was none.
+- **The preferences smoke test drives the Windows page.** Against the
+  container's own in-memory settings, and a config directory the runner makes
+  and names so the test can tell it from anyone's real one: it does not write
+  files anywhere else. The gtk.css switch goes in and out of files that are
+  missing, empty, with Windows line endings, without a final newline, with a
+  byte order mark, with text that is not ASCII, with a stray marker, with the
+  user's own rules in one file or both, and through a symlink, and compares
+  every byte outside the block, the modification times of what should not have
+  been rewritten, and the files beside them. A file that is not UTF-8, a
+  directory where a file should be, a decoder that changes what it reads and a
+  write that fails half way each leave the files as they were, which taking out
+  the read-everything-first order, the rollback or the re-encoding check each
+  makes fail. Auto-maximize is switched on and off through a second preferences
+  object, as after the window was closed and opened again, and gives back the
+  user's value, or none. The window is also opened at the width it asks for, on
+  a screen wide enough to hold it, and every page label in the switcher has to
+  be whole.
 - **An Appearance page, starting with type and the accent.** macOS-Like Type
   sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
   own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns

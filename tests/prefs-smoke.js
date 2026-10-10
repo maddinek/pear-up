@@ -64,11 +64,12 @@ const titles = pages.map(page => page.title ?? '(untitled)');
 print(`  built ${pages.length} pages: ${titles.join(', ')}`);
 
 const problems = [];
-if (pages.length < 7)
-    problems.push(`expected at least 7 pages, got ${pages.length}`);
-// Appearance drives settings of the desktop rather than of Pear Up, so it sits
-// with the other pages that do (Dock, Keyboard) and not among the bar's own.
-if (titles.join(', ') !== 'General, Menus, Custom Menus, Dock, Appearance, Keyboard, About')
+if (pages.length < 8)
+    problems.push(`expected at least 8 pages, got ${pages.length}`);
+// Appearance and Windows drive settings of the desktop rather than of Pear Up,
+// so they sit with the other pages that do (Dock, Keyboard) and not among the
+// bar's own.
+if (titles.join(', ') !== 'General, Menus, Custom Menus, Dock, Appearance, Windows, Keyboard, About')
     problems.push(`the pages are in the wrong order: ${titles.join(', ')}`);
 for (const [index, title] of titles.entries()) {
     if (!title || title === '(untitled)')
@@ -609,6 +610,50 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         print(`  themes: icon and cursor pickers list what is installed${fixtures ? ', fixtures included,' : ''} and write their keys`);
 }
 
+// The switcher along the bottom gives each page an equal share of the window's
+// width, and cuts a label that does not fit: at 680 wide "Custom Menus" had
+// already become "Custom Me…" with eight pages. The window is opened at the size
+// fillPreferencesWindow asks for and every label has to be whole. The font is
+// this release's default, since that is what the window is drawn in.
+{
+    const problemsBefore = problems.length;
+    const sized = new Adw.PreferencesWindow();
+    await new Preferences(metadata).fillPreferencesWindow(sized);
+    sized.present();
+    await new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, 600, () => {
+        resolve();
+        return GLib.SOURCE_REMOVE;
+    }));
+
+    const inSwitcher = widget => {
+        for (let parent = widget.get_parent(); parent; parent = parent.get_parent()) {
+            if (parent.get_css_name() === 'viewswitcher')
+                return true;
+        }
+        return false;
+    };
+    const labels = [];
+    const collect = widget => {
+        if (widget instanceof Gtk.Label && widget.get_mapped() && inSwitcher(widget))
+            labels.push(widget);
+        for (let child = widget.get_first_child(); child; child = child.get_next_sibling())
+            collect(child);
+    };
+    collect(sized);
+
+    const shown = labels.map(label => label.get_label());
+    if (shown.join(', ') !== titles.join(', '))
+        problems.push(`switcher: the labels on show are ${shown.join(', ')}, expected ${titles.join(', ')}`);
+    for (const label of labels) {
+        if (label.get_layout().is_ellipsized())
+            problems.push(`switcher: "${label.get_label()}" is cut at ${sized.get_width()} wide`);
+    }
+    sized.destroy();
+
+    if (problems.length === problemsBefore)
+        print(`  switcher: all ${labels.length} page labels fit at the default width`);
+}
+
 // A shortcut set stands conflicting grabs down while it is on, and has to give
 // them back as the user had them. The window set displaces the shortcut that
 // reveals Dash to Dock. The note of what was there is read back from our own
@@ -653,6 +698,471 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         if (problems.length === problemsBefore)
             print('  shortcut set: hands Dash to Dock\'s shortcut back as the user had it, after a reopen');
     }
+}
+
+// The Windows page drives GNOME's window settings and the user's gtk.css files.
+// As with Appearance, the checks that matter are what is
+// written and what is handed back; run here the settings land in the in-memory
+// backend and the files in a directory the runner made, so it is safe to drive.
+const BUTTON_LAYOUT_LEFT = 'close,minimize,maximize:appmenu';
+const BUTTON_LAYOUT_RIGHT = 'appmenu:minimize,maximize,close';
+const BLOCK_BEGIN = '/* >>> pear-up window buttons >>> */';
+const BLOCK_END = '/* <<< pear-up window buttons <<< */';
+
+// The page and the row in it, from a preferences object of its own, which as far
+// as anything held in memory goes is a window opened afresh.
+const windowsKept = [];
+const windowsPageOf = prefs => {
+    const page = prefs._buildWindowsPage();
+    windowsKept.push(page);
+    return page;
+};
+const windowsSwitch = (page, title) =>
+    findWidget(page, widget => widget instanceof Adw.SwitchRow && widget.title === title);
+const windowsExpecter = label => (what, got, wanted) => {
+    if (JSON.stringify(got) !== JSON.stringify(wanted))
+        problems.push(`${label}: ${what} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+};
+
+// The buttons moved here from General: same row, same behaviour.
+{
+    const wm = preferences._settingsForSchema('org.gnome.desktop.wm.preferences');
+    const problemsBefore = problems.length;
+    const expect = windowsExpecter('window buttons');
+    const TITLE = 'Window Buttons on the Left';
+
+    const general = pages.find(page => page.title === 'General');
+    expect('the row still on the General page', !!windowsSwitch(general, TITLE), false);
+
+    wm.set_string('button-layout', BUTTON_LAYOUT_RIGHT);
+    const row = windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE);
+    if (!row) {
+        problems.push('window buttons: the Windows page has no Window Buttons on the Left row');
+    } else {
+        expect('the switch with the buttons on the right', row.active, false);
+        row.active = true;
+        expect('button-layout after switching on', wm.get_string('button-layout'), BUTTON_LAYOUT_LEFT);
+        row.active = false;
+        expect('button-layout after switching off', wm.get_string('button-layout'), BUTTON_LAYOUT_RIGHT);
+        wm.set_string('button-layout', BUTTON_LAYOUT_LEFT);
+        expect('the switch after the layout changed elsewhere', row.active, true);
+        wm.set_string('button-layout', 'appmenu:close');
+        expect('the switch after the buttons went back to the right', row.active, false);
+        expect('the switch reading a layout set by hand',
+            windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE).active, false);
+    }
+    wm.reset('button-layout');
+
+    if (problems.length === problemsBefore)
+        print('  window buttons: the switch moved to the Windows page and writes the same layouts');
+}
+
+// Auto-maximize is a GNOME setting like the Appearance ones, so it has to hand
+// back what it replaced: the user's own value, or none at all.
+{
+    const mutter = preferences._settingsForSchema('org.gnome.mutter');
+    const pearUp = preferences.getSettings();
+    const problemsBefore = problems.length;
+    const expect = windowsExpecter('auto-maximize');
+    const TITLE = 'Don’t Maximize New Windows';
+    const KEY = 'auto-maximize';
+    const userValue = () => mutter.get_user_value(KEY)?.unpack() ?? null;
+    const rowOf = () => windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE);
+
+    if (!preferences._schemaHasKey(mutter, KEY)) {
+        expect('the row on a mutter without the key', !!rowOf(), false);
+    } else {
+        // GNOME maximizes by default, which is the thing being switched off.
+        expect('the key\'s default', mutter.get_default_value(KEY).unpack(), true);
+
+        // Set to true by the user: it comes back as set, not as unset.
+        mutter.set_boolean(KEY, true);
+        pearUp.reset('displaced-settings');
+        let row = rowOf();
+        expect('the switch while GNOME maximizes', row.active, false);
+        row.active = true;
+        expect('auto-maximize after switching on', mutter.get_boolean(KEY), false);
+        row = rowOf();
+        expect('the switch after reopening', row.active, true);
+        row.active = false;
+        expect('the user\'s value after switching off', userValue(), true);
+        expect('the notes once handed back', pearUp.get_string('displaced-settings'), '{}');
+
+        // At its default: back to the default, not to a copy of it.
+        mutter.reset(KEY);
+        pearUp.reset('displaced-settings');
+        row = rowOf();
+        row.active = true;
+        expect('auto-maximize from the default', mutter.get_boolean(KEY), false);
+        rowOf().active = false;
+        expect('the user\'s value after switching off, back to the default', userValue(), null);
+
+        // Already off, set by hand before this switch existed: it reads on, and
+        // the default is the only thing there is to go back to.
+        mutter.set_boolean(KEY, false);
+        pearUp.reset('displaced-settings');
+        row = rowOf();
+        expect('the switch when GNOME already leaves windows alone', row.active, true);
+        row.active = false;
+        expect('the user\'s value after switching off what was set by hand', userValue(), null);
+
+        // It follows the key when something else changes it.
+        mutter.set_boolean(KEY, false);
+        row = rowOf();
+        mutter.set_boolean(KEY, true);
+        expect('the switch after auto-maximize changed elsewhere', row.active, false);
+        mutter.reset(KEY);
+    }
+
+    if (problems.length === problemsBefore)
+        print('  auto-maximize: the switch writes the key and hands the user\'s value back, after a reopen');
+}
+
+// Small window buttons are blocks in two files of the user's own. Everything
+// that matters is what happens to the rest of those files, so the runner points
+// XDG_CONFIG_HOME at a directory of its own and says so; without that nothing
+// here writes anything.
+const smokeConfig = GLib.getenv('PREFS_SMOKE_CONFIG');
+if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
+    !GLib.path_get_basename(smokeConfig).startsWith('pear-up-smoke-')) {
+    print('  small window buttons: skipped, the runner has not given this process a config directory of its own');
+} else {
+    const configDir = GLib.get_user_config_dir();
+    const problemsBefore = problems.length;
+    const expect = windowsExpecter('small buttons');
+    const TITLE = 'Small Window Buttons';
+
+    const path4 = `${configDir}/gtk-4.0/gtk.css`;
+    const path3 = `${configDir}/gtk-3.0/gtk.css`;
+    // The file as text with a byte order mark kept as U+FEFF, whatever this
+    // engine's decoder would do with one; null when there is no file.
+    const read = path => {
+        if (!GLib.file_test(path, GLib.FileTest.EXISTS) || GLib.file_test(path, GLib.FileTest.IS_DIR))
+            return null;
+        const bytes = GLib.file_get_contents(path)[1];
+        const marked = bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF;
+        const text = new TextDecoder('utf-8').decode(marked ? bytes.subarray(3) : bytes);
+        return marked ? `\uFEFF${text}` : text;
+    };
+    const write = (path, text) => {
+        GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
+        GLib.file_set_contents(path, typeof text === 'string' ? new TextEncoder().encode(text) : text);
+    };
+    const modified = path => {
+        const info = Gio.File.new_for_path(path).query_info('time::modified,time::modified-usec',
+            Gio.FileQueryInfoFlags.NONE, null);
+        return [info.get_attribute_uint64('time::modified'), info.get_attribute_uint32('time::modified-usec')];
+    };
+    // Starts every case from nothing, in a directory only this test writes in.
+    const reset = () => {
+        GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(configDir)}`);
+        GLib.mkdir_with_parents(configDir, 0o755);
+    };
+    const rowOf = (prefs = new Preferences(metadata)) => windowsSwitch(windowsPageOf(prefs), TITLE);
+    const lines = text => text.split('\n');
+    const blockLines = text => {
+        const all = lines(text);
+        const first = all.lastIndexOf(BLOCK_BEGIN);
+        const last = all.indexOf(BLOCK_END, first);
+        return first < 0 || last < 0 ? null : all.slice(first, last + 1);
+    };
+    // What a file should hold after the block went in: everything the user
+    // had, byte for byte, a blank line, then the block. A file that did not end
+    // in a newline gets the one it needed.
+    const withBlockAfter = (seed, block) =>
+        `${seed === '' ? '' : `${seed.endsWith('\n') ? seed : `${seed}\n`}\n`}${block.join('\n')}\n`;
+    const terminated = seed => seed === '' || seed.endsWith('\n') ? seed : `${seed}\n`;
+
+    // The block as it has to look, spelt out here and not taken from the code.
+    const BLOCK4 = [
+        BLOCK_BEGIN,
+        '/* Written by Pear Up (Preferences, Windows, Small Window Buttons). Switching',
+        '   that off removes this block; nothing outside it is ever touched. */',
+        'windowcontrols > button {',
+        '  min-width: 14px;',
+        '  min-height: 14px;',
+        '  padding: 3px;',
+        '}',
+        'windowcontrols > button > image {',
+        '  -gtk-icon-size: 8px;',
+        '  padding: 2px;',
+        '}',
+        BLOCK_END,
+    ];
+    const BLOCK3 = [
+        BLOCK_BEGIN,
+        '/* Written by Pear Up (Preferences, Windows, Small Window Buttons). Switching',
+        '   that off removes this block; nothing outside it is ever touched. */',
+        'headerbar button.titlebutton,',
+        '.titlebar button.titlebutton {',
+        '  min-width: 14px;',
+        '  min-height: 14px;',
+        '  padding: 2px;',
+        '  margin: 0 1px;',
+        '}',
+        'headerbar button.titlebutton image,',
+        '.titlebar button.titlebutton image {',
+        '  -gtk-icon-transform: scale(0.6);',
+        '}',
+        BLOCK_END,
+    ];
+
+    // Neither file nor directory exists: both are made, and each holds the
+    // block and nothing else.
+    reset();
+    let row = rowOf();
+    expect('the switch with no files', row.active, false);
+    row.active = true;
+    expect('gtk-4.0/gtk.css made from nothing', read(path4), `${BLOCK4.join('\n')}\n`);
+    expect('gtk-3.0/gtk.css made from nothing', read(path3), `${BLOCK3.join('\n')}\n`);
+    expect('the switch after switching on', row.active, true);
+    expect('the switch after reopening', rowOf().active, true);
+    row.active = false;
+    expect('gtk-4.0/gtk.css once switched off', read(path4), '');
+    expect('gtk-3.0/gtk.css once switched off', read(path3), '');
+    expect('the switch after switching off', rowOf().active, false);
+
+    // The user's own CSS, each in a way a hand-kept file can be: comments and
+    // odd spacing, Windows line endings, no final newline, blank lines at the
+    // end, a byte order mark, text that is not ASCII, an empty file.
+    const seeds = {
+        plain: '@define-color accent_bg_color #3584e4;\n\n/* my header */\nheaderbar {\n    background: red;\n}\n\n\n.title { font-weight:   300 }\n',
+        crlf: 'a { color: red; }\r\nb { color: blue; }\r\n',
+        noNewline: 'a { color: red; }',
+        blankEnd: 'a { color: red; }\n\n\n',
+        bom: '﻿a { color: red; }\n',
+        unicode: '/* Größe – 大きさ */\nlabel { color: green; }\n',
+        empty: '',
+    };
+    for (const [name, seed] of Object.entries(seeds)) {
+        const at = what => `${name}: ${what}`;
+        reset();
+        write(path4, seed);
+        write(path3, `${seed}/* gtk 3 */\n`);
+        // Files beside them, and in the directory above, are none of its business.
+        write(`${configDir}/gtk-4.0/settings.ini`, '[Settings]\ngtk-application-prefer-dark-theme=1\n');
+        write(`${configDir}/gtk-3.0/settings.ini`, '[Settings]\ngtk-cursor-theme-size=24\n');
+        write(`${configDir}/gtk-4.0/gtk-dark.css`, 'a { color: white; }\n');
+        write(`${configDir}/other/app.conf`, 'unrelated\n');
+        const bystanders = ['gtk-4.0/settings.ini', 'gtk-3.0/settings.ini', 'gtk-4.0/gtk-dark.css', 'other/app.conf']
+            .map(file => [file, read(`${configDir}/${file}`)]);
+
+        row = rowOf();
+        expect(at('the switch over a file of the user\'s own'), row.active, false);
+        row.active = true;
+        const seed3 = `${seed}/* gtk 3 */\n`;
+        expect(at('gtk-4.0/gtk.css with the block'), read(path4), withBlockAfter(seed, BLOCK4));
+        expect(at('gtk-3.0/gtk.css with the block'), read(path3), withBlockAfter(seed3, BLOCK3));
+        expect(at('the switch after switching on'), row.active, true);
+        expect(at('one block in the file'), read(path4).split(BLOCK_BEGIN).length - 1, 1);
+
+        // Switching on again, from a window opened afresh, writes nothing.
+        const stamps = [modified(path4), modified(path3)];
+        const bytes = [read(path4), read(path3)];
+        expect(at('the second call'), preferences._setWindowButtons(true), null);
+        expect(at('gtk-4.0/gtk.css after switching on twice'), read(path4), bytes[0]);
+        expect(at('gtk-3.0/gtk.css after switching on twice'), read(path3), bytes[1]);
+        expect(at('the modification times after switching on twice'), [modified(path4), modified(path3)], stamps);
+
+        row.active = false;
+        expect(at('gtk-4.0/gtk.css back as it was'), read(path4), terminated(seed));
+        expect(at('gtk-3.0/gtk.css back as it was'), read(path3), terminated(seed3));
+        expect(at('the switch after switching off'), row.active, false);
+        const stampsOff = [modified(path4), modified(path3)];
+        expect(at('switching off again'), preferences._setWindowButtons(false), null);
+        expect(at('the modification times after switching off twice'), [modified(path4), modified(path3)], stampsOff);
+        for (const [file, before] of bystanders)
+            expect(at(`${file} through all of it`), read(`${configDir}/${file}`), before);
+    }
+
+    // Edited while on: what the user adds around the block stays when it goes.
+    reset();
+    write(path4, 'a { color: red; }\n');
+    write(path3, 'b { color: red; }\n');
+    row = rowOf();
+    row.active = true;
+    write(path4, `/* mine */\nx { top: 1px; }\n${read(path4)}y { bottom: 2px; }\n`);
+    row.active = false;
+    expect('gtk-4.0/gtk.css with lines added before and after the block',
+        read(path4), '/* mine */\nx { top: 1px; }\na { color: red; }\ny { bottom: 2px; }\n');
+
+    // Half a block is not a block: a stray start marker, or a stray end marker,
+    // is the user's text and stays, whatever lies between it and a real block.
+    reset();
+    const strayStart = `a { color: red; }\n${BLOCK_BEGIN}\nb { color: blue; }\n`;
+    const strayEnd = `a { color: red; }\n${BLOCK_END}\n`;
+    write(path4, strayStart);
+    write(path3, strayEnd);
+    row = rowOf();
+    expect('the switch with half a block in each file', row.active, false);
+    row.active = true;
+    expect('the real block, after the stray start', blockLines(read(path4)), BLOCK4);
+    expect('the stray start is kept', read(path4).startsWith(strayStart), true);
+    expect('the real block, after the stray end', blockLines(read(path3)), BLOCK3);
+    row.active = false;
+    expect('gtk-4.0/gtk.css with a stray start marker', read(path4), strayStart);
+    expect('gtk-3.0/gtk.css with a stray end marker', read(path3), strayEnd);
+
+    // The rules framy had written by hand, unmarked: they are the buttons
+    // already being small. Nothing is added and nothing removed, the row says
+    // so and where, and is greyed out since there is nothing for it to undo.
+    reset();
+    const hand4 = '/* framy: window buttons 40% smaller. Delete to undo. */\nwindowcontrols > button {\n  min-width: 14px;\n  min-height: 14px;\n  padding: 3px;\n}\nwindowcontrols > button > image {\n  -gtk-icon-size: 8px;\n  padding: 2px;\n}\n';
+    const hand3 = '/* framy */\nheaderbar button.titlebutton,\n.titlebar button.titlebutton {\n  min-width: 14px;\n  min-height: 14px;\n  padding: 2px;\n  margin: 0 1px;\n}\nheaderbar button.titlebutton image,\n.titlebar button.titlebutton image {\n  -gtk-icon-transform: scale(0.6);\n}\n';
+    write(path4, hand4);
+    write(path3, hand3);
+    const stampsHand = [modified(path4), modified(path3)];
+    row = rowOf();
+    expect('the switch over hand-written rules', row.active, true);
+    expect('the switch can be used over hand-written rules', row.sensitive, false);
+    if (!/your own/i.test(row.subtitle ?? '') || !row.subtitle.includes('gtk-4.0/gtk.css') ||
+        !row.subtitle.includes('gtk-3.0/gtk.css'))
+        problems.push(`small buttons: the subtitle does not say the rules are the user's own, and where (${row.subtitle})`);
+    row.active = false;
+    expect('the switch after being switched off over hand-written rules', row.active, true);
+    expect('hand-written gtk-4.0/gtk.css left alone', read(path4), hand4);
+    expect('hand-written gtk-3.0/gtk.css left alone', read(path3), hand3);
+    expect('switching on over hand-written rules', preferences._setWindowButtons(true), null);
+    expect('hand-written files untouched', [read(path4), read(path3), ...[modified(path4), modified(path3)]],
+        [hand4, hand3, ...stampsHand]);
+
+    // Rules of the user's own in one file only: the other gets the block, and
+    // switching it off takes that away and leaves the user's.
+    reset();
+    write(path4, hand4);
+    row = rowOf();
+    expect('the switch with hand-written rules in one file', row.active, false);
+    row.active = true;
+    expect('the file with hand-written rules', read(path4), hand4);
+    expect('the file without', read(path3), `${BLOCK3.join('\n')}\n`);
+    expect('the switch once switched on', [row.active, row.sensitive], [true, true]);
+    if (!/your own rules/i.test(row.subtitle ?? '') || !row.subtitle.includes('gtk-4.0/gtk.css'))
+        problems.push(`small buttons: the subtitle does not mention the hand-written rules (${row.subtitle})`);
+    row.active = false;
+    expect('the file with hand-written rules, switched off', read(path4), hand4);
+    expect('the file without, switched off', read(path3), '');
+    expect('the switch once switched off', row.active, false);
+
+    // Rules of the user's own in the same file as the block: only the block goes.
+    reset();
+    write(path4, hand4);
+    write(path3, 'a { color: red; }\n');
+    preferences._setWindowButtons(true);
+    write(path4, `${hand4}\n${BLOCK4.join('\n')}\n`);
+    preferences._setWindowButtons(false);
+    expect('hand-written rules next to the block', read(path4), hand4);
+
+    // A mention in a comment is not a rule.
+    reset();
+    const mention = '/* try: windowcontrols > button { min-width: 14px; padding: 3px; } */\n';
+    write(path4, mention);
+    expect('the switch over a commented-out rule', rowOf().active, false);
+    rowOf().active = true;
+    expect('a commented-out rule does not count', blockLines(read(path4)), BLOCK4);
+
+    // A symlink, as a dotfile manager leaves: the file it points to changes and
+    // the link stays a link.
+    reset();
+    write(`${configDir}/dotfiles/gtk4.css`, 'a { color: red; }\n');
+    GLib.mkdir_with_parents(`${configDir}/gtk-4.0`, 0o755);
+    Gio.File.new_for_path(path4).make_symbolic_link(`${configDir}/dotfiles/gtk4.css`, null);
+    rowOf().active = true;
+    expect('the link is still a link', GLib.file_test(path4, GLib.FileTest.IS_SYMLINK), true);
+    expect('the file the link points to', read(`${configDir}/dotfiles/gtk4.css`),
+        withBlockAfter('a { color: red; }\n', BLOCK4));
+    rowOf().active = false;
+    expect('the file the link points to, switched off', read(`${configDir}/dotfiles/gtk4.css`), 'a { color: red; }\n');
+    expect('the link, switched off', GLib.file_test(path4, GLib.FileTest.IS_SYMLINK), true);
+
+    // A file Pear Up cannot hand back unchanged is left alone, and so is the
+    // other: nothing is written until every file has been read. The bad one is
+    // the second to be read, so a write made before the last read would show.
+    reset();
+    const notText = new Uint8Array([0x61, 0x20, 0xff, 0xfe, 0x7b, 0x7d, 0x0a]);
+    write(path4, 'a { color: red; }\n');
+    write(path3, notText);
+    row = rowOf();
+    row.active = true;
+    expect('the switch with a file in another encoding', row.active, false);
+    if (!/utf-8/i.test(row.subtitle ?? '') || !row.subtitle.includes('gtk-3.0/gtk.css'))
+        problems.push(`small buttons: the subtitle does not say why (${row.subtitle})`);
+    expect('the file in another encoding', Array.from(GLib.file_get_contents(path3)[1]), Array.from(notText));
+    expect('the other file, which waited', read(path4), 'a { color: red; }\n');
+    // Switched off, the same.
+    expect('switching off with a file in another encoding', preferences._setWindowButtons(false) !== null, true);
+    expect('the file in another encoding, switched off', Array.from(GLib.file_get_contents(path3)[1]), Array.from(notText));
+
+    // A decoder that changes what it reads cannot be trusted with a file that is
+    // written back whole: the text is encoded again and must be the bytes read.
+    reset();
+    write(path4, 'a { color: red; }\r\nb { color: blue; }\r\n');
+    const lossy = (() => {
+        const prefs = new Preferences(metadata);
+        prefs._decodeUtf8 = bytes => new TextDecoder('utf-8').decode(bytes).replace(/\r/g, '');
+        return prefs._setWindowButtons(true);
+    })();
+    if (!/exactly/.test(lossy ?? ''))
+        problems.push(`small buttons: a file read back changed was not refused (${lossy})`);
+    expect('a file the decoder would have changed', read(path4), 'a { color: red; }\r\nb { color: blue; }\r\n');
+    expect('the other file, which waited for it', read(path3), null);
+
+    // A directory where the file should be.
+    reset();
+    write(path3, 'b { color: red; }\n');
+    GLib.mkdir_with_parents(path4, 0o755);
+    row = rowOf();
+    row.active = true;
+    expect('the switch over a directory', row.active, false);
+    expect('the other file, beside a directory', read(path3), 'b { color: red; }\n');
+    if (!/^Could not/.test(row.subtitle ?? ''))
+        problems.push(`small buttons: the subtitle does not say it failed (${row.subtitle})`);
+
+    // A write that fails half way puts back what was written: both files change
+    // or neither does, also when one of them did not exist.
+    const failingPrefs = failOn => {
+        const prefs = new Preferences(metadata);
+        const write = prefs._writeStylesheet.bind(prefs);
+        prefs._writeStylesheet = (path, text) => {
+            if (path === failOn)
+                throw new Error('disk full');
+            write(path, text);
+        };
+        prefs.attempts = 0;
+        const set = prefs._setWindowButtons.bind(prefs);
+        prefs._setWindowButtons = on => {
+            prefs.attempts++;
+            return set(on);
+        };
+        return prefs;
+    };
+    reset();
+    write(path4, 'a { color: red; }\n');
+    let failing = failingPrefs(path3);
+    row = rowOf(failing);
+    row.active = true;
+    expect('the file written first, when the second could not be', read(path4), 'a { color: red; }\n');
+    expect('the file that did not exist, when it could not be written', read(path3), null);
+    expect('the switch when the second file could not be written', row.active, false);
+    if (!/^Could not write .*gtk-3\.0\/gtk\.css: disk full/.test(row.subtitle ?? ''))
+        problems.push(`small buttons: the subtitle does not say what failed (${row.subtitle})`);
+    // The row putting itself back is not the user switching it off again.
+    expect('attempts made while the switch put itself back', failing.attempts, 1);
+
+    reset();
+    write(path3, 'b { color: red; }\n');
+    preferences._setWindowButtons(true);
+    const withBlocks = [read(path4), read(path3)];
+    failing = failingPrefs(path3);
+    row = rowOf(failing);
+    expect('the switch with the blocks in', row.active, true);
+    row.active = false;
+    expect('the files when taking the blocks out failed half way', [read(path4), read(path3)], withBlocks);
+    expect('the switch when taking the blocks out failed', row.active, true);
+    expect('attempts made while the switch put itself back, switching off', failing.attempts, 1);
+
+    reset();
+    if (problems.length === problemsBefore)
+        print('  small window buttons: the block goes in and out of both files, touching nothing else');
 }
 
 if (problems.length > 0) {

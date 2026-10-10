@@ -89,6 +89,58 @@ const THEMES_NEVER_OFFERED = new Set(['hicolor', 'locolor', 'default']);
 // otherwise left out, except the one in use, which has to be shown to be read.
 const STOCK_THEME = 'Adwaita';
 
+// The Windows page: GNOME's own window settings and the user's GTK stylesheets.
+const MUTTER_SCHEMA = 'org.gnome.mutter';
+
+// Smaller window buttons are CSS in the user's own gtk.css, one file per GTK
+// major version, because an app reads the one for the toolkit it was built
+// with: gtk-4.0 reaches libadwaita apps, gtk-3.0 reaches GTK 3 apps and the
+// Electron ones that draw GTK 3 title buttons. Pear Up owns one block in each,
+// between two marker lines, and nothing outside it. The numbers take libadwaita's
+// 20px circle to 12px, about 40% smaller and nearer to the size macOS draws.
+// `own` recognises sizing rules written by hand outside the block, which count
+// as the buttons already being small.
+const WINDOW_BUTTONS_BEGIN = '/* >>> pear-up window buttons >>> */';
+const WINDOW_BUTTONS_END = '/* <<< pear-up window buttons <<< */';
+const WINDOW_BUTTONS_NOTE = [
+    '/* Written by Pear Up (Preferences, Windows, Small Window Buttons). Switching',
+    '   that off removes this block; nothing outside it is ever touched. */',
+];
+const WINDOW_BUTTONS_CSS = [
+    {
+        dir: 'gtk-4.0',
+        own: /windowcontrols[^{}]*\{[^}]*(?:min-width|min-height|padding|-gtk-icon-size)\s*:/,
+        rules: [
+            'windowcontrols > button {',
+            '  min-width: 14px;',
+            '  min-height: 14px;',
+            '  padding: 3px;',
+            '}',
+            'windowcontrols > button > image {',
+            '  -gtk-icon-size: 8px;',
+            '  padding: 2px;',
+            '}',
+        ],
+    },
+    {
+        dir: 'gtk-3.0',
+        own: /titlebutton[^{}]*\{[^}]*(?:min-width|min-height|padding|margin|-gtk-icon-transform|-gtk-icon-size)\s*:/,
+        rules: [
+            'headerbar button.titlebutton,',
+            '.titlebar button.titlebutton {',
+            '  min-width: 14px;',
+            '  min-height: 14px;',
+            '  padding: 2px;',
+            '  margin: 0 1px;',
+            '}',
+            'headerbar button.titlebutton image,',
+            '.titlebar button.titlebutton image {',
+            '  -gtk-icon-transform: scale(0.6);',
+            '}',
+        ],
+    },
+];
+
 // A Magic Keyboard reports Cmd as Super, so binding the Super combinations
 // gives the real macOS chords rather than an approximation of them. Each entry
 // is added alongside GNOME's own binding instead of replacing it, so Print and
@@ -141,6 +193,7 @@ const DOCK_FUNCTION_KEY_CONFLICTS = [
 const EXTENSION_SCHEMA_OWNERS = {
     [DASH_TO_DOCK_SCHEMA]: DASH_TO_DOCK_UUID,
 };
+
 const BUTTON_LAYOUT_LEFT = 'close,minimize,maximize:appmenu';
 const BUTTON_LAYOUT_RIGHT = 'appmenu:minimize,maximize,close';
 
@@ -258,10 +311,15 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         window.add(this._buildCustomMenuPage(settings));
         window.add(this._buildDockPage(settings));
         window.add(this._buildAppearancePage());
+        window.add(this._buildWindowsPage());
         window.add(this._buildKeyboardPage());
         window.add(this._buildAboutPage());
 
-        window.set_default_size(680, 780);
+        // Wide enough for the eight page labels in the switcher along the bottom,
+        // which gives each an eighth of the width and cuts "Custom Menus" to
+        // "Custom Me…" at 680 in Adwaita Sans 11. 780 is where that font fits;
+        // 820 leaves room for a size up. Content is clamped, so the rest is margin.
+        window.set_default_size(820, 780);
     }
 
     // Other extensions keep their schemas inside their own directories, where
@@ -731,6 +789,297 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             subtitle: 'The color of selections, switches and buttons in apps that follow GNOME’s accent',
             targets: [[INTERFACE_SCHEMA, 'accent-color', GLib.Variant.new_string('blue')]],
         });
+    }
+
+    // Window chrome and behaviour as macOS has it. As on the Appearance page,
+    // none of this is Pear Up's own: the button layout and automatic
+    // maximizing are GNOME's settings and the small buttons are rules in the
+    // user's own gtk.css. So each row reads the state of the thing it drives,
+    // whoever put it there, and follows it when it changes elsewhere.
+    _buildWindowsPage() {
+        const page = new Adw.PreferencesPage({
+            title: 'Windows',
+            icon_name: 'focus-windows-symbolic',
+        });
+
+        const buttonsGroup = new Adw.PreferencesGroup({ title: 'Buttons' });
+        page.add(buttonsGroup);
+        this._addWindowButtonsRow(buttonsGroup);
+        this._addSmallButtonsRow(buttonsGroup);
+
+        const openingGroup = new Adw.PreferencesGroup({
+            title: 'Opening',
+            description: 'A GNOME setting, applied at once. Switching it off puts back what it replaced',
+        });
+        const maximizeRow = this._addDisplacingSwitchRow(openingGroup, {
+            title: 'Don’t Maximize New Windows',
+            subtitle: 'GNOME maximizes a window that opens almost as large as the screen; macOS leaves it as it is',
+            targets: [[MUTTER_SCHEMA, 'auto-maximize', GLib.Variant.new_boolean(false)]],
+        });
+        if (maximizeRow)
+            page.add(openingGroup);
+
+        return page;
+    }
+
+    // Close/minimize/maximize sit on the right in GNOME and on the left in
+    // macOS. The layout string puts everything before the colon on the left,
+    // so read the current side from where "close" falls.
+    _addWindowButtonsRow(group) {
+        const wm = new Gio.Settings({ schema_id: WM_PREFERENCES_SCHEMA });
+
+        const buttonsOnLeft = () => {
+            const [left = ''] = wm.get_string('button-layout').split(':');
+            return left.includes('close');
+        };
+
+        const row = new Adw.SwitchRow({
+            title: 'Window Buttons on the Left',
+            subtitle: 'Close, minimize and maximize in macOS order. Turning this off restores the GNOME default',
+            active: buttonsOnLeft(),
+        });
+        group.add(row);
+
+        row.connect('notify::active', () => {
+            wm.set_string('button-layout', row.active ? BUTTON_LAYOUT_LEFT : BUTTON_LAYOUT_RIGHT);
+        });
+        wm.connect('changed::button-layout', () => {
+            const onLeft = buttonsOnLeft();
+            if (row.active !== onLeft)
+                row.set_active(onLeft);
+        });
+    }
+
+    // The window buttons shrunk by the two gtk.css blocks. On when every file is
+    // covered, by Pear Up's block or by rules of the user's own that already do
+    // the same: a switch reads on whenever the thing is in place, whoever put it
+    // there. Rules of the user's own are never removed, so a switch that is on
+    // for them alone has nothing to undo and is greyed out, saying where they are.
+    _addSmallButtonsRow(group) {
+        const subtitle = 'Close, minimize and maximize at about the size macOS draws them. Apps pick ' +
+            'it up the next time they start, and so do the Electron ones that draw GTK 3 title ' +
+            'buttons, such as Claude, ChatGPT and Cursor.';
+        const row = new Adw.SwitchRow({ title: 'Small Window Buttons', subtitle });
+        row.set_subtitle_lines(0);
+        group.add(row);
+
+        // What went wrong the last time it was switched, until the next time.
+        let problem = null;
+        let busy = false;
+        const refresh = () => {
+            if (busy)
+                return;
+            busy = true;
+            const { on, ownOnly, ownFiles } = this._windowButtonsState();
+            const notes = [];
+            if (ownOnly)
+                notes.push(`Already on, from rules of your own in ${ownFiles.join(' and ')}. ` +
+                    'Pear Up leaves those alone: remove them there to undo it.');
+            else if (ownFiles.length > 0)
+                notes.push(`Your own rules for these buttons in ${ownFiles.join(' and ')} are left as they are.`);
+            row.set_active(on);
+            row.set_sensitive(!ownOnly);
+            row.set_subtitle(problem ?? [subtitle, ...notes].join(' '));
+            busy = false;
+        };
+        refresh();
+
+        row.connect('notify::active', () => {
+            // Showing the files is not the user switching the row. `busy` only
+            // covers the call that sets it: a set made from inside this handler
+            // is announced after it returns, so a row that already shows what
+            // the files say is left alone as well.
+            if (busy || row.active === this._windowButtonsState().on)
+                return;
+            problem = this._setWindowButtons(row.active);
+            // Show what is on disk, not what was asked for.
+            refresh();
+        });
+    }
+
+    _windowButtonsFiles() {
+        const configDir = GLib.get_user_config_dir();
+        return WINDOW_BUTTONS_CSS.map(target => ({
+            ...target,
+            path: GLib.build_filenamev([configDir, target.dir, 'gtk.css']),
+        }));
+    }
+
+    _tildePath(path) {
+        const home = GLib.get_home_dir();
+        return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+    }
+
+    // The stylesheet's text, or null when there is none. Anything that is not
+    // text Pear Up can hand back unchanged — a directory, a file in another
+    // encoding — is an error, because the file is written back whole. That is
+    // checked rather than assumed: the text is encoded again and has to be the
+    // bytes that were read. A byte order mark is held out of the decoder, which
+    // does not agree with itself between engines about whether to strip one, and
+    // put back in front of the text.
+    _readStylesheet(path) {
+        let bytes;
+        try {
+            [, bytes] = Gio.File.new_for_path(path).load_contents(null);
+        } catch (e) {
+            if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND))
+                return null;
+            throw e;
+        }
+
+        const marked = bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF;
+        let text;
+        try {
+            text = this._decodeUtf8(marked ? bytes.subarray(3) : bytes);
+        } catch {
+            throw new Error('it is not valid UTF-8');
+        }
+        if (marked)
+            text = `\uFEFF${text}`;
+
+        const again = new TextEncoder().encode(text);
+        if (again.length !== bytes.length || again.some((byte, index) => byte !== bytes[index]))
+            throw new Error('it cannot be written back exactly as it is');
+        return text;
+    }
+
+    _decodeUtf8(bytes) {
+        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    }
+
+    // Replaces the file whole, the way an editor saves: written beside it and
+    // moved over it, so it is never seen half written. A symlink is followed to
+    // the file it points at, as a dotfile manager's would be, and stays a link.
+    // GIO will not take empty contents, which is what switching the block off
+    // can leave, so an empty file is made by replacing it with nothing.
+    _writeStylesheet(path, text) {
+        const file = Gio.File.new_for_path(path);
+        if (text === '')
+            file.replace(null, false, Gio.FileCreateFlags.NONE, null).close(null);
+        else
+            file.replace_contents(new TextEncoder().encode(text), null, false, Gio.FileCreateFlags.NONE, null);
+    }
+
+    // The first and last line of Pear Up's block, or null. A start marker with
+    // no end after it is not a block, and when a start is followed by another
+    // start, the nearer one is: a stray marker of the user's, or half a block,
+    // must never make the content between it and a real block part of it.
+    _managedBlock(lines) {
+        let first = -1;
+        for (const [index, line] of lines.entries()) {
+            const marker = line.trim();
+            if (marker === WINDOW_BUTTONS_BEGIN)
+                first = index;
+            else if (marker === WINDOW_BUTTONS_END && first >= 0)
+                return [first, index];
+        }
+        return null;
+    }
+
+    // `text` with the block for `target` in it: replaced where it is, so that
+    // the same call twice changes nothing, else after everything the user has,
+    // set off by a blank line.
+    _withManagedBlock(text, target) {
+        const block = [WINDOW_BUTTONS_BEGIN, ...WINDOW_BUTTONS_NOTE, ...target.rules, WINDOW_BUTTONS_END];
+        const lines = text.split('\n');
+        const found = this._managedBlock(lines);
+        if (found) {
+            lines.splice(found[0], found[1] - found[0] + 1, ...block);
+            return lines.join('\n');
+        }
+        if (text === '')
+            return `${block.join('\n')}\n`;
+        return `${text}${text.endsWith('\n') ? '' : '\n'}\n${block.join('\n')}\n`;
+    }
+
+    // `text` without any complete block, and without the one blank line that
+    // set it off. A file that ended without a newline comes back with one.
+    _withoutManagedBlock(text) {
+        const lines = text.split('\n');
+        for (let found = this._managedBlock(lines); found; found = this._managedBlock(lines)) {
+            let [first, last] = found;
+            if (first > 0 && lines[first - 1].trim() === '')
+                first -= 1;
+            lines.splice(first, last - first + 1);
+        }
+        return lines.join('\n');
+    }
+
+    // Whether Pear Up's block is in `text`, and whether rules of the user's own
+    // outside it already size the buttons. Comments do not count as rules.
+    _stylesheetCoverage(text, target) {
+        const outside = this._withoutManagedBlock(text).replace(/\/\*[\s\S]*?\*\//g, '');
+        return {
+            managed: this._managedBlock(text.split('\n')) !== null,
+            own: target.own.test(outside),
+        };
+    }
+
+    _windowButtonsState() {
+        const covered = this._windowButtonsFiles().map(file => {
+            try {
+                return { file, ...this._stylesheetCoverage(this._readStylesheet(file.path) ?? '', file) };
+            } catch {
+                // Unreadable counts as not covered; switching on says why.
+                return { file, managed: false, own: false };
+            }
+        });
+        const on = covered.every(({ managed, own }) => managed || own);
+        return {
+            on,
+            ownOnly: on && !covered.some(({ managed }) => managed),
+            ownFiles: covered.filter(({ own }) => own).map(({ file }) => this._tildePath(file.path)),
+        };
+    }
+
+    // Puts the block in each gtk.css that is not already covered by rules of
+    // the user's own, or takes it out of each that has it. All or nothing: every
+    // file is read before any is written, so one that cannot be read stops the
+    // change, and if a write fails the files already written are put back. A
+    // file that did not exist before goes again; the directory stays. Returns
+    // what went wrong, or null.
+    _setWindowButtons(on) {
+        const edits = [];
+        for (const file of this._windowButtonsFiles()) {
+            try {
+                const text = this._readStylesheet(file.path);
+                const covered = this._stylesheetCoverage(text ?? '', file);
+                let next = text;
+                if (on && (covered.managed || !covered.own))
+                    next = this._withManagedBlock(text ?? '', file);
+                else if (!on && covered.managed)
+                    next = this._withoutManagedBlock(text);
+                if (next !== text)
+                    edits.push({ file, before: text, after: next });
+            } catch (e) {
+                return `Could not read ${this._tildePath(file.path)}: ${e.message}`;
+            }
+        }
+
+        const written = [];
+        for (const edit of edits) {
+            try {
+                const dir = GLib.path_get_dirname(edit.file.path);
+                if (GLib.mkdir_with_parents(dir, 0o755) !== 0)
+                    throw new Error(`${this._tildePath(dir)} cannot be created`);
+                this._writeStylesheet(edit.file.path, edit.after);
+                written.push(edit);
+            } catch (e) {
+                for (const done of written) {
+                    try {
+                        if (done.before === null)
+                            Gio.File.new_for_path(done.file.path).delete(null);
+                        else
+                            this._writeStylesheet(done.file.path, done.before);
+                    } catch {
+                        // Nothing more can be done for a file that will not be
+                        // written back; the row will show what is on disk.
+                    }
+                }
+                return `Could not write ${this._tildePath(edit.file.path)}: ${e.message}`;
+            }
+        }
+        return null;
     }
 
     _buildKeyboardPage() {
@@ -1373,8 +1722,6 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             () => settings.set_string('desktop-app-name', desktopNameRow.get_text() || 'Nautilus'));
         mainGroup.add(desktopNameRow);
 
-        this._addWindowButtonsRow(mainGroup);
-
         const panelGroup = new Adw.PreferencesGroup({
             title: 'Top Bar',
             description: 'Rearrange the stock GNOME panel to match macOS',
@@ -1528,34 +1875,6 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         settings.bind('debug-logging', debugRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
         return page;
-    }
-
-    // Close/minimize/maximize sit on the right in GNOME and on the left in
-    // macOS. The layout string puts everything before the colon on the left,
-    // so read the current side from where "close" falls.
-    _addWindowButtonsRow(group) {
-        const wm = new Gio.Settings({ schema_id: WM_PREFERENCES_SCHEMA });
-
-        const buttonsOnLeft = () => {
-            const [left = ''] = wm.get_string('button-layout').split(':');
-            return left.includes('close');
-        };
-
-        const row = new Adw.SwitchRow({
-            title: 'Window Buttons on the Left',
-            subtitle: 'Close, minimize and maximize in macOS order. Turning this off restores the GNOME default',
-            active: buttonsOnLeft(),
-        });
-        group.add(row);
-
-        row.connect('notify::active', () => {
-            wm.set_string('button-layout', row.active ? BUTTON_LAYOUT_LEFT : BUTTON_LAYOUT_RIGHT);
-        });
-        wm.connect('changed::button-layout', () => {
-            const onLeft = buttonsOnLeft();
-            if (row.active !== onLeft)
-                row.set_active(onLeft);
-        });
     }
 
     // A visual icon picker: a grid of the bundled distro icons plus a

@@ -54,7 +54,13 @@ setting: GNOME's own search, which needs nothing installed;
 launcher you name, such as `ulauncher` or `rofi`. Whatever the choice, it falls back to GNOME's
 search when that thing is unavailable, so the button is never a dead end.
 
-**Window buttons on the left.** Close, minimize and maximize in macOS order.
+**Windows the way macOS has them.** Close, minimize and maximize on the left, in macOS order, and
+smaller, at about the size macOS draws them. New windows are no longer maximized for being nearly as
+large as the screen. The small buttons are CSS, kept in a marked block of your own
+`~/.config/gtk-4.0/gtk.css` and `~/.config/gtk-3.0/gtk.css` — one reaches libadwaita apps, the other GTK 3
+apps and the Electron ones, such as Claude, ChatGPT and Cursor, that draw GTK 3 title buttons — which
+apps read when they next start. Everything outside the block is left exactly as it is, and rules of your
+own that already shrink the buttons are never removed.
 
 **macOS type, accent, icons and cursor.** One switch sets the interface, document and window-title
 fonts to Adwaita Sans — GNOME's own fork of Inter, shipped from GNOME 48, or Inter itself where that
@@ -111,7 +117,7 @@ keyboard shortcuts.
 ## Settings
 
 Everything lives in one window — the panel layout, which menus appear, the dock, the type, accent,
-icons and cursor, and your custom menus. Open it by pressing <kbd>Super</kbd> and typing "pear", from the app grid, or
+icons and cursor, the windows, and your custom menus. Open it by pressing <kbd>Super</kbd> and typing "pear", from the app grid, or
 through the Extensions app.
 
 These settings cannot appear in GNOME Settings beside Appearance, which is where they arguably
@@ -170,7 +176,8 @@ That removes exactly the accelerators this extension added (leaving any of your 
 same actions alone) and resets the other keys only while they still hold the values it
 wrote, printing what was restored. What the Appearance page set is not among them: switch the
 type and accent off there first if you want your old ones back, and pick the icon and cursor
-theme again.
+theme again. The same goes for the Windows page: switch Small Window Buttons off there to take its
+block out of the two `gtk.css` files, and Don't Maximize New Windows to put GNOME's value back.
 
 ## Testing
 
@@ -235,9 +242,11 @@ deliberate statement rather than a grep result.
 them: a property libadwaita dropped, or a method that never existed, shows up only when the window is
 opened — as an empty window and a stack trace in the journal. This builds every page headlessly and
 fails on the first throw, then drives the rows that change settings of the desktop itself — the
-Appearance switches and pickers and the shortcut sets — against the container's own in-memory
-settings, and checks that the values the user had come back. The pickers are run once more with
-fixture icon and cursor themes dropped into the container's XDG directories.
+Appearance and Windows switches and pickers and the shortcut sets — against the container's own
+in-memory settings, and checks that the values the user had come back. The pickers are run once more
+with fixture icon and cursor themes dropped into the container's XDG directories. The Windows page's
+`gtk.css` switch works on a config directory the runner makes, and the check is that every byte outside
+the block is as it was.
 
 ```bash
 tests/run-prefs-smoke.sh            # every version in the table

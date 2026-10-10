@@ -30,8 +30,22 @@ sed -i "s|resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js|file://$
 export GSETTINGS_BACKEND=memory
 export G_DEBUG=fatal-criticals
 
+# The Windows page edits gtk.css in the user's config directory, so that
+# directory is one of ours: made here, named so the test can tell it from
+# anyone's real one, and said to the test in PREFS_SMOKE_CONFIG. The test writes
+# there only when that is where GLib says the user's config directory is, and
+# empties it between cases.
+# xvfb-run's default screen is 640x480, and a window cannot be opened wider than
+# the screen it is on: the page labels in the switcher are checked at the width
+# the window asks for, so the screen has to be larger than that.
+XVFB=(xvfb-run -a -s "-screen 0 1280x1024x24")
+
+export XDG_CONFIG_HOME="$WORK/pear-up-smoke-config"
+export PREFS_SMOKE_CONFIG="$XDG_CONFIG_HOME"
+mkdir -p "$XDG_CONFIG_HOME"
+
 echo "  without Dash to Dock:"
-xvfb-run -a gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
+"${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
 
 # Then again with this release's packaged Dash to Dock, whose schema turns the
 # Dock page from a notice into rows that write its keys. Its version differs
@@ -40,7 +54,7 @@ dnf install -q -y gnome-shell-extension-dash-to-dock >/dev/null 2>&1
 # Its warnings are about other packages' schema paths, and noise here.
 glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null
 echo "  with Dash to Dock $(rpm -q --qf '%{VERSION}' gnome-shell-extension-dash-to-dock):"
-PREFS_SMOKE_DOCK=1 xvfb-run -a gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
+PREFS_SMOKE_DOCK=1 "${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
 
 # And once more with icon and cursor themes dropped into the XDG directories
 # the Appearance page scans: the user's data directory, ~/.icons and a system
@@ -100,4 +114,4 @@ echo "  with Inter and icon and cursor themes installed:"
 HOME="$THEMES/home" XDG_DATA_HOME="$THEMES/data" \
     XDG_DATA_DIRS="$THEMES/share:/usr/local/share:/usr/share" \
     PREFS_SMOKE_THEMES="$THEMES" \
-    xvfb-run -a gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
+    "${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
