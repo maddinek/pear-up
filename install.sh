@@ -67,6 +67,31 @@ if [[ -f "$PLUGIN_PATH" ]] && grep -q 'Pear Up' "$PLUGIN_PATH"; then
     fi
 fi
 
+# The macOS keys plugin likewise: an installed copy is replaced by this
+# version's, keeping the five lines the preferences write into it — the Alt/Cmd
+# swap, the three switches and the Cmd key list, edited by hand or not. A copy
+# without each of those lines once, as the preferences write them, or without
+# a mention of Pear Up, is not Pear Up's and is left alone.
+KEYS_PLUGIN_NAME="10-pear-up-macos-keys.lua"
+KEYS_PLUGIN_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/libinput/plugins/$KEYS_PLUGIN_NAME"
+KEYS_PLUGIN_LINES='^local (SWAPPED|WORDS|DESKTOPS|SHORTCUTS) = (true|false)$|^local SHORTCUT_KEYS = "[A-Za-z0-9_ ]*"$'
+keys_plugin_is_pear_ups() {
+    [[ -f "$1" ]] && grep -q 'Pear Up' "$1" || return 1
+    local name
+    for name in SWAPPED WORDS DESKTOPS SHORTCUTS SHORTCUT_KEYS; do
+        [[ "$(grep -E "$KEYS_PLUGIN_LINES" "$1" | grep -c "^local $name = ")" == 1 ]] || return 1
+    done
+}
+if keys_plugin_is_pear_ups "$KEYS_PLUGIN_PATH"; then
+    echo "⌨️ Updating the macOS keys plugin..."
+    awk -v lines="$KEYS_PLUGIN_LINES" '
+        NR == FNR { if ($0 ~ lines) kept[$2] = $0; next }
+        $0 ~ lines && ($2 in kept) { print kept[$2]; next }
+        { print }
+    ' "$KEYS_PLUGIN_PATH" "$SOURCE_DIR/libinput/$KEYS_PLUGIN_NAME" > "$KEYS_PLUGIN_PATH.pear-up-new"
+    mv "$KEYS_PLUGIN_PATH.pear-up-new" "$KEYS_PLUGIN_PATH"
+fi
+
 echo "--------------------------------------------------"
 echo "✅ Installed. Log out and back in, then enable Pear Up."
 echo "--------------------------------------------------"

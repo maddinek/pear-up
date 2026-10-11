@@ -42,6 +42,14 @@ if [[ -f "$PLUGIN_PATH" ]] && grep -q '^local SLOW_GAIN = ' "$PLUGIN_PATH" && gr
     echo "🖱️ Removed the scroll acceleration plugin; scrolling is libinput's own again after the next login."
 fi
 
+# The macOS keys plugin, by the same rule: the key list line the preferences
+# write, and Pear Up's name.
+KEYS_PLUGIN_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/libinput/plugins/10-pear-up-macos-keys.lua"
+if [[ -f "$KEYS_PLUGIN_PATH" ]] && grep -q '^local SHORTCUT_KEYS = ' "$KEYS_PLUGIN_PATH" && grep -q 'Pear Up' "$KEYS_PLUGIN_PATH"; then
+    rm -f "$KEYS_PLUGIN_PATH"
+    echo "⌨️ Removed the macOS keys plugin; the keys are as the keyboard sends them again after the next login."
+fi
+
 # ---------------------------------------------------------------------------
 # Keyboard/system settings written by the preferences window.
 #

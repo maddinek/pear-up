@@ -2060,6 +2060,226 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     }
 }
 
+// The macOS keys are one file too, with a line for each of three switches,
+// the Alt/Cmd swap written in as it is set, and the Cmd key list kept as found.
+// All three off removes it; nothing else in the directory is touched. An
+// input-remapper preset that translates the same keys gets a warning, read
+// from a fixture laid out as framy's, and is only ever read.
+{
+    const problemsBefore = problems.length;
+    const shell = parseInt(GLib.getenv('PREFS_SMOKE_SHELL_VERSION') ?? '0', 10);
+    // A copy of the plugin is told by the lines Pear Up writes, and by
+    // whether the rest is the same, rather than printed whole.
+    const brief = value => typeof value === 'string' && value.includes('\nlocal SWAPPED = ')
+        ? `${value.match(/^local (SWAPPED|WORDS|DESKTOPS|SHORTCUTS|SHORTCUT_KEYS) = .*$/gm).join('; ')}` +
+            ` (${value.length} characters)`
+        : JSON.stringify(value);
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`macOS keys: ${label} is ${brief(got)}, expected ${brief(wanted)}`);
+    };
+    const TITLES = ['Option+←/→ Moves by Word', 'Ctrl+←/→ Switches Desktops', 'macOS Shortcuts in Apps'];
+    const titled = (type, title) => widget => widget instanceof type && widget.title === title;
+    const groupOf = (prefs = new Preferences(metadata)) => {
+        const page = prefs._buildKeyboardPage();
+        windowsKept.push(page);
+        const [words, desktops, shortcuts] = TITLES.map(title => findWidget(page, titled(Adw.SwitchRow, title)));
+        const remapper = findWidget(page, titled(Adw.ActionRow, 'input-remapper Translates These Keys Too'));
+        const status = findWidget(page, widget => widget.get_name() === 'pear-up-app-keys-status');
+        return { words, desktops, shortcuts, remapper, status, page };
+    };
+    const configDir = GLib.get_user_config_dir();
+    const ours = smokeConfig && smokeConfig === configDir &&
+        GLib.path_get_basename(smokeConfig).startsWith('pear-up-smoke-');
+    const pluginDir = `${configDir}/libinput/plugins`;
+    const target = `${pluginDir}/10-pear-up-macos-keys.lua`;
+    const read = path => GLib.file_test(path, GLib.FileTest.IS_REGULAR)
+        ? new TextDecoder().decode(GLib.file_get_contents(path)[1]) : null;
+    const write = (path, text) => {
+        GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
+        GLib.file_set_contents(path, new TextEncoder().encode(text));
+    };
+    const reset = () => {
+        GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(`${configDir}/libinput`)} ` +
+            `${GLib.shell_quote(`${configDir}/input-remapper-2`)}`);
+    };
+    const source = read(`${extensionDir}/libinput/10-pear-up-macos-keys.lua`);
+    const shipped = (values = {}) => {
+        let text = source;
+        for (const [name, value] of Object.entries(values))
+            text = text.replace(new RegExp(`^local ${name} = .*$`, 'm'), `local ${name} = ${value}`);
+        return text;
+    };
+    const plugin = values => shipped({ SWAPPED: false, WORDS: false, DESKTOPS: false, SHORTCUTS: false, ...values });
+    const input = new Gio.Settings({ schema_id: 'org.gnome.desktop.input-sources' });
+    const wm = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
+    const swap = on => input.set_strv('xkb-options', on ? ['altwin:swap_alt_win'] : []);
+
+    const first = groupOf();
+    if (!first.words || !first.desktops || !first.shortcuts || !first.status) {
+        problems.push('the Keyboard page has no Inside Apps group with three switches and a status row');
+    } else if (shell < 50) {
+        for (const row of [first.words, first.desktops, first.shortcuts])
+            expect(`"${row.title}" on GNOME ${shell}, sensitive`, row.sensitive, false);
+        expect('the status row on GNOME ' + shell, first.status.visible, true);
+        if (!/GNOME 50/.test(first.status.subtitle ?? '') || !/keyd/.test(first.status.subtitle ?? ''))
+            problems.push(`macOS keys: the status does not say it needs GNOME 50, or what to use instead (${first.status.subtitle})`);
+        if (ours) {
+            reset();
+            const { words } = groupOf();
+            words.active = true;
+            expect('the switch set on where it cannot work', words.active, false);
+            expect('the plugin written where it cannot work', read(target), null);
+        }
+        if (problems.length === problemsBefore)
+            print(`  macOS keys: greyed out on GNOME ${shell}, saying it needs GNOME 50 and what does it before`);
+    } else if (!ours) {
+        print('  macOS keys: not driven, the runner has not given this process a config directory of its own');
+    } else if (source === null) {
+        problems.push('macOS keys: the plugin is not in libinput/');
+    } else {
+        reset();
+        swap(false);
+        write(`${pluginDir}/20-of-my-own.lua`, 'libinput:register({1})\n');
+        write(`${pluginDir}/10-pear-up-scroll-acceleration.lua`, '-- Pear Up\nlocal SLOW_GAIN = 0.35\n');
+        let rows = groupOf();
+        expect('the switches with nothing installed', [rows.words.active, rows.desktops.active, rows.shortcuts.active],
+            [false, false, false]);
+        expect('the switches sensitive', [rows.words.sensitive, rows.desktops.sensitive, rows.shortcuts.sensitive],
+            [true, true, true]);
+        expect('the status row with nothing to say', rows.status.visible, false);
+        expect('the input-remapper row with no presets', rows.remapper.visible, false);
+        if (!/Cmd\+C, V, X, Z, A, S, F, T, W and N/.test(rows.shortcuts.subtitle ?? '') ||
+            !/terminal/.test(rows.shortcuts.subtitle ?? ''))
+            problems.push(`macOS keys: the shortcut row does not list the keys or warn of terminals (${rows.shortcuts.subtitle})`);
+
+        rows.words.active = true;
+        expect('the plugin after switching on word jumps', read(target), plugin({ WORDS: true }));
+        rows.shortcuts.active = true;
+        expect('and the shortcuts', read(target), plugin({ WORDS: true, SHORTCUTS: true }));
+        rows.desktops.active = true;
+        rows.words.active = false;
+        expect('desktops on, words off', read(target), plugin({ DESKTOPS: true, SHORTCUTS: true }));
+
+        rows = groupOf();
+        expect('the switches reopened', [rows.words.active, rows.desktops.active, rows.shortcuts.active],
+            [false, true, true]);
+
+        // The swap decides the keys, so the copy follows it, set from the
+        // Layout row or from anywhere else.
+        const swapRow = findWidget(rows.page, titled(Adw.SwitchRow, 'Swap Alt and Cmd'));
+        swapRow.active = true;
+        expect('the plugin after the swap is switched on', read(target),
+            plugin({ SWAPPED: true, DESKTOPS: true, SHORTCUTS: true }));
+        swap(false);
+        expect('the plugin after the swap is switched off elsewhere', read(target),
+            plugin({ DESKTOPS: true, SHORTCUTS: true }));
+        // Out of step when the window opens, as after a change made while it
+        // was closed.
+        write(target, plugin({ SWAPPED: true, DESKTOPS: true, SHORTCUTS: true }));
+        groupOf();
+        expect('a copy out of step with the swap, on opening', read(target), plugin({ DESKTOPS: true, SHORTCUTS: true }));
+
+        // A list of keys edited by hand is kept, and shown.
+        write(target, plugin({ SHORTCUTS: true, SHORTCUT_KEYS: '"C V Q"' }));
+        rows = groupOf();
+        if (!/Cmd\+C, V and Q act as Ctrl/.test(rows.shortcuts.subtitle ?? ''))
+            problems.push(`macOS keys: a list edited by hand is not shown (${rows.shortcuts.subtitle})`);
+        if (!/GNOME’s own Cmd\+V gives way/.test(rows.shortcuts.subtitle ?? ''))
+            problems.push(`macOS keys: the GNOME shortcuts giving way are not named (${rows.shortcuts.subtitle})`);
+        rows.words.active = true;
+        expect('a list edited by hand after switching words on', read(target),
+            plugin({ WORDS: true, SHORTCUTS: true, SHORTCUT_KEYS: '"C V Q"' }));
+
+        // All off takes Pear Up's file away and nothing else.
+        rows.words.active = false;
+        rows.shortcuts.active = false;
+        expect('the plugin after switching all off', read(target), null);
+        expect('another plugin after switching off', read(`${pluginDir}/20-of-my-own.lua`), 'libinput:register({1})\n');
+        expect('the scroll plugin after switching off', read(`${pluginDir}/10-pear-up-scroll-acceleration.lua`),
+            '-- Pear Up\nlocal SLOW_GAIN = 0.35\n');
+
+        // Without GNOME's Ctrl+Option+← the desktop switch says it has nothing
+        // to work through.
+        wm.set_strv('switch-to-workspace-left', ['<Super>Page_Up']);
+        rows = groupOf();
+        if (!/not set/.test(rows.desktops.subtitle ?? ''))
+            problems.push(`macOS keys: a missing desktop shortcut is not mentioned (${rows.desktops.subtitle})`);
+        wm.reset('switch-to-workspace-left');
+        if (/not set/.test(groupOf().desktops.subtitle ?? ''))
+            problems.push('macOS keys: GNOME\'s default desktop shortcuts read as not set');
+
+        // A copy from another version of Pear Up is still Pear Up's, and says so.
+        write(target, `${plugin({ WORDS: true })}-- an older line\n`);
+        rows = groupOf();
+        expect('the switch with an older copy', rows.words.active, true);
+        if (!rows.status.visible || !/another version/.test(rows.status.subtitle ?? ''))
+            problems.push(`macOS keys: an older copy is not mentioned (${rows.status.subtitle})`);
+        rows.words.active = false;
+        expect('the older copy after switching off', read(target), null);
+
+        // A file of the same name that is not Pear Up's is never touched.
+        write(target, 'print("mine")\n');
+        rows = groupOf();
+        expect('the switches over a file of someone else\'s, sensitive', rows.words.sensitive, false);
+        if (!rows.status.visible || !/not Pear Up/.test(rows.status.subtitle ?? ''))
+            problems.push(`macOS keys: someone else's file is not explained (${rows.status.subtitle})`);
+        rows.words.active = true;
+        expect('someone else\'s file after the switch was set', read(target), 'print("mine")\n');
+        expect('someone else\'s file after removing', preferences._setKeysPlugin(null) !== null, true);
+        expect('someone else\'s file, still', read(target), 'print("mine")\n');
+
+        // Where the directory cannot be made, the switch says so and stays off.
+        reset();
+        write(`${configDir}/libinput/plugins`, 'not a directory\n');
+        rows = groupOf();
+        rows.desktops.active = true;
+        expect('the switch where the directory cannot be made', rows.desktops.active, false);
+        if (!rows.status.visible || !/^Could not write/.test(rows.status.subtitle ?? ''))
+            problems.push(`macOS keys: the status does not say it failed (${rows.status.subtitle})`);
+        reset();
+
+        // input-remapper: framy's preset, its backups beside it, and a preset
+        // of another device that maps nothing of the kind.
+        const presets = `${configDir}/input-remapper-2/presets`;
+        const mapping = (codes, output) => ({
+            input_combination: codes.map(code => ({ type: 1, code, origin_hash: '0c64c979fda14716c05663b585a0cbd9' })),
+            target_uinput: 'keyboard', output_symbol: output, mapping_type: 'key_macro', release_combination_keys: true,
+        });
+        const framy = JSON.stringify([
+            ...[46, 47, 45, 44, 30, 31, 33, 20, 17, 49].map(code => mapping([56, code], 'KEY_LEFTCTRL+KEY_C')),
+            mapping([125, 105], 'KEY_LEFTCTRL+KEY_LEFT'), mapping([125, 106], 'KEY_LEFTCTRL+KEY_RIGHT'),
+            mapping([29, 105], 'KEY_LEFTALT+KEY_LEFTCTRL+KEY_LEFT'), mapping([29, 106], 'KEY_LEFTALT+KEY_LEFTCTRL+KEY_RIGHT'),
+        ], null, 4);
+        write(`${presets}/AT Translated Set 2 keyboard/mac-keys.json`, framy);
+        write(`${presets}/AT Translated Set 2 keyboard/mac-keys.json.bak-2026-10-11`, framy);
+        write(`${presets}/Logitech Mouse/buttons.json`, JSON.stringify([mapping([275], 'KEY_BACK')]));
+        rows = groupOf();
+        expect('the input-remapper row with framy\'s preset', rows.remapper.visible, true);
+        const said = rows.remapper.subtitle ?? '';
+        if (!/“mac-keys” for AT Translated Set 2 keyboard has 4 mappings of a modifier with ←\/→ and 10 of Alt or Super/.test(said) ||
+            !/twice/.test(said) || /buttons|bak/.test(said))
+            problems.push(`macOS keys: the input-remapper warning is not what it should be (${said})`);
+        expect('framy\'s preset after reading it', read(`${presets}/AT Translated Set 2 keyboard/mac-keys.json`), framy);
+        // The 1.x format, keyed by "type,code,value+…".
+        GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(presets)}`);
+        write(`${presets}/Apple Keyboard/old.json`, JSON.stringify({ mapping: { '1,56,1+1,105,1': ['KEY_HOME', 'keyboard'] } }));
+        if (!/“old” for Apple Keyboard has 1 mapping of a modifier/.test(groupOf().remapper.subtitle ?? ''))
+            problems.push('macOS keys: an input-remapper 1.x preset is not read');
+        // One without these keys, or not JSON at all, is no warning.
+        GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(presets)}`);
+        write(`${presets}/Apple Keyboard/plain.json`, JSON.stringify([mapping([58], 'KEY_ESC'), mapping([56, 16], 'KEY_Q')]));
+        write(`${presets}/Apple Keyboard/broken.json`, '{ not json');
+        expect('the input-remapper row with nothing of the kind', groupOf().remapper.visible, false);
+
+        reset();
+        swap(false);
+        if (problems.length === problemsBefore)
+            print('  macOS keys: three switches in one file, following the swap and keeping the key list; ' +
+                'removes only its own file; warns of framy\'s input-remapper preset without touching it');
+    }
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);
