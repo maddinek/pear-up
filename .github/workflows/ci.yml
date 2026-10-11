@@ -90,9 +90,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: bash tests/lib/check-prefs-here.sh "$PWD"
 
-  # The scroll acceleration plugin, against the libinput of the first GNOME
-  # release that loads the user's plugins. The touchpad it replays gestures on
-  # exists only inside umockdev, so the job needs no privileges.
+  # The libinput plugins, scroll acceleration and macOS keys, against the
+  # libinput of the first GNOME release that loads the user's plugins. The
+  # touchpad and keyboard they replay on exist only inside umockdev, so the
+  # job needs no privileges.
   libinput:
     name: Scroll acceleration plugin
     runs-on: ubuntu-latest
