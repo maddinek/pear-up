@@ -1,0 +1,65 @@
+# The Pear Up preview image: Pear Up's own integration-test image (GNOME 50 on
+# Fedora 44, systemd as PID 1, a headless gnome-shell on llvmpipe) plus what a
+# picture of a real desktop needs: Adwaita Sans, real GTK4/libadwaita apps, the
+# Breeze icon theme that icon themes such as MacTahoe fall back to, and a mock
+# UPower so the bar shows a battery.
+#
+# The first RUN is word for word the one in tests/integration/Containerfile, so
+# podman reuses that layer when the test image has been built on this machine.
+FROM fedora:44
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+        systemd \
+        dbus-daemon \
+        dbus-tools \
+        polkit \
+        gnome-shell \
+        gjs \
+        mesa-dri-drivers \
+        mesa-libgbm \
+        python3 \
+        python3-gobject-base \
+        procps-ng \
+        pipewire \
+        pipewire-pulseaudio \
+        wireplumber \
+        gstreamer1-plugins-base \
+        gstreamer1-plugins-good \
+        pipewire-gstreamer \
+    && dnf clean all
+
+# GNOME 48's UI font, apps to put in front, the icon theme MacTahoe inherits
+# from, the battery mock, and libgtop for Vitals.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        adwaita-sans-fonts \
+        adwaita-mono-fonts \
+        nautilus \
+        gnome-text-editor \
+        gnome-calculator \
+        breeze-icon-theme \
+        python3-dbusmock \
+        libgtop2 \
+        dconf \
+        glib2 \
+    && dnf clean all
+
+# Same boot trimming as the test image.
+RUN systemctl mask \
+        systemd-remount-fs.service \
+        systemd-random-seed.service \
+        systemd-machine-id-commit.service \
+        dev-hugepages.mount \
+        sys-fs-fuse-connections.mount \
+        systemd-oomd.service \
+    && systemctl set-default multi-user.target \
+    && systemctl enable systemd-logind.service \
+    && mkdir -p /etc/systemd/system.conf.d \
+    && printf '[Manager]\nDefaultTasksMax=infinity\n' \
+        > /etc/systemd/system.conf.d/pear-up-tasks.conf
+
+ENV LIBGL_ALWAYS_SOFTWARE=1 \
+    GALLIUM_DRIVER=llvmpipe \
+    NO_AT_BRIDGE=1
+
+STOPSIGNAL SIGRTMIN+3
+ENTRYPOINT ["/sbin/init"]

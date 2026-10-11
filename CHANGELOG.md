@@ -410,6 +410,24 @@ it back when they are switched off.
     and the API check looks for the brightness manager's internals where the
     shell has one.
 
+- **A preview harness: pictures of a checkout on the desktop you are using.**
+  `tests/run-preview.sh` (or `tests/preview/run.sh [checkout] [out-dir]`) boots
+  a headless GNOME Shell in a throwaway podman container, installs the checkout
+  into it, and saves PNGs at the real monitor's device resolution: the desktop
+  with an app in front, the bar, the dock, the overview, the pear menu, the File
+  and app-name menus, a notification, the dock under the pointer, and every page
+  of the preferences, found rather than listed so a new page needs no change.
+  The container is set up like the machine it runs on, read-only: the primary
+  monitor's size and scale (or `--size` and `--scale`), the enabled extensions
+  that are installed, dconf and the distribution's schema overrides, the icon and
+  cursor themes with what they inherit, the wallpaper, `gtk.css`, the dock
+  favourites and the battery. The live session is never touched and nothing is
+  installed in it. Clicks go through mutter's RemoteDesktop, as `tests/vm/rd-click.py`
+  does, and `tests/preview/compare.py` lays two runs side by side. It runs in
+  about a minute and a half once its image is built, and stays out of CI like
+  the integration suite, since it needs a privileged container and a desktop to
+  copy from. It is not part of the extension zip. See `tests/preview/README.md`.
+
 ### Changed
 
 - **Window Buttons on the Left is on the Windows page**, not General.

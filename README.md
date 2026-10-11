@@ -409,14 +409,29 @@ tests/run-lint.sh                   # in a container, needing no Node on the hos
 npm ci && npx eslint .              # if you have one
 ```
 
-Everything except the integration suite also runs in [CI](.github/workflows/ci.yml) on every push.
+**What does it look like?** Not a check but pictures: the desktop you are sitting at, with this
+checkout installed into a throwaway headless shell — the bar, the menus, the dock, the overview and
+every page of the preferences, at the real monitor's size and scale. The extensions, settings, icon
+theme, wallpaper, dock favourites and battery are copied from the machine it runs on, read-only, so
+the live session is never touched and nothing is installed in it.
+
+```bash
+tests/run-preview.sh                # this checkout; prints where the PNGs are
+tests/run-preview.sh --size 1920x1080 --scale 1
+```
+
+It takes about a minute and a half once the image is built. [`tests/preview/README.md`](tests/preview/README.md)
+says what it copies and what is not like the real desktop.
+
+Everything except the integration suite and the preview also runs in [CI](.github/workflows/ci.yml) on every push.
 The checks themselves live in `tests/lib/check-*-here.sh` and run against whatever GNOME is on the
 machine that invokes them — locally that machine is a container started by the scripts above, in CI it
 is the job container. One implementation either way, so a check cannot pass in CI and fail on a
 desktop.
 
 The integration suite stays local: it boots systemd in a privileged container to get logind, and a
-runner is the wrong place to find out that has broken.
+runner is the wrong place to find out that has broken. The preview stays local for that reason too,
+and because it needs a desktop to copy from.
 
 The workflow itself is verifiable without pushing, which is worth doing before trusting a green tick:
 
