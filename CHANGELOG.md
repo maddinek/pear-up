@@ -291,6 +291,67 @@ it back when they are switched off.
   and one finger exactly as without it. The preferences smoke test installs,
   re-strengthens and removes the file in a config directory of its own.
 
+- **macOS keys inside apps, in an Inside Apps group on the Keyboard page.**
+  On a Mac, Option+←/→ moves the cursor a word (with Shift, selects by
+  word), Ctrl+←/→ goes to the desktop beside, and Cmd+C copies. Linux apps
+  know those as Ctrl+←/→ and Ctrl+C, and an app reads its own keys, so no
+  GNOME shortcut can change them: they have to be translated before they
+  arrive. That is a second libinput plugin, `libinput/10-pear-up-macos-keys.lua`,
+  installed like the scroll one into `~/.config/libinput/plugins` and loaded
+  by GNOME 50 at login, with three switches: Option+←/→ Moves by Word
+  (Ctrl+←/→), Ctrl+←/→ Switches Desktops (Ctrl+Option+←/→, GNOME's own
+  default shortcut for it, so nothing has to be bound; the row says so if it
+  has been unbound) and macOS Shortcuts in Apps (Cmd+C, V, X, Z, A, S, F, T,
+  W and N as Ctrl with the same key, Shift too; not Q, which is Pear Up's
+  Quit). Option, Cmd and Ctrl tapped alone or with any other key, and
+  combinations such as Ctrl+Shift+← that Linux apps select by word with,
+  reach apps as before. A modifier still reaches libinput the moment it is
+  pressed; when a key to translate follows, it is lent to the translation,
+  with Ctrl pressed before it is let go so that nothing sees a lone tap of
+  Alt or Super, and it stays lent while it is held, so word after word needs
+  no tap in between. Held keys repeat as their translation, keys let go in
+  any order leave nothing held, and any other key gives back what was lent
+  first. What libinput holds is worked out afresh after every key from what
+  the keyboard holds, and only the difference is sent. The plugin sees raw
+  keys, before xkb's Alt/Cmd swap, so which key is Option and which Cmd is
+  written into the installed copy from the Swap Alt and Cmd switch and
+  written again when the swap changes; the switches and the Cmd key list are
+  lines in it too, and a list edited by hand is kept. An error while a key is
+  handled puts the modifiers back to what the keyboard holds and leaves the
+  keys alone until the next login. In a terminal Cmd+C becomes Ctrl+C, which
+  interrupts, and GNOME's own Super+A, S, V and N give way; both are said
+  on the row. Option+Backspace is left as it is, since in a terminal
+  Alt+Backspace already deletes a word and Ctrl+Backspace would erase one
+  character. If an input-remapper preset already maps a modifier with ←/→,
+  or Alt or Super with a key on the list, a row says so and that the keys
+  would be translated twice; the preset is only read. The group replaces the
+  note that said shortcuts inside applications could not be changed from
+  here; before GNOME 50 it is greyed and says that a key remapper such as
+  keyd does it. install.sh updates an installed copy, keeping its lines, and
+  uninstall.sh removes it; neither touches a file of that name that is not
+  Pear Up's.
+
+  `tests/run-libinput-tests.sh` checks it as it does the scroll plugin. Its
+  logic, in libinput's sandbox, against keys pressed and let go as a keyboard
+  sends them, with the swap on and off: modifiers alone and with other keys
+  untouched, each translation key by key, repeats, release orders, the
+  switches and the key list as written, and an error mid-translation; then
+  3000 runs of random presses, repeats and releases, after each of which
+  nothing may be held, nothing pressed twice or let go unpressed, no
+  untranslated key pressed with other modifiers than are held, and no lone
+  Alt, Super or Ctrl tap made up. Then the plugin in libinput 1.31 itself,
+  with `libinput debug-events` reporting fifteen sequences typed on a
+  umockdev copy of framy's keyboard, with the swap on, off, and with no
+  plugin, where every key has to come out as pressed; xkb's compiled keymap
+  confirms which raw key the swap makes Alt and which Super, and GNOME 50's
+  schema that Ctrl+Alt+←/→ is bound to the desktops beside. The preferences
+  smoke test switches each row on and off in a config directory of its own
+  and compares the file byte for byte, follows the swap from the row and from
+  outside, keeps a hand-edited key list, leaves other plugins, an older copy,
+  someone else's file and an unwritable directory as the scroll plugin's test
+  does, and reads a copy of framy's input-remapper preset, a 1.x one and a
+  harmless one, warning for the first two only.
+
 - **System Menu text size**, 10–16px, default 13 (GNOME's own). The pear menu
   only; File, Edit and the rest of the bar have their own size.
 

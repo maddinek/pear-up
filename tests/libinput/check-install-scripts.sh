@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# install.sh refreshes the scroll acceleration plugin the preferences put in
-# ~/.config/libinput/plugins, keeping its strength, and uninstall.sh removes it;
-# neither touches a file of that name that is not Pear Up's, nor installs one
-# that was never asked for.
+# install.sh refreshes the libinput plugins the preferences put in
+# ~/.config/libinput/plugins, keeping what they wrote into them — the scroll
+# acceleration's strength, the macOS keys' swap, switches and key list — and
+# uninstall.sh removes them; neither touches a file of either name that is not
+# Pear Up's, nor installs one that was never asked for.
 #
 #   bash tests/libinput/check-install-scripts.sh <repo>
 #
@@ -61,5 +62,43 @@ quiet bash "$SRC/install.sh"
 check "install.sh leaves a file of the same name that is not Pear Up's" "$(cat "$PLUGIN")" 'print("mine")'
 quiet bash "$SRC/uninstall.sh"
 check "and so does uninstall.sh" "$(cat "$PLUGIN")" 'print("mine")'
+
+# The macOS keys plugin.
+KEYS="$XDG_CONFIG_HOME/libinput/plugins/10-pear-up-macos-keys.lua"
+KEYS_SOURCE="$SRC/libinput/10-pear-up-macos-keys.lua"
+written() {     # the shipped plugin with the preferences' lines as given
+    sed -e "s/^local SWAPPED = .*$/local SWAPPED = $1/" -e "s/^local WORDS = .*$/local WORDS = $2/" \
+        -e "s/^local DESKTOPS = .*$/local DESKTOPS = $3/" -e "s/^local SHORTCUTS = .*$/local SHORTCUTS = $4/" \
+        -e "s/^local SHORTCUT_KEYS = .*$/local SHORTCUT_KEYS = \"$5\"/" "$KEYS_SOURCE"
+}
+rm -f "$KEYS"
+quiet bash "$SRC/install.sh"
+check "install.sh installs no macOS keys plugin of its own accord" "$([[ -e $KEYS ]] && echo yes || echo no)" no
+check "the extension carries the macOS keys plugin" \
+    "$(cmp -s "$KEYS_SOURCE" "$XDG_DATA_HOME/gnome-shell/extensions/$UUID/libinput/10-pear-up-macos-keys.lua" && echo same || echo different)" same
+
+# An older copy, swapped, words off, a key list of the user's own: replaced,
+# all of that kept.
+{ written true false true true "C V Q"; echo '-- an older line'; } > "$KEYS"
+quiet bash "$SRC/install.sh"
+check "install.sh replaces an older macOS keys copy, keeping the swap, the switches and the key list" \
+    "$(cmp -s <(written true false true true "C V Q") "$KEYS" && echo current || echo stale)" current
+check "and leaves the other plugins alone" "$(cat "$XDG_CONFIG_HOME/libinput/plugins/20-of-my-own.lua")" 'libinput:register({1})'
+
+quiet bash "$SRC/uninstall.sh"
+check "uninstall.sh removes Pear Up's macOS keys plugin" "$([[ -e $KEYS ]] && echo yes || echo no)" no
+check "and nothing else" "$(cat "$XDG_CONFIG_HOME/libinput/plugins/20-of-my-own.lua")" 'libinput:register({1})'
+
+# Files of the same name that are not Pear Up's: one of the user's own, and
+# one that mentions Pear Up but lacks a line the preferences write.
+echo 'print("mine")' > "$KEYS"
+quiet bash "$SRC/install.sh"
+check "install.sh leaves a macOS keys file that is not Pear Up's" "$(cat "$KEYS")" 'print("mine")'
+quiet bash "$SRC/uninstall.sh"
+check "and so does uninstall.sh" "$(cat "$KEYS")" 'print("mine")'
+grep -v '^local SWAPPED = ' "$KEYS_SOURCE" > "$KEYS"
+quiet bash "$SRC/install.sh"
+check "install.sh leaves a copy without its SWAPPED line as it is" \
+    "$(cmp -s <(grep -v '^local SWAPPED = ' "$KEYS_SOURCE") "$KEYS" && echo untouched || echo rewritten)" untouched
 
 exit "$failed"

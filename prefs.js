@@ -22,6 +22,7 @@ const PEAR_UP_SCHEMA = 'org.gnome.shell.extensions.pear-up';
 
 // Window controls live in a GNOME-wide setting, not in this extension.
 const WM_PREFERENCES_SCHEMA = 'org.gnome.desktop.wm.preferences';
+const WM_KEYBINDINGS_SCHEMA = 'org.gnome.desktop.wm.keybindings';
 const INPUT_SOURCES_SCHEMA = 'org.gnome.desktop.input-sources';
 const SWAP_ALT_CMD_OPTION = 'altwin:swap_alt_win';
 
@@ -198,14 +199,56 @@ const WINDOW_BUTTONS_CSS = [
 // not Pear Up's is never written over or removed.
 const SCROLL_PLUGIN = '10-pear-up-scroll-acceleration.lua';
 const SCROLL_PLUGIN_GAIN = /^local SLOW_GAIN = ([0-9.]+)$/m;
-const SCROLL_PLUGIN_SHELL = 50;
-const SCROLL_PLUGIN_LIBINPUT = [1, 30];
+const PLUGINS_SHELL = 50;
+const PLUGINS_LIBINPUT = [1, 30];
 const SCROLL_STRENGTHS = [
     { title: 'Light', gain: 0.6 },
     { title: 'Medium', gain: 0.35 },
     { title: 'Strong', gain: 0.2 },
 ];
 const SCROLL_STRENGTH_DEFAULT = 1;
+
+// The keys macOS uses inside apps — Option+←/→ by word, Ctrl+←/→ to the next
+// desktop, Cmd+C and its kind — are libinput/10-pear-up-macos-keys.lua. Apps
+// read their own keys, so no GNOME shortcut changes what those do: they have to
+// be different before they arrive. Like the scroll plugin it needs GNOME 50 and
+// libinput 1.30, and the file is all the state there is. Each switch is one of
+// its true/false lines; SWAPPED follows the Alt/Cmd swap in xkb-options and is
+// written again when that changes while this window is open, or is found out of
+// step when it opens; SHORTCUT_KEYS is kept as found, so a list edited by hand
+// survives. All three off removes the file. A file of that name that is not
+// Pear Up's is never written over or removed.
+const KEYS_PLUGIN = '10-pear-up-macos-keys.lua';
+const KEYS_PLUGIN_LINES = {
+    SWAPPED: /^local SWAPPED = (true|false)$/m,
+    WORDS: /^local WORDS = (true|false)$/m,
+    DESKTOPS: /^local DESKTOPS = (true|false)$/m,
+    SHORTCUTS: /^local SHORTCUTS = (true|false)$/m,
+    SHORTCUT_KEYS: /^local SHORTCUT_KEYS = "([A-Za-z0-9_ ]*)"$/m,
+};
+const KEYS_PLUGIN_SWITCHES = ['WORDS', 'DESKTOPS', 'SHORTCUTS'];
+// GNOME's own Super+letter shortcuts, which give way to Cmd+letter in apps.
+const GNOME_SUPER_LETTERS = ['A', 'S', 'V', 'N'];
+// What the desktop switch is turned into, which only helps while GNOME binds it.
+const DESKTOP_SWITCH_BINDINGS = [
+    ['switch-to-workspace-left', 'Left'],
+    ['switch-to-workspace-right', 'Right'],
+];
+
+// input-remapper keeps a preset per device in JSON, in its 2.x form a list of
+// mappings, each with the input_combination that sets it off; 1.x had a
+// "mapping" object keyed by "type,code,value+…". A preset that maps a modifier
+// with an arrow, or Alt or Super with a key on the Cmd list, does what the
+// plugin does, and with both the keys would be translated twice. Only read.
+const INPUT_REMAPPER_PRESETS = ['input-remapper-2', 'presets'];
+const EV_KEY_CODES = {
+    LEFTCTRL: 29, RIGHTCTRL: 97, LEFTALT: 56, RIGHTALT: 100, LEFTMETA: 125, RIGHTMETA: 126,
+    LEFT: 105, RIGHT: 106,
+    1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7, 7: 8, 8: 9, 9: 10, 0: 11,
+    Q: 16, W: 17, E: 18, R: 19, T: 20, Y: 21, U: 22, I: 23, O: 24, P: 25,
+    A: 30, S: 31, D: 32, F: 33, G: 34, H: 35, J: 36, K: 37, L: 38,
+    Z: 44, X: 45, C: 46, V: 47, B: 48, N: 49, M: 50,
+};
 
 // A Magic Keyboard reports Cmd as Super, so binding the Super combinations
 // gives the real macOS chords rather than an approximation of them. Each entry
@@ -1485,16 +1528,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 input.set_strv('xkb-options', options.filter(o => o !== SWAP_ALT_CMD_OPTION));
         });
 
-        const noteGroup = new Adw.PreferencesGroup();
-        page.add(noteGroup);
-        const note = new Adw.ActionRow({
-            title: 'Shortcuts inside applications',
-            subtitle: 'Cmd+C, Cmd+V and Cmd+S within an app are sent by the app itself, not the ' +
-                'desktop, so they cannot be rebound from here. Matching those needs a key ' +
-                'remapper such as keyd.',
-        });
-        note.set_subtitle_lines(0);
-        noteGroup.add(note);
+        this._buildAppKeysGroup(page, input);
 
         // The trackpad has no page of its own: eight tabs are what the window's
         // width holds, and its neighbour in macOS's settings is the keyboard.
@@ -1510,7 +1544,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         });
         page.add(group);
 
-        const unsupported = this._scrollAccelerationUnsupported();
+        const unsupported = this._libinputPluginsUnsupported();
         const subtitle = 'Scrolling with two fingers starts slowly and speeds up as the fingers do, ' +
             'instead of moving the page by the same amount at any speed. Takes effect at the next login.';
         const row = new Adw.SwitchRow({ title: 'macOS-Like Scroll Acceleration', subtitle });
@@ -1652,17 +1686,336 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         }
     }
 
-    // Why the plugin would not be loaded here, or null when it would be. Only
-    // GNOME 50 and later load the user's plugins, which is a matter of the
-    // release (mutter MR !4739), not of anything this process could ask about.
+    // The keys macOS uses inside apps, one switch for each of the three things
+    // libinput/10-pear-up-macos-keys.lua translates, all written into that one
+    // file. Rows below them say what stands in the way, if anything does, and
+    // whether input-remapper already translates the same keys. `input` is
+    // org.gnome.desktop.input-sources, whose Alt/Cmd swap says which raw key is
+    // Option and which is Cmd.
+    _buildAppKeysGroup(page, input) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Inside Apps',
+            description: 'Apps read these keys themselves, so a plugin for libinput translates them ' +
+                'before they arrive. GNOME loads it when you log in',
+        });
+        page.add(group);
+
+        const unsupported = this._libinputPluginsUnsupported();
+        const swapped = () => input.get_strv('xkb-options').includes(SWAP_ALT_CMD_OPTION);
+        const titles = {
+            WORDS: 'Option+←/→ Moves by Word',
+            DESKTOPS: 'Ctrl+←/→ Switches Desktops',
+            SHORTCUTS: 'macOS Shortcuts in Apps',
+        };
+        const rows = KEYS_PLUGIN_SWITCHES.map(line => {
+            const row = new Adw.SwitchRow({ title: titles[line] });
+            row.set_subtitle_lines(0);
+            group.add(row);
+            return [line, row];
+        });
+
+        const warningRow = (title) => {
+            const row = new Adw.ActionRow({ title, visible: false });
+            row.add_prefix(new Gtk.Image({ icon_name: 'dialog-warning-symbolic' }));
+            row.set_subtitle_lines(0);
+            group.add(row);
+            return row;
+        };
+        const remapperRow = warningRow('input-remapper Translates These Keys Too');
+        const statusRow = warningRow('');
+        statusRow.set_name('pear-up-app-keys-status');
+
+        // What went wrong the last time something was written, until the next.
+        let problem = null;
+        let busy = false;
+        const refresh = () => {
+            if (busy)
+                return;
+            busy = true;
+            const state = this._keysPluginState();
+            const values = state.installed ? state.values : this._keysPluginDefaults(swapped());
+            for (const [line, row] of rows) {
+                const on = state.installed && values[line];
+                row.set_active(on);
+                row.set_sensitive(!state.foreign && (unsupported === null || on));
+                row.set_subtitle(this._appKeysSubtitle(line, values));
+            }
+
+            const path = this._tildePath(this._keysPluginPath());
+            let status = null;
+            if (problem !== null)
+                status = ['Not Saved', problem];
+            else if (state.foreign)
+                status = ['Left Alone', `${path} is a file of the same name that is not Pear Up’s, and is ` +
+                    'left alone. Remove or rename it to use these.'];
+            else if (unsupported !== null)
+                status = ['Not on This System', `${unsupported}. Until then a key remapper such as keyd or ` +
+                    'input-remapper can do this.'];
+            else if (state.installed && !state.current)
+                status = ['From Another Version', 'The copy installed is from another version of Pear Up: ' +
+                    'switch one of these off and on, or run install.sh, to update it.'];
+            statusRow.set_visible(status !== null);
+            statusRow.set_title(status?.[0] ?? '');
+            statusRow.set_subtitle(status?.[1] ?? '');
+
+            const remapped = this._inputRemapperConflicts(values.SHORTCUT_KEYS);
+            remapperRow.set_visible(remapped.length > 0);
+            remapperRow.set_subtitle(remapped.map(({ preset, device, arrows, shortcuts }) => {
+                const what = [
+                    arrows ? `${arrows} ${arrows === 1 ? 'mapping' : 'mappings'} of a modifier with ←/→` : null,
+                    shortcuts ? `${shortcuts} of Alt or Super with a key on the Cmd list` : null,
+                ].filter(Boolean).join(' and ');
+                return `Its preset “${preset}” for ${device} has ${what}.`;
+            }).join(' ') + ' With both on, those keys would be translated twice: remove these mappings ' +
+                'from the preset in input-remapper, or leave the switches here off.');
+            busy = false;
+        };
+
+        for (const [line, row] of rows) {
+            row.connect('notify::active', () => {
+                // Showing the file is not the user switching, and greyed out is
+                // not enough: whatever sets `active` gets here.
+                if (busy)
+                    return;
+                const state = this._keysPluginState();
+                if (state.foreign || row.active === (state.installed && state.values[line]) ||
+                    (row.active && unsupported !== null)) {
+                    refresh();
+                    return;
+                }
+                const values = state.installed ? state.values : this._keysPluginDefaults(swapped());
+                problem = this._setKeysPlugin({ ...values, SWAPPED: swapped(), [line]: row.active });
+                refresh();
+            });
+        }
+
+        // The swap decides which raw key is Option and which is Cmd, so the
+        // copy follows it, whoever changes it.
+        const realign = () => {
+            const state = this._keysPluginState();
+            if (state.installed && state.values.SWAPPED !== swapped())
+                problem = this._setKeysPlugin({ ...state.values, SWAPPED: swapped() });
+            refresh();
+        };
+        const watched = input.connect('changed::xkb-options', realign);
+        const wm = this._settingsForSchema(WM_KEYBINDINGS_SCHEMA);
+        const bindings = wm ? DESKTOP_SWITCH_BINDINGS.map(([key]) => wm.connect(`changed::${key}`, refresh)) : [];
+        group.connect('destroy', () => {
+            input.disconnect(watched);
+            for (const id of bindings)
+                wm.disconnect(id);
+        });
+        realign();
+    }
+
+    _appKeysSubtitle(line, values) {
+        if (line === 'WORDS') {
+            return 'With Shift it selects by word, as on a Mac. Apps are sent Ctrl+←/→, which is how ' +
+                'Linux apps move by word.';
+        }
+        if (line === 'DESKTOPS') {
+            const text = 'To the desktop beside, through GNOME’s own Ctrl+Option+←/→. Ctrl+Shift+←/→ is ' +
+                'left alone, so apps still select by word with it.';
+            return this._desktopSwitchBound() ? text
+                : `${text} GNOME’s Ctrl+Option+←/→ shortcut is not set at the moment, so this does nothing ` +
+                    'until it is.';
+        }
+        const keys = values.SHORTCUT_KEYS.split(/\s+/).filter(Boolean).map(key => key.toUpperCase());
+        if (keys.length === 0)
+            return 'The copy installed lists no keys for Cmd to turn into Ctrl.';
+        const list = keys.length === 1 ? keys[0] : `${keys.slice(0, -1).join(', ')} and ${keys.at(-1)}`;
+        const gnome = GNOME_SUPER_LETTERS.filter(key => keys.includes(key));
+        const giveWay = gnome.length === 0 ? ''
+            : ` GNOME’s own Cmd+${gnome.length === 1 ? gnome[0]
+                : `${gnome.slice(0, -1).join(', ')} and ${gnome.at(-1)}`} ${gnome.length === 1 ? 'gives' : 'give'} way.`;
+        return `Cmd+${list} act as Ctrl with the same key, also with Shift. In a terminal Cmd+C ` +
+            `becomes Ctrl+C, which interrupts rather than copies.${giveWay}`;
+    }
+
+    // Whether GNOME binds Ctrl+Option+← and →, which is what Ctrl+←/→ is
+    // turned into, to the desktops beside. They are its defaults.
+    _desktopSwitchBound() {
+        const wm = this._settingsForSchema(WM_KEYBINDINGS_SCHEMA);
+        if (!wm)
+            return true;
+        const wanted = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK;
+        return DESKTOP_SWITCH_BINDINGS.every(([key, arrow]) => wm.get_strv(key).some(accel => {
+            const [ok, keyval, mods] = Gtk.accelerator_parse(accel);
+            return ok && keyval === Gdk[`KEY_${arrow}`] && mods === wanted;
+        }));
+    }
+
+    _keysPluginPath() {
+        return GLib.build_filenamev([GLib.get_user_config_dir(), 'libinput', 'plugins', KEYS_PLUGIN]);
+    }
+
+    _keysPluginSource() {
+        const [, bytes] = GLib.file_get_contents(GLib.build_filenamev([this.path, 'libinput', KEYS_PLUGIN]));
+        return new TextDecoder().decode(bytes);
+    }
+
+    // The values of the plugin's lines in `text`, or null where one is missing
+    // or there twice.
+    _keysPluginValues(text) {
+        const values = {};
+        for (const [name, line] of Object.entries(KEYS_PLUGIN_LINES)) {
+            const all = text.match(new RegExp(line.source, 'gm'));
+            if (all?.length !== 1)
+                return null;
+            const value = text.match(line)[1];
+            values[name] = name === 'SHORTCUT_KEYS' ? value : value === 'true';
+        }
+        return values;
+    }
+
+    // Nothing switched on, and the key list as this version ships it.
+    _keysPluginDefaults(swapped) {
+        let keys = '';
+        try {
+            keys = this._keysPluginValues(this._keysPluginSource())?.SHORTCUT_KEYS ?? '';
+        } catch {
+            // No shipped copy: nothing to offer either.
+        }
+        return { SWAPPED: swapped, WORDS: false, DESKTOPS: false, SHORTCUTS: false, SHORTCUT_KEYS: keys };
+    }
+
+    // The plugin as this version of Pear Up ships it, with `values` written in.
+    _keysPluginText(values) {
+        const source = this._keysPluginSource();
+        if (!this._keysPluginValues(source))
+            throw new Error('the plugin Pear Up ships lacks one of the lines it writes');
+        let text = source;
+        for (const [name, line] of Object.entries(KEYS_PLUGIN_LINES)) {
+            const value = name === 'SHORTCUT_KEYS' ? `"${values[name]}"` : String(Boolean(values[name]));
+            text = text.replace(line, () => `local ${name} = ${value}`);
+        }
+        return text;
+    }
+
+    // What is installed, as _scrollPluginState() tells it: Pear Up's copy with
+    // its values and whether it is what this version would write, nothing, or
+    // someone else's file, which is anything without all of Pear Up's lines.
+    _keysPluginState() {
+        let text;
+        try {
+            const [, bytes] = Gio.File.new_for_path(this._keysPluginPath()).load_contents(null);
+            text = new TextDecoder().decode(bytes);
+        } catch (e) {
+            const absent = [Gio.IOErrorEnum.NOT_FOUND, Gio.IOErrorEnum.NOT_DIRECTORY]
+                .some(code => e.matches?.(Gio.IOErrorEnum, code));
+            return { installed: false, foreign: !absent, values: null, current: true };
+        }
+        const values = this._keysPluginValues(text);
+        if (!values || !text.includes('Pear Up'))
+            return { installed: false, foreign: true, values: null, current: true };
+        let current = true;
+        try {
+            current = text === this._keysPluginText(values);
+        } catch {
+            // Without the shipped copy there is nothing to compare with.
+        }
+        return { installed: true, foreign: false, values, current };
+    }
+
+    // Installs the plugin with `values`, or removes Pear Up's copy, and only
+    // that, when none of the three is on. Returns what went wrong, or null.
+    _setKeysPlugin(values) {
+        const path = this._keysPluginPath();
+        const state = this._keysPluginState();
+        if (state.foreign)
+            return `${this._tildePath(path)} is not Pear Up’s, and is left alone`;
+        const remove = !KEYS_PLUGIN_SWITCHES.some(line => values?.[line]);
+        try {
+            const file = Gio.File.new_for_path(path);
+            if (remove) {
+                if (state.installed)
+                    file.delete(null);
+                return null;
+            }
+            const text = this._keysPluginText(values);
+            const dir = GLib.path_get_dirname(path);
+            if (GLib.mkdir_with_parents(dir, 0o755) !== 0)
+                throw new Error(`${this._tildePath(dir)} cannot be created`);
+            file.replace_contents(new TextEncoder().encode(text), null, false, Gio.FileCreateFlags.NONE, null);
+            return null;
+        } catch (e) {
+            return `Could not ${remove ? 'remove' : 'write'} ${this._tildePath(path)}: ${e.message}`;
+        }
+    }
+
+    // The input-remapper presets that translate keys the plugin does, with how
+    // many of their mappings take a modifier with ←/→, and how many Alt or
+    // Super with one of `keys`, the Cmd list. Presets that cannot be read are
+    // passed over: this is a warning, not a gate.
+    _inputRemapperConflicts(keys) {
+        const modifiers = ['LEFTCTRL', 'RIGHTCTRL', 'LEFTALT', 'RIGHTALT', 'LEFTMETA', 'RIGHTMETA']
+            .map(name => EV_KEY_CODES[name]);
+        const altsAndSupers = modifiers.slice(2);
+        const arrows = [EV_KEY_CODES.LEFT, EV_KEY_CODES.RIGHT];
+        const letters = keys.split(/\s+/).map(key => EV_KEY_CODES[key.toUpperCase()]).filter(Boolean);
+        const has = (codes, set) => codes.some(code => set.includes(code));
+
+        const found = [];
+        const presets = Gio.File.new_for_path(GLib.build_filenamev(
+            [GLib.get_user_config_dir(), ...INPUT_REMAPPER_PRESETS]));
+        const children = (dir, type) => {
+            const list = [];
+            try {
+                const entries = dir.enumerate_children('standard::name,standard::type',
+                    Gio.FileQueryInfoFlags.NONE, null);
+                for (let info = entries.next_file(null); info; info = entries.next_file(null)) {
+                    if (info.get_file_type() === type)
+                        list.push(info.get_name());
+                }
+                entries.close(null);
+            } catch {
+                // No such directory, or not one that can be read.
+            }
+            return list.sort();
+        };
+        for (const device of children(presets, Gio.FileType.DIRECTORY)) {
+            const dir = presets.get_child(device);
+            for (const name of children(dir, Gio.FileType.REGULAR).filter(n => n.endsWith('.json'))) {
+                let data;
+                try {
+                    const [, bytes] = dir.get_child(name).load_contents(null);
+                    data = JSON.parse(new TextDecoder().decode(bytes));
+                } catch {
+                    continue;
+                }
+                // Each mapping as the key codes that set it off.
+                const combinations = Array.isArray(data)
+                    ? data.map(mapping => (mapping?.input_combination ?? [])
+                        .filter(input => Number(input?.type) === 1).map(input => Number(input.code)))
+                    : Object.keys(data?.mapping ?? {}).map(combination => combination.split('+')
+                        .map(input => input.split(',').map(Number))
+                        .filter(([type]) => type === 1).map(([, code]) => code));
+                let arrowCount = 0, shortcutCount = 0;
+                for (const codes of combinations) {
+                    if (has(codes, modifiers) && has(codes, arrows))
+                        arrowCount++;
+                    else if (has(codes, altsAndSupers) && has(codes, letters))
+                        shortcutCount++;
+                }
+                if (arrowCount || shortcutCount)
+                    found.push({ preset: name.slice(0, -'.json'.length), device, arrows: arrowCount, shortcuts: shortcutCount });
+            }
+        }
+        return found;
+    }
+
+    // Why Pear Up's libinput plugins would not be loaded here, or null when
+    // they would be. Only GNOME 50 and later load the user's plugins, which is
+    // a matter of the release (mutter MR !4739), not of anything this process
+    // could ask about.
     // GNOME 50 needs libinput 1.30 to build, so the version libinput's tool
     // reports, when it is installed, is a second opinion.
-    _scrollAccelerationUnsupported() {
+    _libinputPluginsUnsupported() {
         const shell = parseInt(Config.PACKAGE_VERSION, 10);
-        if (!(shell >= SCROLL_PLUGIN_SHELL))
-            return `Needs GNOME ${SCROLL_PLUGIN_SHELL} or later: GNOME ${Config.PACKAGE_VERSION} does not load libinput plugins`;
+        if (!(shell >= PLUGINS_SHELL))
+            return `Needs GNOME ${PLUGINS_SHELL} or later: GNOME ${Config.PACKAGE_VERSION} does not load libinput plugins`;
         const libinput = this._libinputVersion();
-        const [major, minor] = SCROLL_PLUGIN_LIBINPUT;
+        const [major, minor] = PLUGINS_LIBINPUT;
         if (libinput && (libinput[0] < major || (libinput[0] === major && libinput[1] < minor)))
             return `Needs libinput ${major}.${minor} or later, which brought plugins: this system has ${libinput.join('.')}`;
         return null;

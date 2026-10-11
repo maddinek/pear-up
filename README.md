@@ -143,8 +143,35 @@ added next to GNOME's own rather than replacing it, so switching a set off leave
 untouched. Where Dash to Dock already grabs a chord — it takes `Cmd+number` and `Cmd+Q` — the switch
 stands that down and offers to move the dock shortcuts to `Cmd+F1…F9` instead.
 
-Shortcuts *inside* an application, like `Cmd+C`, are sent by the app rather than the desktop and
-cannot be rebound from here; matching those needs a key remapper such as `keyd`.
+**macOS keys inside apps.** An app reads its own keys, so `Cmd+C` in an app, or `Option+←` in a
+text field, cannot be rebound by any GNOME shortcut: Linux apps know those as `Ctrl+C` and `Ctrl+←`,
+and the keys have to be different before they arrive. Three switches in the Inside Apps group of the
+Keyboard page install a small [libinput plugin](libinput/10-pear-up-macos-keys.lua) that does that,
+on every keyboard with arrow keys:
+
+| Pressed | Apps get | Does |
+| --- | --- | --- |
+| `Option+←` / `Option+→` | `Ctrl+←` / `Ctrl+→` | A word left or right; with `Shift`, select by word |
+| `Ctrl+←` / `Ctrl+→` | `Ctrl+Option+←` / `→` | The desktop beside, through GNOME's own default shortcut |
+| `Cmd+C`, `V`, `X`, `Z`, `A`, `S`, `F`, `T`, `W`, `N` | `Ctrl+` the same key | Copy, paste, cut, undo …; with `Shift` too, so `Cmd+Shift+Z` redoes |
+
+Everything else reaches the apps as it did: `Option`, `Cmd` or `Ctrl` tapped alone, with any other key
+(`Cmd+Space`, `Cmd+Tab`, `Cmd+Q`, which Pear Up quits apps with), or together, such as `Ctrl+Shift+←`,
+which Linux apps still select by word with. A modifier goes to libinput the moment it is pressed, as
+always; only when one of the keys above follows is it lent to the translation, with `Ctrl` pressed
+before it is let go, so no app or GNOME ever sees a lone tap of it that you did not make. Held, a key
+repeats as its translation; let go in any order, nothing is left held. Which physical key is `Option`
+and which `Cmd` follows the Swap Alt and Cmd switch, written into the plugin when either changes.
+Things to know: in a terminal `Cmd+C` becomes `Ctrl+C`, which interrupts rather than copies, since
+nothing that low knows which app is in front; GNOME's own `Super+A`, `S`, `V` and `N` give way to the
+apps' shortcuts; only the left-hand `Option` and `Cmd` count; and the list is of key positions, so on
+a layout that swaps Z and Y it is the key printed Y that undoes. `Option+Backspace` is not translated:
+in a terminal `Alt+Backspace` already deletes a word and `Ctrl+Backspace` would erase one character.
+If an [input-remapper](https://github.com/sezanzeb/input-remapper) preset already maps these keys,
+the group says so, since with both the keys would be translated twice. Like the scroll acceleration
+it needs GNOME 50 and takes effect at the next login; switching all three off removes the one file it
+installed, `~/.config/libinput/plugins/10-pear-up-macos-keys.lua`. Before GNOME 50 a key remapper such
+as `keyd` or input-remapper can do the same.
 
 **Scrolling that speeds up like the Mac's.** On a touchpad, libinput scrolls by the same amount for
 every millimetre two fingers travel, however slowly they go, so a gentle nudge sends the page away.
@@ -165,7 +192,7 @@ keyboard shortcuts.
 
 Everything lives in one window, a page for each part: the panel and the desktop (General), which
 menus appear (Menus), the dock (Dock), type, accent, icons and cursor (Appearance), the windows
-(Windows), the shortcuts and the trackpad (Keyboard), and your custom menus. Open it by pressing
+(Windows), the shortcuts, the keys inside apps and the trackpad (Keyboard), and your custom menus. Open it by pressing
 <kbd>Super</kbd> and typing "pear", from the app grid, or through the Extensions app.
 
 These settings cannot appear in GNOME Settings beside Appearance, which is where they arguably
@@ -184,9 +211,9 @@ no extension can add one. Installing puts a **Pear Up Settings** application ent
 | --- | --- |
 | ![Dock settings](assets/screenshots/settings-dock.png) | ![Dock settings: frosted glass and running apps](assets/screenshots/settings-dock-glass.png) |
 
-| Keyboard | Keyboard, Trackpad |
+| Keyboard | Keyboard, Inside Apps and Trackpad |
 | --- | --- |
-| ![Keyboard settings](assets/screenshots/settings-keyboard.png) | ![Keyboard settings: scroll acceleration for the trackpad](assets/screenshots/settings-trackpad.png) |
+| ![Keyboard settings](assets/screenshots/settings-keyboard.png) | ![Keyboard settings: macOS keys inside apps, and scroll acceleration for the trackpad](assets/screenshots/settings-trackpad.png) |
 
 ## Requirements
 
@@ -194,8 +221,9 @@ no extension can add one. Installing puts a **Pear Up Settings** application ent
   [test suite](#testing) rather than assumed; 50 is also what it is used on daily.
 - Two things are for newer releases only, and their switches say so where they are not offered:
   the smooth automatic brightness needs GNOME 49 or later, where the shell sets the brightness
-  itself, and the scroll acceleration needs GNOME 50 or later with libinput 1.30 or later, since
-  earlier releases do not load libinput plugins from the user's directory.
+  itself, and the scroll acceleration and the macOS keys inside apps need GNOME 50 or later with
+  libinput 1.30 or later, since earlier releases do not load libinput plugins from the user's
+  directory.
 
 Nothing else is required. Applications are opened through their desktop files where possible, with
 fallbacks, so the menu entries work across distributions rather than assuming GNOME's defaults.
@@ -248,8 +276,9 @@ To remove it:
 bash uninstall.sh
 ```
 
-By default this only removes the extension's own files, the scroll acceleration plugin with them
-when the preferences installed it (scrolling is libinput's own again at the next login). Changes
+By default this only removes the extension's own files, the libinput plugins for scrolling and
+the keys with them when the preferences installed them (both are libinput's own again at the next
+login). Changes
 made from the Preferences
 window to settings owned by other parts of the desktop — the macOS shortcut sets appended
 to GNOME's keybindings, the Alt/Cmd swap in `xkb-options`, the Dash to Dock hot keys stood
@@ -380,11 +409,24 @@ once without. The touchpad exists only inside [umockdev](https://github.com/mart
 which fakes the device node for the one process it runs: `libinput replay` would make a uinput
 device instead, which every libinput on the machine — the desktop's included — would pick up.
 
+**And the macOS keys?** The same two ways. Their logic first, in the same sandbox, with keys pressed
+and let go the way a keyboard sends them: a modifier tapped alone or with any other key reaches
+libinput as it was; `Option+←`, `Option+Shift+→`, `Ctrl+←` and `Cmd+C` come out translated, with the
+new modifier down before the old one comes up and held while the key repeats; and three thousand runs
+of keys pressed, repeated and let go at random, with and without the swap, check that nothing is ever
+left held, pressed twice or let go unpressed, that a key that is not translated goes down with just
+the modifiers you hold, and that no lone tap of `Option`, `Cmd` or `Ctrl` is made up. Then the plugin
+in libinput itself, `libinput debug-events` reporting what a umockdev keyboard — framy's own — typed,
+with the plugin as the preferences write it with the swap on and off, and once without it, where the
+keys have to come out exactly as pressed. The same container compiles framy's keymap with xkb to check
+which raw key the swap makes Alt and which Super, and that GNOME binds `Ctrl+Alt+←/→` to the desktops
+beside by default.
+
 ```bash
 tests/run-libinput-tests.sh
 ```
 
-How it feels is another matter, and is for fingers on a real touchpad to say.
+How they feel is another matter, and is for fingers on a real touchpad and keyboard to say.
 
 **Do the helpers that reach into settings behave?** The undo logic in uninstall.sh does string
 surgery on printed GVariant lists, and the dock script forwards its opt-outs through a quoted heredoc
