@@ -1,0 +1,7 @@
+{
+  "uuid": "pear-up-preview-hook@localhost",
+  "name": "Pear Up Preview Hook",
+  "description": "Lets the preview driver look inside the throwaway shell: turns on unsafe mode (for org.gnome.Shell.Eval) and paints the stage to a PNG. Only ever installed inside the preview container.",
+  "version": 1,
+  "shell-version": ["50"]
+}

@@ -1,0 +1,27 @@
+<!-- The host's primary monitor, keyed to the virtual monitor
+     `gnome-shell --headless --virtual-monitor <width>x<height>` creates. run.sh
+     reads the size, scale and layout mode from the host; user-setup.sh fills them in. -->
+<monitors version="2">
+  <configuration>
+    <layoutmode>@LAYOUT@</layoutmode>
+    <logicalmonitor>
+      <x>0</x>
+      <y>0</y>
+      <scale>@SCALE@</scale>
+      <primary>yes</primary>
+      <monitor>
+        <monitorspec>
+          <connector>Meta-0</connector>
+          <vendor>MetaVendor</vendor>
+          <product>MetaVirtualMonitor</product>
+          <serial>0x00</serial>
+        </monitorspec>
+        <mode>
+          <width>@WIDTH@</width>
+          <height>@HEIGHT@</height>
+          <rate>60.000</rate>
+        </mode>
+      </monitor>
+    </logicalmonitor>
+  </configuration>
+</monitors>
