@@ -29,11 +29,15 @@
       "ActorAlign",
       "Orientation",
       "EVENT_STOP",
-      "get_default_backend"
+      "get_default_backend",
+      "Actor",
+      "Clone",
+      "Timeline"
     ],
     "Meta": [
       "WindowType",
-      "MaximizeFlags"
+      "MaximizeFlags",
+      "KeyBindingFlags"
     ],
     "St": [
       "Label",
@@ -41,15 +45,24 @@
       "Bin",
       "BoxLayout",
       "ThemeContext",
-      "IconTheme"
+      "IconTheme",
+      "Widget",
+      "Side",
+      "Settings"
     ],
     "Shell": [
       "AppSystem",
       "WindowTracker",
-      "AppUsage"
+      "AppUsage",
+      "ActionMode"
+    ],
+    "GObject": [
+      "signal_lookup"
     ],
     "Gio": [
       "AppInfo",
+      "DBus",
+      "DBusCallFlags",
       "File",
       "FileCreateFlags",
       "Icon",
@@ -67,7 +80,13 @@
       "get_real_name",
       "get_user_name",
       "get_user_data_dir",
-      "build_filenamev"
+      "build_filenamev",
+      "get_monotonic_time",
+      "timeout_add",
+      "PRIORITY_DEFAULT",
+      "SOURCE_CONTINUE",
+      "USEC_PER_SEC",
+      "Source"
     ]
   },
 
@@ -101,20 +120,57 @@
       "located_on_workspace",
       "get_frame_rect",
       "unmaximize",
-      "maximize"
+      "maximize",
+      "is_skip_taskbar"
     ],
     "Clutter.VirtualInputDevice": [
       "notify_keyval"
     ],
     "Clutter.Actor": [
       "get_actions",
-      "add_action"
+      "add_action",
+      "get_transformed_position",
+      "get_transformed_size",
+      "get_allocation_box",
+      "get_pivot_point",
+      "set_pivot_point",
+      "set_scale",
+      "insert_child_above",
+      "set_child_above_sibling",
+      "get_next_sibling",
+      "get_paint_opacity",
+      "get_preferred_width",
+      "get_preferred_height",
+      "get_first_child",
+      "get_constraints"
+    ],
+    "Clutter.Timeline": [
+      "start",
+      "stop"
+    ],
+    "St.Widget": [
+      "get_theme_node",
+      "get_style",
+      "add_style_class_name",
+      "remove_style_class_name"
+    ],
+    "St.ThemeNode": [
+      "get_foreground_color"
+    ],
+    "Shell.Global": [
+      "get_pointer"
     ],
     "Shell.AppUsage": [
       "get_most_used"
     ],
     "Shell.AppSystem": [
       "lookup_app"
+    ],
+    "Shell.App": [
+      "request_quit"
+    ],
+    "Shell.WindowTracker": [
+      "get_window_app"
     ],
     "St.IconTheme": [
       "has_icon"
@@ -135,6 +191,30 @@
     "Meta.Window": [
       "minimized",
       "on_all_workspaces"
+    ],
+    "Clutter.Actor": [
+      "mapped",
+      "opacity",
+      "rotation_angle_z",
+      "translation_x",
+      "translation_y",
+      "x_align",
+      "y_align",
+      "scale_x",
+      "scale_y"
+    ],
+    "St.Widget": [
+      "hover",
+      "style_class"
+    ],
+    "St.Icon": [
+      "gicon",
+      "fallback_gicon",
+      "icon_size",
+      "icon_name"
+    ],
+    "St.Settings": [
+      "enable_animations"
     ]
   },
 
@@ -149,23 +229,32 @@
 
   "shellInternals": [
     "_updatePanel",
+    "addKeybinding",
+    "removeKeybinding",
     "_rightBox",
     "_centerBox",
+    "_leftBox",
+    "dateMenu",
     "addToStatusArea",
     "get_current_time",
     "statusArea",
     "quickSettings",
     "_indicator",
+    "system-shutdown-symbolic",
     "showAppsButton",
     "canSuspend",
     "canPowerOff",
     "canLockScreen",
-    "canLogout",
     "activateSuspend",
     "activateRestart",
     "activatePowerOff",
     "activateLockScreen",
-    "activateLogout",
+    "forceUpdate",
+    "can-suspend",
+    "can-restart",
+    "can-power-off",
+    "can-lock-screen",
+    "org.gnome.SessionManager",
     "openPreferences",
     "connectObject",
     "disconnectObject",
@@ -182,8 +271,67 @@
     "uiGroup",
     "get_window_actors",
     "set_cursor",
-    "captured-event"
+    "captured-event",
+    "findIndexForActor",
+    "getWorkAreaForMonitor",
+    "monitors-changed",
+    "extension-state-changed",
+    "EnableExtension",
+    "DisableExtension",
+    "isLocked",
+    "item-drag-begin",
+    "item-drag-end",
+    "item-drag-cancelled",
+    "window-drag-begin",
+    "window-drag-end",
+    "window-drag-cancelled",
+    "xdndHandler",
+    "bannerAlignment",
+    "_bannerBin",
+    "osdWindowManager",
+    "_osdWindows",
+    "MonitorConstraint",
+    "work-area",
+    "WorkspaceSwitcherPopup",
+    "ThumbnailsBox",
+    "_updateShouldShow",
+    "_shouldShow",
+    "should-show",
+    "_thumbnailsBox",
+    "_startingUp",
+    "runStartupAnimation",
+    "startup-complete",
+    "_stateAdjustment",
+    "ControlsState"
   ],
+
+  "shellInternalsWith": {
+    "comment": [
+      "Internals of a part of the shell that not every release has, checked only",
+      "where it is: the name each list is filed under says whether it is there.",
+      "The shell sets the brightness itself from GNOME 49; before, gnome-settings-",
+      "daemon does, and Smooth Automatic Brightness has nothing to do."
+    ],
+    "brightnessManager.js": [
+      "brightnessManager",
+      "autoBrightnessTarget",
+      "_abTarget",
+      "_sync",
+      "get scales",
+      "globalScale",
+      "_monitorScales",
+      "_monitorsChanged",
+      "setBacklight",
+      "syncWithBacklight",
+      "_getBacklights",
+      "_getRelativeBrightness",
+      "_currentBacklightBrightness",
+      "_dimmingTarget",
+      "SetAutoBrightnessTarget",
+      "SetDimming",
+      "screen-brightness-up"
+    ]
+  },
 
   "absent": {
     "comment": [

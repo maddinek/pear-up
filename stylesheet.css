@@ -5,6 +5,16 @@
   font-weight: 400;
 }
 
+/* Regular weight for everything in the bar — the menu titles, the clock, and
+   other extensions' indicators too — as in the macOS menu bar. The rule above
+   is not enough on its own: the shell theme gives .panel-button a weight of its
+   own (bold), and a rule on the button beats any weight it would inherit from
+   the panel. Specificity is not the problem — St ranks every extension
+   stylesheet above the shell theme — so this only has to name the button. */
+#panel.pearup-panel .panel-button {
+  font-weight: 400;
+}
+
 /* Menu titles: File, Edit, View, … Horizontal padding and type size
    come from settings (menu-bar-padding, menu-bar-font-size), applied as
    inline style so a slider can change them without a stylesheet reload.
@@ -17,9 +27,10 @@
   font-size: 13px;
 }
 
-/* Active app name (Firefox, Cursor, …) — bold like macOS */
+/* Active app name (Firefox, Cursor, …) — bold like macOS, the one heavy word
+   in a bar of regular ones. */
 #panel.pearup-panel .pearup-app-menu .panel-button-label {
-  font-weight: 600;
+  font-weight: 700;
 }
 
 /* Pear / system menu button */
@@ -61,9 +72,9 @@
   padding-right: 0;
 }
 
+/* Regular weight comes from the .panel-button rule above: the clock is one. */
 #panel.pearup-panel .clock-display {
   font-size: 13px;
-  font-weight: 500;
 }
 
 #panel.pearup-panel .clock-display .clock {
@@ -96,4 +107,48 @@
 #panel.pearup-panel #panelRight {
   spacing: 0;
   padding-right: 6px;
+}
+
+/* Vitals (github.com/corecoding/Vitals) shows its readouts as a row of icon and
+   value pairs in one panel button, spaced 11px apart in the bar's own type.
+   macOS menu bar stat apps keep theirs closer together and a size below the
+   bar's, so both are set here. They used to be edited into Vitals' own
+   stylesheet, which an update of Vitals overwrites; here they survive it, and
+   none of Vitals' settings are touched.
+
+   Vitals' rules are a single class each, and extension stylesheets rank
+   against each other by specificity, so the panel's ID puts these ahead of
+   them whichever of the two extensions loaded last. The weight is named too,
+   although the label inherits the same one from the button: a stylesheet of
+   Vitals' that sets its own would otherwise win the label. */
+#panel.pearup-panel .vitals-panel-menu {
+  spacing: 5px;
+}
+
+#panel.pearup-panel .vitals-panel-label {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* Dash to Dock puts a grey backdrop behind the focused app's icon; the macOS
+   Dock marks it with the running dot alone. Applied while dock-focus-highlight
+   is off, through a class extension.js claims on the UI group, the docks'
+   parent. Extension stylesheets rank against each other by specificity, and
+   Dash to Dock's own rules for this carry two IDs and up to seven classes, so
+   the UI group's ID is what puts this one ahead of all of them. Hovering the
+   focused icon shows no backdrop either, as on macOS. */
+#uiGroup.pearup-dock-plain-focus #dashtodockContainer #dash .focused .overview-icon {
+  background-color: transparent;
+}
+
+/* The volume and brightness bubble in the top right corner, under the bar, as
+   on macOS, while osd-top-right is on (shellTweaks.js claims the class on the
+   UI group, the bubble's parent). Its window is held to the work area there,
+   which starts below the bar, so these are the gaps to the bar and to the edge
+   of the screen — the same 4px a notification banner keeps, so the two line up.
+   GNOME's own 4em below it is for clearing the bottom edge and goes. The UI
+   group's ID puts this ahead of Just Perfection's margins for its own top
+   positions, which are a class or two. */
+#uiGroup.pearup-osd-top-right .osd-window {
+  margin: 4px 4px 0 0;
 }

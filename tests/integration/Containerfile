@@ -35,6 +35,18 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         pipewire-gstreamer \
     && dnf clean all
 
+# Dash to Dock, for the dock magnification checks: each release's own packaged
+# version, so the magnifier meets the Dash to Dock that release ships. Installed
+# but not enabled — the suite switches it on itself once the panel checks are
+# done, so those still run against the stock shell. A layer of its own, so adding
+# it did not invalidate the large one above. Its schema is compiled by hand
+# because the package scriptlet's warnings about other packages are not worth
+# failing a build over.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        gnome-shell-extension-dash-to-dock \
+    && dnf clean all \
+    && (glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true)
+
 # Nothing here needs networking, printing, or a boot splash. Masking these keeps
 # startup to a couple of seconds and the logs readable.
 RUN systemctl mask \
@@ -46,6 +58,17 @@ RUN systemctl mask \
         systemd-oomd.service \
     && systemctl set-default multi-user.target \
     && systemctl enable systemd-logind.service
+
+# Everything the suite runs is started through `podman exec`, which puts it in
+# PID 1's init.scope — and systemd caps every unit at 15% of the container's
+# task limit, 307 threads. Software rendering starts a thread per CPU for each
+# GL context, so on a 24-thread machine the shell, the test window and the
+# screencast pipeline hit that cap together: thread creation starts failing,
+# icons stop loading, gsettings aborts and no recording is ever made. The
+# container's own limit still applies.
+RUN mkdir -p /etc/systemd/system.conf.d \
+    && printf '[Manager]\nDefaultTasksMax=infinity\n' \
+        > /etc/systemd/system.conf.d/pear-up-tasks.conf
 
 # Software rendering: there is no GPU in here.
 #

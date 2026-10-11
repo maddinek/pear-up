@@ -1,9 +1,16 @@
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { MenuManager } from './menuManager.js';
 import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
+import { DockMagnifier } from './dockMagnifier.js';
+import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
+import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
+import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
 // separate toggle so nothing about the stock top bar is changed silently.
@@ -30,6 +37,12 @@ const PANEL_GAPS = [
 // for it, which covers the power icon and the Activities button both.
 const PANEL_RETRY_LIMIT = 20;
 
+// How often the clock is taken back from another extension before that one is
+// left to have it: five times in ten seconds is a fight, not a change of mind.
+// See _holdClock().
+const CLOCK_RETURN_LIMIT = 5;
+const CLOCK_RETURN_WINDOW_US = 10 * GLib.USEC_PER_SEC;
+
 // Nothing here reports state for tests. The suite loads a separate extension
 // that inspects the panel from outside, so this one carries no test surface and
 // no way in for anything else.
@@ -50,6 +63,21 @@ const MENU_CONTENT_KEYS = [
     'custom-menus',
 ];
 
+// Both are read live: the magnifier is built or torn down by the first, and
+// picks up a new size from the second on its next frame.
+const DOCK_MAGNIFICATION_KEYS = [
+    'dock-magnification',
+    'dock-magnification-size',
+];
+
+// What the Quick Settings system indicator shows where there is no battery.
+// With one, the same icon is the battery, and that is not for hiding.
+const POWER_GLYPH = 'system-shutdown-symbolic';
+
+// Claimed on the UI group to switch on the stylesheet rule that drops Dash to
+// Dock's backdrop behind the focused app (see stylesheet.css).
+const DOCK_PLAIN_FOCUS_CLASS = 'pearup-dock-plain-focus';
+
 // GNOME reserves room in the right cluster for indicators that are inactive
 // most of the time. macOS has no equivalent, and they leave a visible gap.
 const SPACER_ROLES = [
@@ -68,12 +96,20 @@ export default class GlobalMenuExtension extends Extension {
         this._settingsChangedId = null;
         this._logoButton = null;
         this._searchButton = null;
+        this._dockMagnifier = null;
+        this._shellTweaks = null;
+        this._smoothBrightness = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
         this._clockLayout = null;
-        this._powerHidden = null;
+        this._clockWatched = null;
+        this._clockHoldId = 0;
+        this._clockReturns = [];
+        this._clockLetGo = false;
+        this._powerIndicator = null;
         this._powerVisibleId = 0;
+        this._powerIconId = 0;
         this._powerDestroyId = 0;
         this._powerRetryId = 0;
         this._powerRetries = 0;
@@ -83,6 +119,7 @@ export default class GlobalMenuExtension extends Extension {
         this._overviewRetries = 0;
         this._sessionModeId = 0;
         this._resyncId = 0;
+        this._indicatorPaddingId = 0;
         this._menuSyncId = 0;
         this._hiddenSpacers = [];
         this._gapped = new Set();
@@ -91,6 +128,7 @@ export default class GlobalMenuExtension extends Extension {
         this._minimizedWindow = null;
         this._minimizedId = 0;
         this._minimizedGoneId = 0;
+        this._quitBound = false;
     }
 
     // Everything that reaches into GNOME's private panel internals goes
@@ -142,6 +180,14 @@ export default class GlobalMenuExtension extends Extension {
                 this._syncPanelTweaks();
             else if (MENU_CONTENT_KEYS.includes(key))
                 this._queueMenuSync();
+            else if (DOCK_MAGNIFICATION_KEYS.includes(key))
+                this._guard('updating dock magnification', () => this._syncDockMagnifier());
+            else if (key === 'dock-focus-highlight')
+                this._guard('updating the dock highlight', () => this._syncDockFocusHighlight());
+            else if (SHELL_TWEAK_KEYS.includes(key))
+                this._shellTweaks?.sync();
+            else if (key === SMOOTH_BRIGHTNESS_KEY)
+                this._smoothBrightness?.sync();
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -161,6 +207,11 @@ export default class GlobalMenuExtension extends Extension {
         this._sessionModeId = Main.sessionMode.connect('updated',
             () => this._queuePanelResync());
 
+        // A rebuild is not the only way an indicator reaches the panel: others
+        // arrive on their own, long after it. Connected before the first pass
+        // below, so none can slip in between.
+        this._guard('watching for late indicators', () => this._watchRightBox());
+
         // stylesheet.css is loaded by the shell itself for every enabled
         // extension, so there is nothing to do here but claim the class it
         // keys off.
@@ -171,6 +222,55 @@ export default class GlobalMenuExtension extends Extension {
         this._syncSearchButton();
         this._syncOverviewButton();
         this._syncMenuVisibility();
+
+        // Dash to Dock is someone else's code, reached through its private
+        // members; a failure there must not take the menu bar down with it.
+        this._guard('setting up dock magnification', () => this._syncDockMagnifier());
+        this._guard('styling the dock highlight', () => this._syncDockFocusHighlight());
+
+        // Notifications, the volume bubble and the rest of what is not the bar.
+        // Each tweak guards itself, so one the shell has changed under it is
+        // left out on its own.
+        this._guard('applying the shell tweaks', () => {
+            this._shellTweaks = new ShellTweaks(this.metadata.uuid, this._settings);
+        });
+
+        // Automatic brightness that fades rather than jumps, where the shell
+        // sets the brightness itself (GNOME 49 on).
+        this._guard('smoothing automatic brightness', () => {
+            this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
+        });
+
+        // GNOME can close a window from the keyboard but has nothing that
+        // quits an app, so Cmd+Q is a binding of our own. The shell rebinds it
+        // whenever the setting changes.
+        this._guard('moving Cmd+Q to quit', () => this._migrateQuitShortcut());
+        Main.wm.addKeybinding('quit-app', this._settings, Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL, () => this._quitFocusedApp());
+        this._quitBound = true;
+    }
+
+    _quitFocusedApp() {
+        const window = global.display.get_focus_window();
+        // Surfaces kept off the taskbar, such as desktop icons, are not apps
+        // anyone would mean to quit, and quitting one takes the desktop with it.
+        if (!window || window.is_skip_taskbar())
+            return;
+        quitApp(Shell.WindowTracker.get_default().get_window_app(window), window);
+    }
+
+    // Earlier versions put Cmd+Q on GNOME's close binding, which closes one
+    // window. Move it over, but only where Cmd+W is there too: that pair is
+    // what the macOS Window Shortcuts switch wrote, so the Cmd+Q is ours.
+    _migrateQuitShortcut() {
+        const wm = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
+        const close = wm.get_strv('close');
+        if (!close.includes('<Super>q') || !close.includes('<Super>w'))
+            return;
+        wm.set_strv('close', close.filter(accel => accel !== '<Super>q'));
+        const quit = this._settings.get_strv('quit-app');
+        if (!quit.includes('<Super>q'))
+            this._settings.set_strv('quit-app', [...quit, '<Super>q']);
     }
 
     // Apply or undo each panel tweak to match its setting. Safe to call again
@@ -186,6 +286,7 @@ export default class GlobalMenuExtension extends Extension {
             this._guard('moving the clock', () => this._moveClockToRight());
         else if (!clockOnRight && this._clockMoved)
             this._guard('restoring the clock', () => this._restoreClock());
+        this._guard('watching the clock', () => this._watchClock());
 
         if (this._settings.get_boolean('hide-power-button'))
             this._guard('hiding the power icon', () => this._hidePowerButton());
@@ -236,7 +337,7 @@ export default class GlobalMenuExtension extends Extension {
         this._releaseOverviewButton();
         this._hiddenSpacers = [];
         this._gapped.clear();
-        this._padded.clear();
+        this._releasePadded();
         this._spotlightMoved = null;
     }
 
@@ -291,7 +392,7 @@ export default class GlobalMenuExtension extends Extension {
 
         for (const button of this._statusAreaButtons()) {
             this._restyle(button, style);
-            this._padded.add(button);
+            this._remember(button);
 
             // Quick Settings puts several icons in a single button, so the room
             // between those comes from the box holding them, not from the
@@ -301,9 +402,35 @@ export default class GlobalMenuExtension extends Extension {
             const box = this._indicatorsBox(button);
             if (box) {
                 this._restyle(box, `spacing: ${padding * 2}px;`);
-                this._padded.add(box);
+                this._remember(box);
             }
         }
+    }
+
+    // Kept so disable() can put it back. An actor leaves the set as it is
+    // destroyed: tray icons are destroyed when their app quits and made again
+    // when it starts, so a set that kept every one would grow as long as the
+    // session lasts — and undoing one the shell has finished with is a call on
+    // a disposed object, which gjs reports as a critical rather than a throw.
+    _remember(actor) {
+        if (this._padded.has(actor))
+            return;
+
+        this._padded.add(actor);
+        actor.connectObject('destroy', () => this._padded.delete(actor), this);
+    }
+
+    // Stops remembering without undoing, for actors the panel is being rebuilt
+    // around.
+    _releasePadded() {
+        for (const actor of this._padded) {
+            try {
+                actor.disconnectObject(this);
+            } catch {
+                // Went away with a panel rebuild.
+            }
+        }
+        this._padded.clear();
     }
 
     _indicatorsBox(button) {
@@ -330,9 +457,10 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     _clearIconPadding() {
-        for (const button of this._padded) {
+        for (const actor of this._padded) {
             try {
-                this._restyle(button, null);
+                this._restyle(actor, null);
+                actor.disconnectObject(this);
             } catch {
                 // Went away with a panel rebuild.
             }
@@ -344,7 +472,13 @@ export default class GlobalMenuExtension extends Extension {
     // adds them in vfunc_get_preferred_width, so Clutter has no idea the width
     // it already cached depends on them: restyling alone updates the numbers and
     // changes nothing on screen. Asking for the relayout is what applies it.
+    //
+    // A button that already has the style is left alone: each late indicator
+    // runs this over the whole cluster again, and a relayout of all of it for
+    // buttons that are already right would be for nothing.
     _restyle(button, style) {
+        if ((button.get_style() ?? null) === style)
+            return;
         button.set_style(style);
         button.queue_relayout();
         button.get_parent()?.queue_relayout();
@@ -372,6 +506,40 @@ export default class GlobalMenuExtension extends Extension {
                 }
             })
             .filter(isButton);
+    }
+
+    // The padding above goes on once per pass over the panel, and the panel gets
+    // a pass at start-up and after each rebuild. An indicator that arrives
+    // between those is left with the theme's padding rather than the setting's,
+    // so it sits at the wrong distance from its neighbours until the next lock
+    // and unlock. Vitals is enabled after this extension, a tray icon appears
+    // whenever its app starts (AppIndicator adds them to this box), and an
+    // extension that makes its indicator again hands the panel a new one.
+    _watchRightBox() {
+        const rightBox = Main.panel._rightBox;
+        if (!rightBox)
+            return;
+
+        const [added] = childSignals(rightBox);
+        rightBox.connectObject(added, () => this._queueIndicatorPadding(), this);
+    }
+
+    // Nothing is touched from the signal itself: the box is part-way through
+    // taking the child, and on GNOME 50 changing actors while Clutter is
+    // delivering a signal can abort the shell. An indicator is also not finished
+    // when it arrives — its extension keeps building it for a moment longer — so
+    // waiting for idle lets it settle, and one pass covers a burst of them.
+    _queueIndicatorPadding() {
+        if (this._indicatorPaddingId)
+            return;
+
+        this._indicatorPaddingId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._indicatorPaddingId = 0;
+            // A queued signal can still arrive after disable() has run.
+            if (this._settings)
+                this._guard('padding a late indicator', () => this._applyIconPadding());
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _hideSpacers() {
@@ -485,6 +653,10 @@ export default class GlobalMenuExtension extends Extension {
     // Must update sessionMode.panel then _updatePanel(), otherwise Shell
     // restores the centered dateMenu on the next layout pass.
     _moveClockToRight() {
+        // Placed anew, so whatever was let go of in a fight is ours again.
+        this._clockReturns = [];
+        this._clockLetGo = false;
+
         let layout = Main.sessionMode?.panel;
         if (!layout) {
             this._moveClockFallback();
@@ -519,8 +691,12 @@ export default class GlobalMenuExtension extends Extension {
     // The power glyph is the indicator icon inside the Quick Settings system
     // item. Hiding the whole item would take the battery readout with it, and
     // collapsing it in CSS only stops it reserving space — it still paints,
-    // over the clock. So hide that one actor, and keep it hidden: GNOME re-runs
-    // its own visibility sync whenever the battery or recording state changes.
+    // over the clock. So hide that one actor, and keep it hidden.
+    //
+    // It is only the power glyph on a machine without a battery, though. With
+    // one, the shell draws the battery in that same icon — starting from the
+    // glyph at login and switching once UPower answers — so it is watched rather
+    // than hidden once, and shown whenever it is a battery.
     _hidePowerButton() {
         let system = Main.panel.statusArea.quickSettings?._system;
         // On shells where `_system` exists but `_indicator` does not — usually
@@ -537,7 +713,7 @@ export default class GlobalMenuExtension extends Extension {
 
         // Compare against the actor rather than just "have we run", because a
         // panel rebuild replaces it and leaves us holding a destroyed one.
-        if (this._powerHidden === indicator)
+        if (this._powerIndicator === indicator)
             return;
 
         // Found it, so clear the poll budget: a later rebuild in the same
@@ -546,16 +722,26 @@ export default class GlobalMenuExtension extends Extension {
 
         this._releasePowerButton();
 
-        indicator.hide();
-        this._powerVisibleId = indicator.connect('notify::visible', () => {
-            if (indicator.visible)
-                indicator.hide();
-        });
+        this._powerIndicator = indicator;
+        this._powerVisibleId = indicator.connect('notify::visible',
+            () => this._syncPowerIcon(indicator));
+        this._powerIconId = indicator.connect('notify::gicon',
+            () => this._syncPowerIcon(indicator));
         // The shell rebuilds the panel more than once while starting up, so the
         // icon hidden during enable() is often not the one left on screen.
         this._powerDestroyId = indicator.connect('destroy',
             () => this._queuePanelResync());
-        this._powerHidden = indicator;
+        this._syncPowerIcon(indicator);
+    }
+
+    // Hidden while it is the power glyph, shown while it is anything else. The
+    // shell's status/system.js only ever swaps what this icon shows and never
+    // hides it, so showing it overrules nothing the shell decided. Each change
+    // comes back through notify::visible and finds nothing left to do.
+    _syncPowerIcon(indicator) {
+        const isPowerGlyph = indicator.icon_name === POWER_GLYPH;
+        if (indicator.visible === isPowerGlyph)
+            indicator.visible = !isPowerGlyph;
     }
 
     // The system item is built asynchronously while the shell starts, and
@@ -575,22 +761,23 @@ export default class GlobalMenuExtension extends Extension {
 
     // Forget the icon without revealing it: used when swapping to a newer one.
     _releasePowerButton() {
-        if (!this._powerHidden)
+        if (!this._powerIndicator)
             return;
 
-        for (const id of [this._powerVisibleId, this._powerDestroyId]) {
+        for (const id of [this._powerVisibleId, this._powerIconId, this._powerDestroyId]) {
             if (!id)
                 continue;
             try {
-                this._powerHidden.disconnect(id);
+                this._powerIndicator.disconnect(id);
             } catch {
                 // Destroyed with the old panel.
             }
         }
 
         this._powerVisibleId = 0;
+        this._powerIconId = 0;
         this._powerDestroyId = 0;
-        this._powerHidden = null;
+        this._powerIndicator = null;
     }
 
     // Re-apply the tweaks once the current batch of panel changes has settled.
@@ -606,7 +793,7 @@ export default class GlobalMenuExtension extends Extension {
     }
 
     _showPowerButton() {
-        let indicator = this._powerHidden;
+        let indicator = this._powerIndicator;
         this._releasePowerButton();
 
         try {
@@ -663,6 +850,91 @@ export default class GlobalMenuExtension extends Extension {
         this._clockLayout = null;
     }
 
+    // The clock is put in the corner once, by the layout above, and another
+    // extension can take it away again afterwards: Just Perfection, at its
+    // defaults, moves it back to the centre whenever it is enabled — at login,
+    // at every unlock, and when it is installed mid-session — and the layout
+    // still says right, so nothing would ever put it back. So the clock is
+    // watched for being moved, by anyone.
+    //
+    // The clock is one actor for the life of the shell, but it is asked for
+    // again on every pass rather than remembered, in case a rebuild ever makes
+    // a new one.
+    _watchClock() {
+        const container = Main.panel.statusArea.dateMenu?.container ?? null;
+        if (container === this._clockWatched)
+            return;
+
+        this._unwatchClock();
+        if (!container)
+            return;
+
+        container.connectObject('parent-set', () => this._queueClockHold(), this);
+        this._clockWatched = container;
+    }
+
+    _unwatchClock() {
+        try {
+            this._clockWatched?.disconnectObject(this);
+        } catch {
+            // Disposed with the panel at logout.
+        }
+        this._clockWatched = null;
+    }
+
+    // Nothing moves from the signal itself: it arrives while the other side is
+    // half-way through reparenting the clock, and on GNOME 50 changing the
+    // actor tree during a signal can abort the shell. Our own rebuilds move it
+    // too, and the check on idle finds it where it belongs and does nothing.
+    _queueClockHold() {
+        if (this._clockHoldId)
+            return;
+
+        this._clockHoldId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._clockHoldId = 0;
+            this._guard('keeping the clock on the right', () => this._holdClock());
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Puts the clock back at the end of the right box if something has moved
+    // it to the centre or the left. Only from those two: anywhere else is a
+    // panel someone else has built, and a clock moved within the right box was
+    // placed there on purpose. And only while the layout that says right is
+    // the live one — the lock screen's has the clock in the centre, rightly.
+    //
+    // An extension that holds the clock where it wants it, by moving it back
+    // each time it is moved, would have the two at it for as long as the
+    // session lasts. So after a few returns in quick succession the clock is
+    // left where the other one put it, until it is next placed from scratch.
+    _holdClock() {
+        if (!this._settings?.get_boolean('clock-on-the-right') || !this._clockMoved || this._clockLetGo)
+            return;
+        if (this._clockLayout && this._clockLayout !== Main.sessionMode?.panel)
+            return;
+
+        const container = Main.panel.statusArea.dateMenu?.container;
+        const rightBox = Main.panel._rightBox;
+        const parent = container?.get_parent();
+        if (!parent || !rightBox || parent === rightBox)
+            return;
+        if (parent !== Main.panel._centerBox && parent !== Main.panel._leftBox)
+            return;
+
+        const now = GLib.get_monotonic_time();
+        this._clockReturns = this._clockReturns.filter(time => now - time < CLOCK_RETURN_WINDOW_US);
+        if (this._clockReturns.length >= CLOCK_RETURN_LIMIT) {
+            this._clockLetGo = true;
+            console.warn(`[${this.metadata.uuid}] Something keeps moving the clock out of the corner; ` +
+                'leaving it there until the next unlock, or until Clock on the Right is switched off and on.');
+            return;
+        }
+        this._clockReturns.push(now);
+
+        parent.remove_child(container);
+        rightBox.add_child(container);
+    }
+
     _syncLogoButton() {
         if (!this._settings)
             return;
@@ -700,6 +972,48 @@ export default class GlobalMenuExtension extends Extension {
             this._searchButton.destroy();
             this._searchButton = null;
         }
+    }
+
+    // The magnifier copes with Dash to Dock coming and going by itself, so this
+    // only has to follow the switch, and hand on the size.
+    _syncDockMagnifier() {
+        if (!this._settings)
+            return;
+
+        if (!this._settings.get_boolean('dock-magnification')) {
+            this._dropDockMagnifier();
+            return;
+        }
+
+        const size = this._settings.get_int('dock-magnification-size');
+        if (this._dockMagnifier)
+            this._dockMagnifier.setSize(size);
+        else
+            this._dockMagnifier = new DockMagnifier(size);
+    }
+
+    _dropDockMagnifier() {
+        const magnifier = this._dockMagnifier;
+        this._dockMagnifier = null;
+        magnifier?.destroy();
+    }
+
+    // Dash to Dock's own stylesheet puts a grey backdrop behind the focused
+    // app's icon; the macOS Dock marks it with the running dot alone. The rule
+    // that removes it is in stylesheet.css, keyed off a class on the UI group:
+    // that is the docks' parent, and it outlives every dock Dash to Dock builds
+    // and throws away, so no dock actor is touched and nothing has to follow
+    // them. A style class is not a change to the actor tree, so this needs no
+    // idle of its own — it runs where the panel's class is claimed.
+    _syncDockFocusHighlight() {
+        if (!this._settings)
+            return;
+
+        const uiGroup = Main.layoutManager.uiGroup;
+        if (this._settings.get_boolean('dock-focus-highlight'))
+            uiGroup.remove_style_class_name(DOCK_PLAIN_FOCUS_CLASS);
+        else
+            uiGroup.add_style_class_name(DOCK_PLAIN_FOCUS_CLASS);
     }
 
     // Driven by what is actually on screen rather than by a remembered flag,
@@ -861,6 +1175,8 @@ export default class GlobalMenuExtension extends Extension {
         global.display.disconnectObject(this);
         global.window_manager.disconnectObject(this);
         global.workspace_manager.disconnectObject(this);
+        this._guard('unwatching the right box', () => Main.panel._rightBox?.disconnectObject(this));
+        this._unwatchClock();
         this._unwatchMinimized();
 
         if (this._sessionModeId) {
@@ -868,11 +1184,17 @@ export default class GlobalMenuExtension extends Extension {
             this._sessionModeId = 0;
         }
 
-        for (const source of ['_resyncId', '_menuSyncId', '_powerRetryId', '_overviewRetryId']) {
+        for (const source of ['_resyncId', '_indicatorPaddingId', '_menuSyncId', '_powerRetryId', '_overviewRetryId',
+            '_clockHoldId']) {
             if (this[source]) {
                 GLib.source_remove(this[source]);
                 this[source] = 0;
             }
+        }
+
+        if (this._quitBound) {
+            Main.wm.removeKeybinding('quit-app');
+            this._quitBound = false;
         }
 
         if (this._settings && this._settingsChangedId) {
@@ -895,6 +1217,17 @@ export default class GlobalMenuExtension extends Extension {
             this._searchButton = null;
         }
 
+        // Gives Dash to Dock's icons their opacity back and removes the overlay
+        // drawn above them, whether or not the pointer is on the dock.
+        this._guard('removing dock magnification', () => this._dropDockMagnifier());
+
+        this._guard('restoring the shell tweaks', () => this._shellTweaks?.destroy());
+        this._shellTweaks = null;
+
+        // Stops the fade and applies where it was heading.
+        this._guard('restoring automatic brightness', () => this._smoothBrightness?.destroy());
+        this._smoothBrightness = null;
+
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one
         // of them may already be gone. A throw here would abandon the rest of
@@ -908,6 +1241,8 @@ export default class GlobalMenuExtension extends Extension {
         this._guard('showing the power icon', () => this._showPowerButton());
         this._guard('dropping the panel style', () =>
             Main.panel.remove_style_class_name('pearup-panel'));
+        this._guard('restoring the dock highlight', () =>
+            Main.layoutManager.uiGroup.remove_style_class_name(DOCK_PLAIN_FOCUS_CLASS));
 
         this._settings = null;
     }

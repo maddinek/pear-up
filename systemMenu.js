@@ -104,6 +104,10 @@ const ICONS = {
 // rather than hardcoded, so the menu shows the shortcut this system has.
 const MEDIA_KEYS_SCHEMA = 'org.gnome.settings-daemon.plugins.media-keys';
 
+// An administrator can lock logging out away here. It is the one reason left
+// to grey Log Out out; see _addLogOut().
+const LOCKDOWN_SCHEMA = 'org.gnome.desktop.lockdown';
+
 const MODIFIER_LABELS = [
     [/<(Control|Primary|Ctrl)>/g, 'Ctrl+'],
     [/<Shift>/g, 'Shift+'],
@@ -149,6 +153,7 @@ export const SystemMenuButton = GObject.registerClass(
         this._settings = settings;
         this._extensionPath = extensionPath;
         this._systemActions = SystemActions.getDefault();
+        this._actionItems = [];
 
         this._icon = new St.Icon({
             style_class: 'pearup-logo-icon system-status-icon',
@@ -159,6 +164,7 @@ export const SystemMenuButton = GObject.registerClass(
 
         this._syncIcon();
         this._rebuildMenu();
+        this._watchActionAvailability();
 
         this._settings.connectObject('changed', (_settings, key) => {
             if (['logo-icon-name', 'logo-custom-icon-path', 'logo-distro-icon',
@@ -221,6 +227,7 @@ export const SystemMenuButton = GObject.registerClass(
     // a setting is turned off.
     _rebuildMenu() {
         this.menu.removeAll();
+        this._actionItems = [];
         this._iconTheme = this._newIconTheme();
 
         const setting = key => this._settings.get_boolean(key);
@@ -261,7 +268,8 @@ export const SystemMenuButton = GObject.registerClass(
 
         // These throw outright when the action is unavailable — restricted by
         // lockdown, or no suspend support — so ask first and grey the item out
-        // rather than offering something that fails on click.
+        // rather than offering something that fails on click. The answer is
+        // not a constant, so it is asked again each time the menu opens.
         const powerGroup = setting('show-power-options') ? [
             () => this._addSystemAction('Sleep', ICONS.sleep, 'canSuspend', 'activateSuspend'),
             () => this._addSystemAction('Restart…', ICONS.restart, 'canRestart', 'activateRestart'),
@@ -276,9 +284,8 @@ export const SystemMenuButton = GObject.registerClass(
         }
         if (setting('show-log-out')) {
             const name = this._userName();
-            sessionGroup.push(() => this._addSystemAction(
+            sessionGroup.push(() => this._addLogOut(
                 name ? `Log Out ${name}…` : 'Log Out…',
-                ICONS.logOut, 'canLogout', 'activateLogout',
                 this._acceleratorFor('logout')));
         }
 
@@ -445,7 +452,6 @@ export const SystemMenuButton = GObject.registerClass(
     // throw out of the click handler.
     _addSystemAction(label, iconNames, available, method, accelerator = null) {
         let actions = this._systemActions;
-        let usable = actions?.[available] !== false;
 
         let item = this._addItem(label, iconNames, () => {
             try {
@@ -456,10 +462,97 @@ export const SystemMenuButton = GObject.registerClass(
             }
         }, accelerator);
 
-        if (!usable)
-            item.setSensitive(false);
-
+        this._trackSensitivity(item, () => this._systemActions?.[available] !== false);
         return item;
+    }
+
+    // Log Out does not go through SystemActions, although GNOME has an action
+    // for it. Its `canLogout` says whether the shell offers a Log Out entry of
+    // its own, and the shell does not on a machine with one local user and no
+    // other session, such as a laptop with one account: it reads false there,
+    // and activateLogout() throws when it does. macOS has no such case — you
+    // can always log out of a Mac — and a greyed item here, which also depended
+    // on whether AccountsService had answered by the time the menu was built,
+    // said the opposite. So this asks gnome-session, as the shell does, and
+    // leaves the one thing that really forbids logging out, the lockdown key,
+    // to grey the item.
+    _addLogOut(label, accelerator = null) {
+        const item = this._addItem(label, ICONS.logOut, () => this._logOut(), accelerator);
+        this._trackSensitivity(item, () => !this._logOutLockedDown());
+        return item;
+    }
+
+    // Mode 0 is the ordinary logout, with the shell's confirmation dialog and
+    // its countdown — what activateLogout() asks for, overview hidden first
+    // like there.
+    _logOut() {
+        Main.overview.hide();
+        Gio.DBus.session.call(
+            'org.gnome.SessionManager', '/org/gnome/SessionManager',
+            'org.gnome.SessionManager', 'Logout',
+            new GLib.Variant('(u)', [0]), null,
+            Gio.DBusCallFlags.NONE, -1, null,
+            (connection, result) => {
+                try {
+                    connection.call_finish(result);
+                } catch (e) {
+                    // The click already closed the menu; say why nothing
+                    // happened rather than leave it looking dead.
+                    Main.notify('Pear Up', 'Log Out is not available.');
+                    console.warn(`[pear-up] Logout failed: ${e}`);
+                }
+            });
+    }
+
+    _logOutLockedDown() {
+        if (this._lockdown === undefined) {
+            // Touching a key a schema does not define aborts the process, so
+            // look before reading.
+            this._lockdown = schemaExists(LOCKDOWN_SCHEMA)
+                ? new Gio.Settings({ schema_id: LOCKDOWN_SCHEMA })
+                : null;
+            if (this._lockdown && !this._lockdown.settings_schema.has_key('disable-log-out'))
+                this._lockdown = null;
+            this._lockdown?.connectObject('changed::disable-log-out',
+                () => this._syncActionSensitivity(), this);
+        }
+        return this._lockdown?.get_boolean('disable-log-out') ?? false;
+    }
+
+    // Whether an item can be used is decided by something that changes under the
+    // menu, so each one is kept with the question that decides it, and asked
+    // again on every change and every time the menu opens.
+    _trackSensitivity(item, usable) {
+        this._actionItems.push({ item, usable });
+        item.setSensitive(usable());
+    }
+
+    _syncActionSensitivity() {
+        for (const { item, usable } of this._actionItems)
+            item.setSensitive(usable());
+    }
+
+    // The shell works these out asynchronously — gnome-session and polkit are
+    // asked, and answer after the menu has been built — and polkit sends no
+    // notification when its answer changes. GNOME's own power menu therefore
+    // asks again whenever it is shown, and listens for the answers. Built once
+    // and never revisited, this menu greyed out Sleep, Restart and Shut Down
+    // for a whole session whenever it was built before the answers arrived.
+    _watchActionAvailability() {
+        const sync = () => this._syncActionSensitivity();
+        this._systemActions.connectObject(
+            'notify::can-suspend', sync,
+            'notify::can-restart', sync,
+            'notify::can-power-off', sync,
+            'notify::can-lock-screen', sync,
+            this);
+
+        this.menu.connectObject('open-state-changed', (_menu, isOpen) => {
+            if (!isOpen)
+                return;
+            this._systemActions?.forceUpdate?.();
+            this._syncActionSensitivity();
+        }, this);
     }
 
     // macOS names the account in the item — "Log Out Martin…" — which is also
@@ -592,7 +685,11 @@ export const SystemMenuButton = GObject.registerClass(
         this._picker?.destroy();
         this._picker = null;
         this._settings = null;
+        // The shell's one SystemActions outlives this button.
+        this._systemActions?.disconnectObject(this);
         this._systemActions = null;
+        this._actionItems = [];
+        this._lockdown = null;
         this._extensionPath = null;
         this._mediaKeys = null;
         this._icon = null;

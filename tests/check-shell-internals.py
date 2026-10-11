@@ -45,14 +45,27 @@ def main():
 
     missing = [name for name in wanted if name.encode() not in blob]
 
+    # Parts of the shell only some releases have: checked where they are, and
+    # said to be absent where they are not, which is no failure.
+    checked = len(wanted)
+    for part, names in manifest.get("shellInternalsWith", {}).items():
+        if part == "comment":
+            continue
+        if part.encode() not in blob:
+            print(f"  note: no {part} in this shell, so its {len(names)} internals are not checked")
+            continue
+        print(f"  note: {part} is in this shell, so its {len(names)} internals are checked")
+        checked += len(names)
+        missing += [f"{name} (of {part})" for name in names if name.encode() not in blob]
+
     for name in missing:
         print(f"  MISSING: {name} not found in the shell's sources")
 
     if missing:
-        print(f"shell internals: {len(missing)} of {len(wanted)} missing")
+        print(f"shell internals: {len(missing)} of {checked} missing")
         return 1
 
-    print(f"shell internals: all {len(wanted)} present")
+    print(f"shell internals: all {checked} present")
     return 0
 
 

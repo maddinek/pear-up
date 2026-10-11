@@ -34,10 +34,14 @@ EXTRA_SOURCES=(
     menuTemplates.js
     systemMenu.js
     searchButton.js
+    dockMagnifier.js
+    shellTweaks.js
+    smoothBrightness.js
     recentItems.js
     forceQuit.js
     util.js
     icons
+    libinput
 )
 
 PACK_ARGS=()

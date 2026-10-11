@@ -27,6 +27,12 @@
       <description>JSON object mapping "schemaId:key" to the displaced GVariant, serialized so switching a set off can restore the user's own binding even after the preferences window has been closed and reopened.</description>
     </key>
 
+    <key name="displaced-settings" type="s">
+      <default>"{}"</default>
+      <summary>Desktop settings displaced while an Appearance or Windows switch is on</summary>
+      <description>JSON object mapping "schemaId:key" to the GVariant the key held before, serialized so switching the look off can give back the user's own fonts, accent and window behaviour even after the preferences window has been closed and reopened. null means the key was at its default and goes back to it.</description>
+    </key>
+
     <key name="show-logo-menu" type="b"><default>true</default><summary>Show the System Menu button</summary></key>
     <key name="logo-icon-name" type="s"><default>"start-here-symbolic"</default><summary>System icon name for the System Menu button</summary></key>
     <key name="logo-custom-icon-path" type="s">
@@ -76,6 +82,7 @@
     <key name="hide-power-button" type="b">
       <default>true</default>
       <summary>Hide the Quick Settings power icon</summary>
+      <description>The top bar shows a power glyph only on a machine without a battery. With one, the same place shows the battery, which stays.</description>
     </key>
     <key name="hide-panel-spacers" type="b">
       <default>true</default>
@@ -118,6 +125,45 @@
       <range min="0" max="12"/>
       <summary>Padding on each side of a status area item, in pixels</summary>
       <description>Lower values pack the icons and clock more tightly. Zero leaves no space at all between them.</description>
+    </key>
+
+    <!-- The shell's own pieces that are not the bar, where macOS has them. On by
+         default like the bar's own tweaks: they are what makes it look like
+         macOS, and each one gives back exactly what it changed when switched
+         off. Together they cover what Just Perfection was installed for. -->
+    <key name="notifications-top-right" type="b">
+      <default>true</default>
+      <summary>Show notification banners in the top right corner</summary>
+      <description>Under the clock, as on macOS. GNOME puts them under the clock too, centred while it is in the middle; this keeps them on the right wherever the clock is, and whatever another extension sets.</description>
+    </key>
+    <key name="osd-top-right" type="b">
+      <default>true</default>
+      <summary>Show the volume and brightness bubble in the top right corner</summary>
+      <description>Under the bar, as on macOS, instead of at the bottom centre of the screen.</description>
+    </key>
+    <key name="hide-workspace-popup" type="b">
+      <default>true</default>
+      <summary>Show no popup when switching desktops</summary>
+      <description>GNOME shows the desktops for a moment whenever a shortcut switches to another one or moves a window there. macOS only slides the desktop across, which the shell still does.</description>
+    </key>
+    <key name="always-show-workspace-thumbnails" type="b">
+      <default>true</default>
+      <summary>Always show the desktops along the top of the overview</summary>
+      <description>GNOME hides them until two are in use; Mission Control shows its Spaces however many there are.</description>
+    </key>
+    <key name="start-on-desktop" type="b">
+      <default>true</default>
+      <summary>Start on the desktop, not in the overview</summary>
+      <description>GNOME opens the overview at login; macOS shows the desktop. Takes effect at the next login.</description>
+    </key>
+
+    <!-- Only where the shell sets the brightness itself, GNOME 49 on; earlier,
+         gnome-settings-daemon does, and the switch is left out of the
+         preferences. -->
+    <key name="smooth-auto-brightness" type="b">
+      <default>true</default>
+      <summary>Fade automatic brightness changes instead of jumping</summary>
+      <description>With Automatic Screen Brightness on, the screen moves to each new light level over a few seconds, brightening faster than it darkens, as on macOS. The brightness slider and keys still act at once, and so does dimming when idle.</description>
     </key>
 
     <!-- The panel button is this extension's own, so it works with no search
@@ -179,9 +225,34 @@
     </key>
 
     <key name="desktop-app-name" type="s">
-      <default>"Nautilus"</default>
-      <summary>Name shown for the file manager / desktop placeholder in the App menu</summary>
-      <description>Used for File menu items such as "New X Window" while an app is focused. The App menu no longer uses this as a fallback when every window is minimized.</description>
+      <default>""</default>
+      <summary>Name for the file manager in File → New … Window</summary>
+      <description>Used in the File menu's "New X Window" item while a file manager is in front. Empty, the default, uses the name the system gives the application, such as "Files".</description>
+    </key>
+
+    <key name="dock-magnification" type="b">
+      <default>false</default>
+      <summary>Magnify dock icons under the pointer</summary>
+      <description>Dash to Dock icons near the pointer grow and push their neighbours apart, as on macOS. Pear Up draws this over Dash to Dock at runtime; none of Dash to Dock's own settings change.</description>
+    </key>
+    <key name="dock-magnification-size" type="i">
+      <default>175</default>
+      <range min="110" max="300"/>
+      <summary>How large the icon under the pointer grows, in percent of its normal size</summary>
+      <description>110 is a hint of movement, 300 triples the icon. Neighbours grow less the further they are from the pointer.</description>
+    </key>
+    <!-- Off by default, as on macOS, where the dock marks the app in front with
+         its running dot and nothing else. -->
+    <key name="dock-focus-highlight" type="b">
+      <default>false</default>
+      <summary>Keep Dash to Dock's backdrop behind the focused app</summary>
+      <description>Dash to Dock draws a grey backdrop behind the icon of the app in front. When this is off, Pear Up's stylesheet removes it; none of Dash to Dock's own settings change.</description>
+    </key>
+
+    <key name="quit-app" type="as">
+      <default>[]</default>
+      <summary>Shortcut that quits the focused app</summary>
+      <description>Every window of the app, the way Cmd+Q works on macOS. GNOME's own close binding only takes one window. The macOS Window Shortcuts switch puts Super+Q here.</description>
     </key>
 
     <key name="debug-logging" type="b">

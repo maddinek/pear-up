@@ -4,6 +4,7 @@
 import system from 'system';
 import {
     isFileManager,
+    fileManagerName,
     fileMenu,
     goMenu,
     viewMenu,
@@ -46,6 +47,22 @@ const filesFile = fileMenu(true, 'Nautilus').children.map(item => item.label);
 check('file-manager File has New Folder', filesFile.includes('New Folder'));
 check('file-manager File has New Nautilus Window',
     filesFile.includes('New Nautilus Window'));
+
+// New … Window names the app the way the bar does. It said "Nautilus", the code
+// name of what the system calls Files, because it took the name from a setting
+// whose default was that.
+check('the file manager is called what the system calls it',
+    fileManagerName('', 'Files') === 'Files');
+check('a name from the settings wins over the system\'s',
+    fileManagerName('Finder', 'Files') === 'Finder');
+check('a blank setting means the system\'s name',
+    fileManagerName('  ', 'Files') === 'Files' && fileManagerName(undefined, 'Files') === 'Files');
+check('a setting is used as typed, spaces around it aside',
+    fileManagerName(' My Files ', 'Files') === 'My Files');
+check('with neither there is still a name', fileManagerName('', '') === 'Files');
+const byDisplayName = fileMenu(true, fileManagerName('', 'Files')).children.map(item => item.label);
+check('file-manager File says New Files Window',
+    byDisplayName.includes('New Files Window') && !byDisplayName.includes('New Nautilus Window'));
 
 const genericGo = goMenu(false).children.map(item => item.label);
 check('generic Go has Back', genericGo.includes('Back'));

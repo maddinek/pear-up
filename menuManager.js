@@ -16,8 +16,10 @@ import * as BoxPointer from "resource:///org/gnome/shell/ui/boxpointer.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { LOGO_ROLE } from './systemMenu.js';
 import { pinTranslationX } from './menuPin.js';
+import { quitApp } from './util.js';
 import {
     isFileManager,
+    fileManagerName,
     compactMenuItems,
     fileMenu,
     editMenu,
@@ -60,6 +62,16 @@ const SYNTHESISED_SHORTCUTS = {
     'properties': '<Alt>Return',
     'native-open-with': '<Shift>F10',
 };
+
+// The windows the menu bar speaks for. A dialog is its app's window like any
+// other, and the app's menus still apply to it; the preferences window of an
+// extension, Pear Up's own among them, is one — GNOME's Extensions app opens it
+// as a modal dialog — and the bar stood empty whenever it was in front.
+const MENU_WINDOW_TYPES = new Set([
+    Meta.WindowType.NORMAL,
+    Meta.WindowType.DIALOG,
+    Meta.WindowType.MODAL_DIALOG,
+]);
 
 // Chosen from the context menu opened by Shift+F10 above. This assumes an
 // English menu, so it will miss in other languages.
@@ -254,16 +266,12 @@ const TopLevelMenuButton = GObject.registerClass(
                 window.delete(global.get_current_time());
             return true;
         } else if (action === "quit") {
-            if (this._appInstance) {
-                for (const win of this._appInstance.get_windows()) {
-                    try {
-                        win.delete(global.get_current_time());
-                    } catch (e) {
-                        logError(`[pear-up] Failed to close window: ${e}`);
-                    }
-                }
-            } else if (window) {
-                window.delete(global.get_current_time());
+            // The same quit as Cmd+Q, so the menu item and the shortcut
+            // cannot drift apart.
+            try {
+                quitApp(this._appInstance, window);
+            } catch (e) {
+                logError(`[pear-up] Failed to quit: ${e}`);
             }
             return true;
         } else if (action === "minimize") {
@@ -616,7 +624,7 @@ export class MenuManager {
             if (typeof window.showing_on_its_workspace === 'function' &&
                 !window.showing_on_its_workspace())
                 return false;
-            if (window.get_window_type() !== Meta.WindowType.NORMAL)
+            if (!MENU_WINDOW_TYPES.has(window.get_window_type()))
                 return false;
         } catch {
             return false;
@@ -625,7 +633,7 @@ export class MenuManager {
     }
 
     updateMenuForWindow(window) {
-        let appName = this._settings.get_string('desktop-app-name') || 'Nautilus';
+        let appName = '';
         let isAppFocused = false;
         let desktopId = "";
         let detectedApp = null;
@@ -634,7 +642,7 @@ export class MenuManager {
         if (this._isFrontmostWindow(window)) {
             let windowType = window.get_window_type();
 
-            if (windowType === Meta.WindowType.NORMAL) {
+            if (MENU_WINDOW_TYPES.has(windowType)) {
                 let tracker = Shell.WindowTracker.get_default();
                 detectedApp = tracker.get_window_app(window);
 
@@ -666,7 +674,6 @@ export class MenuManager {
             }
         }
 
-        let fileManagerName = this._settings.get_string('desktop-app-name') || 'Nautilus';
         let isFiles = isFileManager(desktopId, wmClass);
 
         // Nothing in front: keep the System Menu (pear) and any custom
@@ -693,7 +700,8 @@ export class MenuManager {
         }
 
         if (this._settings.get_boolean('menu-file-enabled'))
-            menuData.push(fileMenu(isFiles, fileManagerName));
+            menuData.push(fileMenu(isFiles,
+                fileManagerName(this._settings.get_string('desktop-app-name'), appName)));
         if (this._settings.get_boolean('menu-edit-enabled'))
             menuData.push(editMenu());
         if (this._settings.get_boolean('menu-view-enabled'))

@@ -54,13 +54,21 @@ export function compactMenuItems(items) {
     return squeezed;
 }
 
-export function fileMenu(isFiles, fileManagerName) {
+// What File → New … Window calls the file manager. A name chosen in the settings
+// wins; without one it is what the system calls the app — "Files", where the
+// code name of the same app is Nautilus — so the item says what the bar's app
+// name says.
+export function fileManagerName(configured, appName) {
+    return (configured ?? '').trim() || appName || 'Files';
+}
+
+export function fileMenu(isFiles, managerName) {
     if (isFiles) {
         return {
             type: 'submenu',
             label: 'File',
             children: [
-                { label: `New ${fileManagerName} Window`, action: 'new-file-manager-win' },
+                { label: `New ${managerName} Window`, action: 'new-file-manager-win' },
                 { label: 'New Folder', action: 'new-folder' },
                 { label: 'New Tab', action: 'new-tab' },
                 { label: 'Open', action: 'virtual-open' },
