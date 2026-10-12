@@ -18,6 +18,7 @@ import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
+import * as WindowManager from 'resource:///org/gnome/shell/ui/windowManager.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as Screenshot from 'resource:///org/gnome/shell/ui/screenshot.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
@@ -129,6 +130,22 @@ const IFACE = `
     <method name="PressKeys">
       <arg type="as" direction="in" name="keys"/>
       <arg type="b" direction="out" name="pressed"/>
+    </method>
+    <method name="WatchWindowAnimations">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="d" direction="in" name="slowDown"/>
+      <arg type="b" direction="out" name="watching"/>
+    </method>
+    <method name="GetWindowAnimations">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="StandInLikeMagicLamp">
+      <arg type="b" direction="in" name="on"/>
+      <arg type="b" direction="out" name="done"/>
+    </method>
+    <method name="CloseWindows">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="i" direction="out" name="closed"/>
     </method>
     <method name="CountWindows">
       <arg type="s" direction="in" name="wmClass"/>
@@ -534,6 +551,8 @@ export default class TestHookExtension extends Extension {
     }
 
     disable() {
+        this._stopWatchingAnimations();
+        this.StandInLikeMagicLamp(false);
         this.LogoutCalls();
         this.ReleaseLeftEdge();
         this._stopBannerTrace();
@@ -970,6 +989,115 @@ export default class TestHookExtension extends Extension {
         for (const keyval of [...keyvals].reverse())
             this._keyboard.notify_keyval(time++, keyval, Clutter.KeyState.RELEASED);
         return true;
+    }
+
+    // Samples the scale, pivot and opacity of the windows of one class from the
+    // moment the compositor maps or destroys them, every few milliseconds,
+    // until the animation is over. The slow-down factor stretches the
+    // shell's animations so there are enough samples to tell them apart;
+    // 1 puts it back.
+    WatchWindowAnimations(wmClass, slowDown) {
+        this._stopWatchingAnimations();
+        St.Settings.get().slow_down_factor = slowDown;
+        if (!wmClass)
+            return false;
+        this._animations = { open: [], close: [] };
+        const watch = (kind, actor) => {
+            if (actor.meta_window?.get_wm_class() !== wmClass)
+                return;
+            const samples = [];
+            this._animations[kind].push(samples);
+            const start = GLib.get_monotonic_time();
+            let gone = false;
+            let sourceId = 0;
+            const destroyId = actor.connect('destroy', () => {
+                gone = true;
+            });
+            const stop = () => {
+                this._animationSources.delete(sourceId);
+                return GLib.SOURCE_REMOVE;
+            };
+            const sample = () => {
+                if (gone) {
+                    samples.push({ t: (GLib.get_monotonic_time() - start) / 1000, gone: true });
+                    return stop();
+                }
+                const [px, py] = actor.get_pivot_point();
+                samples.push({
+                    t: (GLib.get_monotonic_time() - start) / 1000,
+                    sx: actor.scale_x, sy: actor.scale_y, px, py,
+                    opacity: actor.opacity,
+                    ownEase: Object.hasOwn(actor, 'ease'),
+                });
+                if (samples.length < 400)
+                    return GLib.SOURCE_CONTINUE;
+                actor.disconnect(destroyId);
+                return stop();
+            };
+            sample();
+            sourceId = GLib.timeout_add(GLib.PRIORITY_HIGH, 8, sample);
+            this._animationSources.add(sourceId);
+        };
+        this._animationSignals = [
+            global.window_manager.connect('map', (_wm, actor) => watch('open', actor)),
+            global.window_manager.connect('destroy', (_wm, actor) => watch('close', actor)),
+        ];
+        return true;
+    }
+
+    _stopWatchingAnimations() {
+        for (const id of this._animationSignals ?? [])
+            global.window_manager.disconnect(id);
+        this._animationSignals = [];
+        for (const id of this._animationSources ?? [])
+            GLib.source_remove(id);
+        this._animationSources = new Set();
+    }
+
+    // What was sampled, and whether anything is left behind: windows the shell
+    // still counts as mapping or being destroyed, window actors with an ease()
+    // of their own, and whether the shell's _shouldAnimateActor is its own.
+    GetWindowAnimations() {
+        const own = Main.wm._shouldAnimateActor;
+        return JSON.stringify({
+            ...(this._animations ?? { open: [], close: [] }),
+            mapping: Main.wm._mapping?.size ?? null,
+            destroying: Main.wm._destroying?.size ?? null,
+            ownEase: global.get_window_actors().filter(actor => Object.hasOwn(actor, 'ease')).length,
+            shouldAnimateActor: own === WindowManager.WindowManager.prototype._shouldAnimateActor
+                ? 'the shell\'s' : own?.name ?? null,
+            shouldAnimateActorOwn: Object.hasOwn(Main.wm, '_shouldAnimateActor'),
+            animations: St.Settings.get().enable_animations,
+        });
+    }
+
+    // Wraps the window manager's _shouldAnimateActor the way Magic Lamp does
+    // when it is enabled: the method found then is kept and called, and its
+    // own goes on the instance. Off puts back what was kept, as Magic Lamp's
+    // disable() does.
+    StandInLikeMagicLamp(on) {
+        if (on && !this._lampKept) {
+            const kept = Main.wm._shouldAnimateActor;
+            this._lampKept = { kept, own: Object.hasOwn(Main.wm, '_shouldAnimateActor') };
+            Main.wm._shouldAnimateActor = function (actor, types) {
+                return kept.call(Main.wm, actor, types);
+            };
+        } else if (!on && this._lampKept) {
+            if (this._lampKept.own)
+                Main.wm._shouldAnimateActor = this._lampKept.kept;
+            else
+                delete Main.wm._shouldAnimateActor;
+            this._lampKept = null;
+        }
+        return true;
+    }
+
+    CloseWindows(wmClass) {
+        const windows = global.display.list_all_windows()
+            .filter(window => window.get_wm_class() === wmClass);
+        for (const window of windows)
+            window.delete(global.get_current_time());
+        return windows.length;
     }
 
     CountWindows(wmClass) {

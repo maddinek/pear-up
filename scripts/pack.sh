@@ -39,6 +39,7 @@ EXTRA_SOURCES=(
     smoothBrightness.js
     spacesSpring.js
     screenshotThumbnail.js
+    windowAnimations.js
     recentItems.js
     forceQuit.js
     util.js

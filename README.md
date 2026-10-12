@@ -90,7 +90,10 @@ the shell, as the Extensions app does. The small buttons are CSS, kept in a mark
 `~/.config/gtk-4.0/gtk.css` and `~/.config/gtk-3.0/gtk.css` — one reaches libadwaita apps, the other GTK 3
 apps and the Electron ones, such as Claude, ChatGPT and Cursor, that draw GTK 3 title buttons — which
 apps read when they next start. Everything outside the block is left exactly as it is, and rules of your
-own that already shrink the buttons are never removed.
+own that already shrink the buttons are never removed. Optionally, windows open and close as on macOS:
+a new one fades in while growing slightly from its centre, a closing one fades while shrinking, where
+GNOME pops them up from the bottom edge — the shell's own animations restyled, no extra extension
+needed, off by default.
 
 **macOS type, accent, icons and cursor.** One switch sets the interface, document and window-title
 fonts to Adwaita Sans — GNOME's own fork of Inter, shipped from GNOME 48, or Inter itself where that

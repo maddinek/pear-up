@@ -722,6 +722,160 @@ except FileNotFoundError:
 except GLib.Error as exc:
     check("Cmd+Q could be exercised", False, exc.message.splitlines()[0])
 
+# ------------------------------------------- opening and closing like macOS
+# The shell's animations, sampled as they run at a quarter speed. Stock GNOME
+# pops a window up from a sliver at its bottom edge; with Open and Close Like
+# macOS on, it grows from nine tenths around its centre, the same in both
+# directions, and shrinks back to nine tenths as it fades out. A window closed
+# while it is still opening has to be finished all the same, and switching the
+# setting off has to give the shell its own method back. All of it with a
+# stand-in for Magic Lamp in place, which keeps the method it finds when it is
+# enabled and calls that, so a patch that went round it would never be reached.
+def window_animations():
+    return json.loads(hook("GetWindowAnimations"))
+
+
+def open_and_close_test_window(close_at_once=False):
+    hook("WatchWindowAnimations", (TEST_WINDOW_CLASS, 4.0), "(sd)")
+    process = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(200 if close_at_once else 40):
+        if test_windows() >= 1:
+            break
+        GLib.usleep((10 if close_at_once else 100) * 1000)
+    if not close_at_once:
+        GLib.usleep(2000 * 1000)
+    hook("CloseWindows", (TEST_WINDOW_CLASS,), "(s)")
+    GLib.usleep(2500 * 1000)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+    return window_animations()
+
+
+def moving(samples):
+    return [s for s in samples if "sx" in s and 0 < s["opacity"] < 255]
+
+
+def opening(samples):
+    """The samples of a window that has just been mapped, up to the one where
+    it first stands at full size and opacity; the same window's closing comes
+    later in the same series."""
+    for index, s in enumerate(samples):
+        if "sx" in s and s["opacity"] == 255 and s["sx"] == 1 and s["sy"] == 1:
+            return samples[:index + 1]
+    return samples
+
+
+def uniform(samples):
+    return all(abs(s["sx"] - s["sy"]) < 0.01 for s in samples)
+
+
+def centred(samples):
+    return all(abs(s["px"] - 0.5) < 0.01 and abs(s["py"] - 0.5) < 0.01 for s in samples)
+
+
+def span(samples):
+    return round(samples[-1]["t"] - samples[0]["t"]) if samples else 0
+
+
+def describe_samples(samples):
+    return ", ".join(f"{s['sx']:.2f}x{s['sy']:.2f}@{s['opacity']}" for s in samples[:6])
+
+
+print()
+print("  window open and close:")
+try:
+    stock = open_and_close_test_window()
+    check("the test window was mapped and destroyed", stock["open"] and stock["close"],
+          f"{len(stock['open'])} mapped, {len(stock['close'])} destroyed")
+    stock_open = moving(opening(stock["open"][0])) if stock["open"] else []
+    # GNOME 45 run headless here maps the window without animating it at all,
+    # Pear Up or not; there is no shape to check there, only what is left over.
+    animates = bool(stock_open) or any(
+        "sx" in sample and sample["opacity"] < 255
+        for series in stock["open"] for sample in series[1:])
+    hook("StandInLikeMagicLamp", (True,), "(b)")
+    if not animates:
+        print("  note: this shell did not animate the test window at all, "
+              "so only what is left behind is checked")
+        pear_up_setting("macos-window-animations", "true")
+        GLib.usleep(300 * 1000)
+    else:
+        check("stock GNOME pops a window up from a sliver (setting off)",
+              stock_open and (min(s["sx"] for s in stock_open) < 0.5 or not uniform(stock_open)),
+              describe_samples(stock_open))
+
+        pear_up_setting("macos-window-animations", "true")
+        GLib.usleep(300 * 1000)
+        state = window_animations()
+        check("the window manager's _shouldAnimateActor is wrapped while it is on, over Magic Lamp's",
+              state["shouldAnimateActor"] == "wrapper", state["shouldAnimateActor"])
+
+        mac = open_and_close_test_window()
+        opened = opening(mac["open"][0]) if mac["open"] else []
+        closed = mac["close"][0] if mac["close"] else []
+        grow = moving(opened)
+        shrink = moving(closed)
+        check("a window opens growing from nine tenths, evenly, around its centre",
+              len(grow) >= 3 and uniform(grow) and centred(grow)
+              and min(s["sx"] for s in grow) >= 0.89,
+              f"{len(grow)} samples over {span(grow)} ms: {describe_samples(grow)}")
+        # Settled: a sample well after the opening and before the closing began
+        # (the closing sets its own pivot a frame before the window first fades).
+        whole = mac["open"][0] if mac["open"] else []
+        settled = []
+        for sample in whole[len(opened):]:
+            if "sx" not in sample or sample["opacity"] < 255:
+                break
+            settled.append(sample)
+        last = settled[len(settled) // 2:][:1] or [{}]
+        check("it ends at full size and opacity, with the shell's pivot back",
+              last[0].get("sx") == 1 and last[0].get("opacity") == 255
+              and last[0].get("px") == 0 and last[0].get("py") == 0, json.dumps(last[0]))
+        check("a window closes fading and shrinking to nine tenths, around its centre",
+              len(shrink) >= 3 and uniform(shrink) and centred(shrink)
+              and min(s["sx"] for s in shrink) >= 0.89 and max(s["sx"] for s in shrink) <= 1
+              and any(s.get("gone") for s in closed),
+              f"{len(shrink)} samples over {span(shrink)} ms: {describe_samples(shrink)}")
+        print(f"  note: at a quarter speed the opening moved for {span(grow)} ms "
+              f"(stock {span(stock_open)} ms), the closing for {span(shrink)} ms")
+
+    rushed = open_and_close_test_window(close_at_once=True)
+    check("a window closed while it opens is finished, nothing left behind",
+          rushed["mapping"] == 0 and rushed["destroying"] == 0 and rushed["ownEase"] == 0
+          and test_windows() == 0,
+          f"mapping={rushed['mapping']} destroying={rushed['destroying']} "
+          f"ownEase={rushed['ownEase']} windows={test_windows()}")
+
+    pear_up_setting("macos-window-animations", "false")
+    GLib.usleep(300 * 1000)
+    state = window_animations()
+    check("switched off, Magic Lamp's _shouldAnimateActor is on top again",
+          state["shouldAnimateActor"] not in ("wrapper", "the shell's") and state["ownEase"] == 0,
+          f"{state['shouldAnimateActor']!r}, ownEase={state['ownEase']}")
+    hook("StandInLikeMagicLamp", (False,), "(b)")
+    pear_up_setting("macos-window-animations", "true")
+    GLib.usleep(300 * 1000)
+    pear_up_setting("macos-window-animations", "false")
+    GLib.usleep(300 * 1000)
+    state = window_animations()
+    check("on and off again alone, the shell's own method shows through, nothing on the instance",
+          state["shouldAnimateActor"] == "the shell's" and not state["shouldAnimateActorOwn"],
+          f"{state['shouldAnimateActor']!r}, own={state['shouldAnimateActorOwn']}")
+except FileNotFoundError:
+    print("  note: gjs missing, cannot open a window")
+except GLib.Error as exc:
+    check("window animations could be exercised", False, exc.message.splitlines()[0])
+finally:
+    try:
+        hook("WatchWindowAnimations", ("", 1.0), "(sd)")
+        hook("StandInLikeMagicLamp", (False,), "(b)")
+    except GLib.Error:
+        pass
+    pear_up_setting("macos-window-animations", "false")
+
 # ------------------------------------------------ indicators that arrive late
 # The status area is spaced by a pass over the panel at start-up and after each
 # rebuild, so an indicator added in between kept the theme's padding until the

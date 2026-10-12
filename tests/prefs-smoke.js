@@ -1325,6 +1325,30 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         print('  small window buttons: the block goes in and out of both files, touching nothing else');
 }
 
+// Opening and closing like macOS is Pear Up's own key, off by default, and the
+// switch writes it and follows it.
+{
+    const pearUp = preferences.getSettings();
+    const problemsBefore = problems.length;
+    const expect = windowsExpecter('window animations');
+    const TITLE = 'Open and Close Like macOS';
+    const KEY = 'macos-window-animations';
+    const row = windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE);
+    if (!row) {
+        problems.push(`window animations: the Windows page has no "${TITLE}" switch`);
+    } else {
+        expect('the default', pearUp.get_default_value(KEY).unpack(), false);
+        expect('the switch at first', row.active, false);
+        row.active = true;
+        expect(`${KEY} after switching on`, pearUp.get_boolean(KEY), true);
+        pearUp.set_boolean(KEY, false);
+        expect('the switch after an outside change', row.active, false);
+    }
+    pearUp.reset(KEY);
+    if (problems.length === problemsBefore)
+        print('  window animations: off by default, the switch writes and follows its key');
+}
+
 // The extensions the Windows page drives, installed or not. Whether they are is
 // whatever the runner arranged: with PREFS_SMOKE_HELPERS it has put both where
 // GNOME looks, one in the user's data directory and one in a system one.
