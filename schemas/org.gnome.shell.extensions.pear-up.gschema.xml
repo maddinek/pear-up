@@ -241,6 +241,16 @@
       <summary>How large the icon under the pointer grows, in percent of its normal size</summary>
       <description>110 is a hint of movement, 300 triples the icon. Neighbours grow less the further they are from the pointer.</description>
     </key>
+    <key name="dock-bounce-on-launch" type="b">
+      <default>false</default>
+      <summary>Bounce an app's dock icon while it starts</summary>
+      <description>The Dash to Dock icon of an app being launched hops away from the screen edge until its first window appears, as on macOS, for at most ten seconds. Pear Up draws this over Dash to Dock at runtime; none of Dash to Dock's own settings change.</description>
+    </key>
+    <key name="dock-bounce-on-attention" type="b">
+      <default>false</default>
+      <summary>Bounce an app's dock icon when it asks for attention</summary>
+      <description>When a window of an app that is not in front asks for attention, its Dash to Dock icon hops three times, as on macOS, and stops as soon as the app is brought forward.</description>
+    </key>
     <!-- Off by default, as on macOS, where the dock marks the app in front with
          its running dot and nothing else. -->
     <key name="dock-focus-highlight" type="b">
