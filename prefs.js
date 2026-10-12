@@ -11,6 +11,13 @@ import PangoCairo from 'gi://PangoCairo';
 
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 import * as Config from 'resource:///org/gnome/Shell/Extensions/js/misc/config.js';
+import {
+    STEAM_BUTTONS_KEY,
+    applySteamButtons,
+    restoreSteamButtons,
+    steamRoots,
+    steamState,
+} from './steamButtons.js';
 
 // The dock itself is Dash to Dock; these pages only drive its settings so the
 // whole macOS-style desktop can be configured from one window.
@@ -952,6 +959,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         page.add(buttonsGroup);
         this._addWindowButtonsRow(buttonsGroup);
         this._addSmallButtonsRow(buttonsGroup);
+        this._addSteamButtonsRow(buttonsGroup);
 
         const openingGroup = new Adw.PreferencesGroup({
             title: 'Opening',
@@ -1043,6 +1051,65 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 return;
             problem = this._setWindowButtons(row.active);
             // Show what is on disk, not what was asked for.
+            refresh();
+        });
+    }
+
+    // Steam draws its own title bar and never reads GNOME's layout. The row is
+    // there when Steam is, and patches its stylesheets as steamButtons.js
+    // says; the extension keeps the patch through Steam updates. It reads on
+    // when the files are patched, and is greyed out where Adwaita for Steam
+    // has patched them, which has a window-buttons option of its own.
+    _addSteamButtonsRow(group) {
+        const roots = steamRoots();
+        if (roots.length === 0)
+            return;
+
+        const settings = this.getSettings();
+        const wm = new Gio.Settings({ schema_id: WM_PREFERENCES_SCHEMA });
+        const subtitle = 'Steam draws its own title bar and keeps its buttons on the right. This ' +
+            'patches two of its stylesheets so they follow the layout above; Steam shows it the ' +
+            'next time it starts. After a Steam update Pear Up patches it again, and switching ' +
+            'this off puts Steam\'s own files back.';
+        const row = new Adw.SwitchRow({ title: 'Steam: Buttons on the Left', subtitle });
+        row.set_subtitle_lines(0);
+        group.add(row);
+
+        let problem = null;
+        let busy = false;
+        const states = () => roots.map(root => steamState(root));
+        const refresh = () => {
+            busy = true;
+            const all = states();
+            const adwaita = all.some(state => state.adwaita);
+            row.set_active(adwaita ? false : settings.get_boolean(STEAM_BUTTONS_KEY) || all.some(state => state.on));
+            row.set_sensitive(!adwaita);
+            row.set_subtitle(problem ?? (adwaita
+                ? 'Adwaita for Steam has patched Steam already. It moves the buttons itself: ' +
+                  'install it with --windowcontrols-layout auto, which follows GNOME\'s layout.'
+                : subtitle));
+            busy = false;
+        };
+        refresh();
+
+        row.connect('notify::active', () => {
+            if (busy)
+                return;
+            const on = row.active;
+            problem = null;
+            settings.set_boolean(STEAM_BUTTONS_KEY, on);
+            for (const root of roots) {
+                try {
+                    if (on)
+                        applySteamButtons(root, wm.get_string('button-layout'));
+                    else
+                        restoreSteamButtons(root);
+                } catch (e) {
+                    problem = `Could not ${on ? 'patch' : 'restore'} ${this._tildePath(root)}: ${e.message}`;
+                    if (on)
+                        settings.set_boolean(STEAM_BUTTONS_KEY, false);
+                }
+            }
             refresh();
         });
     }

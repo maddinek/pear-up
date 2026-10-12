@@ -334,3 +334,21 @@ echo "  with Blur my Shell installed but without its settings:"
 XDG_DATA_HOME="$BLUR/data" \
     PREFS_SMOKE_BLUR=settingless \
     "${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"
+
+# And with a Steam installation in the user's data directory, as the native
+# client has it: the Windows page then shows Steam: Buttons on the Left, which
+# patches two of its stylesheets. Two made-up ones are enough.
+STEAM_DATA="$WORK/steam-fixtures/data"
+rm -rf "$WORK/steam-fixtures"
+mkdir -p "$STEAM_DATA/Steam/steamui/css"
+{ printf '.title-area{display:flex}\n'; for i in $(seq 40); do printf '.x%s{color:red}\n' "$i"; done; } \
+    > "$STEAM_DATA/Steam/steamui/css/library.css"
+{ printf '._3rMEP{position:absolute}\n'; for i in $(seq 20); do printf '.y%s{color:blue}\n' "$i"; done; } \
+    > "$STEAM_DATA/Steam/steamui/css/gamerecording.css"
+printf 'x={TopBar:"tb",OSX:"o",WindowControls:"wc",DragArea:"d",TitleBarControls:"c",TitleBar:"t"}' \
+    > "$STEAM_DATA/Steam/steamui/chunk~test.js"
+
+echo "  with Steam installed:"
+XDG_DATA_HOME="$STEAM_DATA" \
+    PREFS_SMOKE_STEAM="$STEAM_DATA/Steam" \
+    "${XVFB[@]}" gjs -m "$WORK/tests/prefs-smoke.js" "$WORK"

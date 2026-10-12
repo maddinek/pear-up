@@ -41,6 +41,7 @@ EXTRA_SOURCES=(
     spacesSpring.js
     screenshotThumbnail.js
     windowAnimations.js
+    steamButtons.js
     recentItems.js
     forceQuit.js
     util.js

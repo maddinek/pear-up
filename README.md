@@ -93,7 +93,12 @@ apps read when they next start. Everything outside the block is left exactly as 
 own that already shrink the buttons are never removed. Optionally, windows open and close as on macOS:
 a new one fades in while growing slightly from its centre, a closing one fades while shrinking, where
 GNOME pops them up from the bottom edge — the shell's own animations restyled, no extra extension
-needed, off by default.
+needed, off by default. Steam draws its own title bar and ignores GNOME's
+layout; Steam: Buttons on the Left (off by default, shown when Steam is installed) patches two of its
+client stylesheets, keeping the originals beside them, so its buttons follow the layout too from Steam's
+next start. A Steam update undoes it and Pear Up patches it again; switching it off gives Steam its own
+files back. Where [Adwaita for Steam](https://github.com/tkashkin/Adwaita-for-Steam) is installed the row
+steps aside, as that theme moves the buttons itself.
 
 **macOS type, accent, icons and cursor.** One switch sets the interface, document and window-title
 fonts to Adwaita Sans — GNOME's own fork of Inter, shipped from GNOME 48, or Inter itself where that

@@ -198,6 +198,15 @@
       <description>A new window fades in while growing slightly from its centre, and a closing one fades while shrinking slightly, instead of GNOME's pop up from the bottom edge. Dialogs attached to their window keep GNOME's unfold.</description>
     </key>
 
+    <!-- Steam draws its own title bar. On, two of its stylesheets are patched
+         so its buttons follow GNOME's button layout, and patched again after a
+         Steam update; off puts Steam's own files back. See steamButtons.js. -->
+    <key name="steam-buttons-left" type="b">
+      <default>false</default>
+      <summary>Put Steam's window buttons where GNOME's layout has them</summary>
+      <description>Steam ignores GNOME's button layout. This patches its client stylesheets (keeping the originals) so close, minimize and maximize follow it, from the next start of Steam.</description>
+    </key>
+
     <!-- The panel button is this extension's own, so it works with no search
          extension installed at all. What it opens is left open: GNOME's search
          needs nothing, and anything else people already use can be named. -->

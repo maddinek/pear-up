@@ -14,6 +14,7 @@ import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
 import { SpacesSpring, SPACES_SPRING_KEY } from './spacesSpring.js';
 import { ScreenshotThumbnail, SCREENSHOT_THUMBNAIL_KEY } from './screenshotThumbnail.js';
 import { WindowAnimations, WINDOW_ANIMATIONS_KEY } from './windowAnimations.js';
+import { SteamButtonsKeeper, STEAM_BUTTONS_KEY } from './steamButtons.js';
 import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
@@ -113,6 +114,7 @@ export default class GlobalMenuExtension extends Extension {
         this._spacesSpring = null;
         this._screenshotThumbnail = null;
         this._windowAnimations = null;
+        this._steamButtons = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -210,6 +212,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._guard('updating the screenshot thumbnail', () => this._screenshotThumbnail?.sync());
             else if (key === WINDOW_ANIMATIONS_KEY)
                 this._windowAnimations?.sync();
+            else if (key === STEAM_BUTTONS_KEY)
+                this._guard('updating Steam\'s window buttons', () => this._steamButtons?.sync());
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -278,6 +282,12 @@ export default class GlobalMenuExtension extends Extension {
         // Windows that open and close as they do on macOS, off by default.
         this._guard('restyling window animations', () => {
             this._windowAnimations = new WindowAnimations(this.metadata.uuid, this._settings);
+        });
+
+        // Steam's own title bar, patched to follow GNOME's button layout, and
+        // patched again when a Steam update writes its stylesheets afresh.
+        this._guard('watching Steam\'s window buttons', () => {
+            this._steamButtons = new SteamButtonsKeeper(this.metadata.uuid, this._settings);
         });
 
         // GNOME can close a window from the keyboard but has nothing that
@@ -1303,6 +1313,10 @@ export default class GlobalMenuExtension extends Extension {
         // Animations already running finish as they began.
         this._guard('restoring window animations', () => this._windowAnimations?.destroy());
         this._windowAnimations = null;
+
+        // Stops watching; the patch itself stays, as it does over a screen lock.
+        this._guard('unwatching Steam\'s window buttons', () => this._steamButtons?.destroy());
+        this._steamButtons = null;
 
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one
