@@ -18,6 +18,7 @@ import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as Screenshot from 'resource:///org/gnome/shell/ui/screenshot.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import * as WorkspaceThumbnail from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
@@ -173,6 +174,19 @@ const IFACE = `
     <method name="SetBannerAlignment">
       <arg type="i" direction="in" name="align"/>
       <arg type="b" direction="out" name="set"/>
+    </method>
+    <method name="TakeTestScreenshot">
+      <arg type="b" direction="out" name="started"/>
+    </method>
+    <method name="GetScreenshotThumbnailState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="ClearScreenshotNotifications">
+      <arg type="b" direction="out" name="cleared"/>
+    </method>
+    <method name="DragThumbnail">
+      <arg type="d" direction="in" name="dx"/>
+      <arg type="b" direction="out" name="started"/>
     </method>
     <method name="GetBannerState">
       <arg type="s" direction="out" name="state"/>
@@ -457,6 +471,19 @@ function screenGeometry(index) {
         workArea: rectBox(Main.layoutManager.getWorkAreaForMonitor(index)),
         panelBottom: panelY + Main.layoutManager.panelBox.height,
     };
+}
+
+// The notifications of the shell's screenshot source: one shared source from
+// GNOME 49, one per shot before. Its iconName getter says null on GNOME 50, so
+// the icon itself is read.
+function screenshotNotifications() {
+    return (Main.messageTray.getSources?.() ?? [])
+        .filter(source => {
+            const icon = source.icon ?? source.gicon;
+            const name = icon instanceof Gio.ThemedIcon ? icon.get_names()[0] : source.iconName;
+            return ['screenshooter-symbolic', 'screenshot-recorded-symbolic'].includes(name);
+        })
+        .flatMap(source => [...(source.notifications ?? [])]);
 }
 
 export default class TestHookExtension extends Extension {
@@ -1236,6 +1263,98 @@ export default class TestHookExtension extends Extension {
         if (holder.sourceId)
             GLib.source_remove(holder.sourceId);
         return holder.moves;
+    }
+
+    // A screenshot taken the way the shell's own Print and Cmd+Shift+3 take
+    // one: the stage, through screenshot.js's captureScreenshot, which saves
+    // the file and posts the "Screenshot captured" notification. The result
+    // lands in lastScreenshot for GetScreenshotThumbnailState.
+    TakeTestScreenshot() {
+        this._lastScreenshot = { pending: true };
+        (async () => {
+            try {
+                const shooter = new Shell.Screenshot();
+                const [content] = await shooter.screenshot_stage_to_content();
+                const file = await Screenshot.captureScreenshot(content.get_texture(), null, 1, null);
+                this._lastScreenshot = { path: file?.get_path() ?? null };
+            } catch (e) {
+                this._lastScreenshot = { error: `${e}` };
+            }
+        })();
+        return true;
+    }
+
+    GetScreenshotThumbnailState() {
+        const cards = Main.layoutManager.uiGroup.get_children()
+            .filter(actor => actor.name === 'pearup-screenshot-thumbnail')
+            .map(actor => ({
+                box: stageBox(actor),
+                width: actor.width,
+                height: actor.height,
+                translationX: actor.translation_x,
+                scale: [actor.scale_x, actor.scale_y],
+                opacity: actor.opacity,
+                reactive: actor.reactive,
+                hover: actor.hover,
+                file: actor._pearUpFile ?? null,
+                rounded: actor.get_first_child()?.get_effects?.().length > 0,
+            }));
+        const tray = Main.messageTray;
+        const notifications = screenshotNotifications()
+            .map(notification => ({
+                title: notification.title,
+                acknowledged: notification.acknowledged,
+            }));
+        return JSON.stringify({
+            cards,
+            last: this._lastScreenshot ?? null,
+            animations: St.Settings.get().enable_animations,
+            bannerShown: (tray._bannerBin?.get_n_children?.() ?? 0) > 0,
+            bannerTitle: tray._notification?.title ?? null,
+            bannerIsScreenshot: screenshotNotifications().includes(tray._notification),
+            notifications,
+            ...screenGeometry(Main.layoutManager.primaryIndex),
+        });
+    }
+
+    ClearScreenshotNotifications() {
+        for (const notification of screenshotNotifications())
+            notification.destroy();
+        return true;
+    }
+
+    // Presses on the first thumbnail, moves right by dx in small steps and lets
+    // go, as a hand dragging it away would.
+    DragThumbnail(dx) {
+        const card = Main.layoutManager.uiGroup.get_children()
+            .find(actor => actor.name === 'pearup-screenshot-thumbnail');
+        if (!card)
+            return false;
+        if (!this._pointer) {
+            const seat = Clutter.get_default_backend().get_default_seat();
+            this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+        }
+        const [x, y, width, height] = stageBox(card);
+        const startX = x + width / 2;
+        const startY = y + height / 2;
+        const pointer = this._pointer;
+        const steps = 10;
+        let step = -1;
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            const now = GLib.get_monotonic_time();
+            if (step < 0) {
+                pointer.notify_absolute_motion(now, startX, startY);
+                pointer.notify_button(now, Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+            } else if (step < steps) {
+                pointer.notify_absolute_motion(now, startX + dx * (step + 1) / steps, startY);
+            } else {
+                pointer.notify_button(now, Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+                return GLib.SOURCE_REMOVE;
+            }
+            step++;
+            return GLib.SOURCE_CONTINUE;
+        });
+        return true;
     }
 
     // A notification from the shell itself, so its banner shows wherever the

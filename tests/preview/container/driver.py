@@ -390,6 +390,106 @@ def dock_hover():
     pointer().park()
 
 
+def thumbnail_cards():
+    return jsfn("""
+        return pv.Main.layoutManager.uiGroup.get_children()
+            .filter(a => a.name === 'pearup-screenshot-thumbnail')
+            .map(a => ({box: box(a), hover: a.hover, scale: a.scale_x, tx: a.translation_x}));""")
+
+
+def pear_up_setting(key, value):
+    """Sets one of Pear Up's keys inside the container, or says it has none."""
+    return jsfn(f"""
+        const ext = pv.Main.extensionManager.lookup('{PEAR_UP}');
+        const settings = ext?.stateObj?.getSettings?.();
+        if (!settings?.settings_schema?.has_key('{key}')) return false;
+        settings.set_boolean('{key}', {'true' if value else 'false'});
+        return true;""")
+
+
+def take_screenshot(kind):
+    """The shell's own captureScreenshot, as Print (the whole screen) or the
+    window shortcut (the focused window) call it."""
+    texture = ("(await new pv.Shell.Screenshot().screenshot_stage_to_content())[0].get_texture()"
+               if kind == "screen" else
+               "global.display.get_focus_window().get_compositor_private()"
+               ".paint_to_content(null).get_texture()")
+    jsfn(f"""
+        (async () => {{
+            const m = await import('resource:///org/gnome/shell/ui/screenshot.js');
+            await m.captureScreenshot({texture}, null, 1, null);
+        }})().catch(e => console.error('preview screenshot failed', e));
+        return true;""")
+
+
+@shot
+def screenshot_thumbnail():
+    """Extra: the floating screenshot thumbnail, a frame sequence of it arriving
+    (the shell slowed down 8x, in here only) and leaving."""
+    if not pear_up_setting("screenshot-thumbnail", True):
+        print("  (this checkout has no screenshot thumbnail)")
+        return
+    focus_app(FRONT_APP)
+    clear_notifications()
+    width, height = js("[global.stage.width, global.stage.height]")
+    corner = [width - 560, height - 380, 560, 380]
+    dock = dock_rect()
+    if dock and dock[0] > width / 2:
+        corner = [dock[0] + dock[2] - 620, height - 380, 620, 380]
+
+    js("pv.St.Settings.get().slow_down_factor = 8, true")
+    try:
+        for kind in ("screen", "window"):
+            if kind == "window" and not jsfn("return !!global.display.get_focus_window();"):
+                print("  (no window in front, so no window shot)")
+                continue
+            take_screenshot(kind)
+            # Arriving: 300 ms at 8x, about 2.4 s, photographed as it goes.
+            for frame in range(5):
+                capture(f"20-thumbnail-{kind}-arrive-{frame}", {"corner": corner})
+            capture(f"20-thumbnail-{kind}-rest", {"corner": corner, "card": pad(
+                (thumbnail_cards() or [{}])[0].get("box"), 40)})
+            # Put away, so the next one starts clean.
+            jsfn("""
+                for (const a of pv.Main.layoutManager.uiGroup.get_children())
+                    if (a.name === 'pearup-screenshot-thumbnail') a.destroy();
+                return true;""")
+            clear_notifications()
+            wait(0.5)
+    finally:
+        js("pv.St.Settings.get().slow_down_factor = 1, true")
+
+    # At normal speed: resting on it keeps it, and it slides away to the right.
+    take_screenshot("screen")
+    cards = []
+    for _ in range(30):
+        wait(0.1)
+        cards = thumbnail_cards()
+        if cards:
+            break
+    wait(0.5)
+    cards = thumbnail_cards()
+    if cards:
+        x, y, w, h = cards[0]["box"]
+        pointer().move(x + w / 2, y + h / 2, settle=0.5)
+        hovered = thumbnail_cards()
+        wait(5.5)
+        kept = thumbnail_cards()
+        print(f"  pointer on it: hover={hovered and hovered[0]['hover']}; "
+              f"6 s later {len(kept)} card(s)")
+        # Not park(): that spot is on the card.
+        pointer().move(width / 3, height / 2, settle=0.3)
+        wait(4.4)
+        js("pv.St.Settings.get().slow_down_factor = 8, true")
+        for frame in range(4):
+            capture(f"20-thumbnail-leave-{frame}", {"corner": corner}, keep_full=False)
+        js("pv.St.Settings.get().slow_down_factor = 1, true")
+    wait(3.0)
+    print(f"  after it left: {len(thumbnail_cards())} card(s)")
+    pear_up_setting("screenshot-thumbnail", False)
+    clear_notifications()
+
+
 # ---------------------------------------------------------------- preferences
 # Pear Up's preferences window, page by page. It is a separate GTK4 process, so
 # it is driven through the accessibility bus (AT-SPI): each page's tab in the
