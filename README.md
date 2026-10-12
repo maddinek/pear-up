@@ -338,7 +338,7 @@ With Dash to Dock installed in the same container, a virtual pointer then hovers
 edge and along the bottom: the icon under it has to reach exactly the chosen size, its neighbours less
 and pushed outward, and leaving the dock, switching magnification off mid-hover or disabling Pear Up
 has to give every icon its opacity back and leave no overlay behind. Launching an app from the dock
-then has to bounce its icon away from each of the four edges by half its size, keep bouncing while the
+then has to bounce its icon away from each of the four edges by its own size (16 px at least), keep bouncing while the
 app starts and land once its window appears or after ten seconds; a covered window asking for
 attention has to bounce its app three times, or less once brought forward; and under magnification
 the magnified copy has to do the bouncing, with nothing drawn twice.

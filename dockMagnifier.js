@@ -44,7 +44,7 @@ import GLib from 'gi://GLib';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { childSignals } from './util.js';
-import { bounceLift } from './dockBounce.js';
+import { bounceRise } from './dockBounce.js';
 
 const DOCK_ACTOR_NAME = 'dashtodockContainer';
 
@@ -628,10 +628,10 @@ class DockMagnification {
         }
 
         // An app that is launching or asking for attention hops away from the
-        // edge (dockBounce.js); its magnified copy hops with it, by the same
-        // share of its now larger size.
-        const lift = bounceLift(item.slot.child?.app) *
-            (this._vertical ? width : height) * scale;
+        // edge (dockBounce.js); its magnified copy hops with it, by its own
+        // now larger size.
+        const lift = bounceRise(item.slot.child?.app,
+            (this._vertical ? width : height) * scale);
         if (lift > 0) {
             if (this._vertical)
                 centerX += this._side === St.Side.RIGHT ? -lift : lift;

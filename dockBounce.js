@@ -13,7 +13,7 @@
 // Dock as always.
 //
 // While the dock is magnified the magnifier already draws every icon in its own
-// overlay and hides the dock's. It asks bounceLift() how high an app's icon is
+// overlay and hides the dock's. It asks bounceRise() how high an app's icon is
 // and lifts its magnified copy by that much, so the two never draw the same
 // icon twice: this module's clone is drawn at the opacity the icon would have
 // had, which is zero while the magnifier has hidden it.
@@ -37,8 +37,16 @@ const MAGNIFIER_OVERLAY_NAME = 'pearup-dock-magnifier';
 // One hop, up and down. macOS takes a little over half a second.
 const HOP_MS = 600;
 
-// The top of a hop, as a fraction of the icon's size.
-const HOP_HEIGHT = 0.5;
+// The top of a hop: one icon's size, as the macOS Dock hops (a 64 pt icon
+// clears about its own height), but never less than HOP_MIN_PX logical pixels.
+// Half a size was tried first and is too little at small sizes: Dash to Dock
+// goes down to 16 px icons, where it is an 8 px hop, which the eye reads as a
+// twitch rather than a bounce. 16 px is the floor because it is what a full
+// size gives at the smallest icon Dash to Dock offers, so the floor only takes
+// over below that (Dash to Dock shrinks its icons when many apps crowd the
+// dock) and a hop is never smaller than the smallest dock's.
+const HOP_HEIGHT = 1.0;
+const HOP_MIN_PX = 16;
 
 // An app that never shows a window stops bouncing after this. Its startup
 // notification may run on for longer (mutter gives it 15 s), but by then the
@@ -52,19 +60,26 @@ const ATTENTION_HOPS = 3;
 const LAUNCH = 'launch';
 const ATTENTION = 'attention';
 
-// The instance currently switched on, for bounceLift(). There is at most one.
+// The instance currently switched on, for bounceRise(). There is at most one.
 let active = null;
 
-// How far an app's dock icon is lifted off the shelf right now, as a fraction
-// of the icon's size: 0 for an app that is not bouncing. Worked out from the
+// How high the top of a hop is for an icon drawn `size` logical pixels across.
+export function hopPeak(size) {
+    return Math.max(HOP_HEIGHT * size, HOP_MIN_PX);
+}
+
+// How far an app's dock icon, drawn `size` logical pixels across, is lifted off
+// the shelf right now: 0 for an app that is not bouncing. Worked out from the
 // clock rather than remembered per frame, so the magnifier and the bounce
-// overlay agree on the same frame whichever of them draws first.
-export function bounceLift(app) {
-    return active && app ? active.lift(app, GLib.get_monotonic_time()) : 0;
+// overlay agree on the same frame whichever of them draws first; each passes
+// the size it draws the icon at, so a magnified copy hops by its own size.
+export function bounceRise(app, size) {
+    const lift = active && app ? active.lift(app, GLib.get_monotonic_time()) : 0;
+    return lift > 0 ? lift * hopPeak(size) : 0;
 }
 
 // The same test as dockMagnifier.js, kept here so neither module imports the
-// other's internals: the magnifier only needs bounceLift() from this one.
+// other's internals: the magnifier only needs bounceRise() from this one.
 function isDock(actor) {
     try {
         return actor.name === DOCK_ACTOR_NAME &&
@@ -78,9 +93,10 @@ function isDock(actor) {
 
 // A hop is a parabola: rising with ease-out-quad, falling with ease-in-quad,
 // which is how something thrown up and pulled back by gravity moves.
+// As a share of the hop's peak, 0 on the shelf and 1 at the top.
 function hopHeight(phase) {
     const t = phase - Math.floor(phase);
-    return HOP_HEIGHT * 4 * t * (1 - t);
+    return 4 * t * (1 - t);
 }
 
 export class DockBounce {
@@ -464,7 +480,7 @@ class DockBounceOverlay {
         }
 
         // Away from the edge the dock sits on.
-        const rise = lift * (this._vertical ? width : height) * scale;
+        const rise = lift * hopPeak((this._vertical ? width : height) * scale);
         let x = center.x, y = center.y;
         if (this._side === St.Side.RIGHT)
             x -= rise;

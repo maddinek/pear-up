@@ -28,8 +28,15 @@ OTHER_WINDOW = "io.github.maddinek.PearUpTestWindow"
 STOPPED, STARTING, RUNNING = range(3)
 
 HOP_S = 0.6
-HOP_HEIGHT = 0.5
+HOP_HEIGHT = 1.0
+HOP_MIN_PX = 16
 LAUNCH_LIMIT_S = 10
+
+
+def hop_peak(size):
+    """The top of a hop for an icon `size` logical pixels across, as
+    dockBounce.js works it out: its own size, at least HOP_MIN_PX."""
+    return max(HOP_HEIGHT * size, HOP_MIN_PX)
 
 
 def _quit(app_id):
@@ -138,7 +145,7 @@ class BounceChecks:
         check(f"every dock icon has its opacity back after {what}", not changed, "; ".join(changed))
 
     def _check_hops(self, samples, side, where):
-        """The clone rises away from the edge, to about half the icon's size,
+        """The clone rises away from the edge, to about the icon's size,
         and never moves along the dock or towards the edge."""
         check = self._check
         lifts = self._lifts(samples, side)
@@ -149,9 +156,10 @@ class BounceChecks:
         top = max(lift["away"] for lift in lifts)
         low = min(lift["away"] for lift in lifts)
         drift = max(abs(lift["along"]) for lift in lifts)
-        check(f"[{where}] the icon hops away from the {SIDE_NAMES[side]} edge to about half its size",
-              0.38 * size <= top <= HOP_HEIGHT * size + 1.5,
-              f"highest {top:.1f}px for a {size:.0f}px icon")
+        peak = hop_peak(size)
+        check(f"[{where}] the icon hops away from the {SIDE_NAMES[side]} edge to about its own size",
+              0.76 * peak <= top <= peak + 1.5,
+              f"highest {top:.1f}px for a {size:.0f}px icon (peak {peak:.0f}px)")
         check(f"[{where}] the icon never moves towards the edge",
               low >= -0.5, f"lowest {low:.1f}px")
         check(f"[{where}] the icon stays in its slot along the dock",
@@ -384,7 +392,7 @@ class BounceChecks:
         top = max((gap for gap, _ in gaps), default=0)
         size = max((width for _, width in gaps), default=0)
         check("a magnified icon bounces too, drawn by the magnifier",
-              gaps and 0.3 * size <= top <= HOP_HEIGHT * size + 2,
+              gaps and 0.6 * hop_peak(size) <= top <= hop_peak(size) + 2,
               f"highest {top:.1f}px for a {size:.0f}px magnified icon over {len(gaps)} samples")
         check("the bounce overlay draws nothing while the magnifier does",
               drawn_twice == 0, f"{drawn_twice} visible clones")

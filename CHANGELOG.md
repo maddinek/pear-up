@@ -180,8 +180,8 @@ it back when they are switched off.
   app starts, until its first window appears (at most ten seconds), and three
   times when a window of an app in the background asks for attention, landing
   early once the app is brought forward — leftwards for a dock on the right,
-  upwards for one at the bottom. Each hop takes 0.6 s and rises half the
-  icon's size, rising and falling like a thrown ball; it is slowed with the
+  upwards for one at the bottom. Each hop takes 0.6 s and rises one icon's
+  size, at least 16 px, rising and falling like a thrown ball; it is slowed with the
   shell's own animations and skipped when animations are off. Two switches in
   a new Bounce group on the Dock page, `dock-bounce-on-launch` and
   `dock-bounce-on-attention`, both off by default. Drawn over Dash to Dock like
