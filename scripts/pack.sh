@@ -38,6 +38,7 @@ EXTRA_SOURCES=(
     shellTweaks.js
     smoothBrightness.js
     spacesSpring.js
+    screenshotThumbnail.js
     recentItems.js
     forceQuit.js
     util.js

@@ -12,6 +12,7 @@ import { DockBounce } from './dockBounce.js';
 import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
 import { SpacesSpring, SPACES_SPRING_KEY } from './spacesSpring.js';
+import { ScreenshotThumbnail, SCREENSHOT_THUMBNAIL_KEY } from './screenshotThumbnail.js';
 import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
@@ -109,6 +110,7 @@ export default class GlobalMenuExtension extends Extension {
         this._shellTweaks = null;
         this._smoothBrightness = null;
         this._spacesSpring = null;
+        this._screenshotThumbnail = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -202,6 +204,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._smoothBrightness?.sync();
             else if (key === SPACES_SPRING_KEY)
                 this._spacesSpring?.sync();
+            else if (key === SCREENSHOT_THUMBNAIL_KEY)
+                this._guard('updating the screenshot thumbnail', () => this._screenshotThumbnail?.sync());
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -260,6 +264,11 @@ export default class GlobalMenuExtension extends Extension {
         // Spaces move on macOS.
         this._guard('putting desktop switching on a spring', () => {
             this._spacesSpring = new SpacesSpring(this.metadata.uuid, this._settings);
+        });
+
+        // The floating thumbnail after a screenshot, bottom right.
+        this._guard('watching for screenshots', () => {
+            this._screenshotThumbnail = new ScreenshotThumbnail(this.metadata.uuid, this._settings);
         });
 
         // GNOME can close a window from the keyboard but has nothing that
@@ -1277,6 +1286,10 @@ export default class GlobalMenuExtension extends Extension {
 
         this._guard('taking desktop switching off its spring', () => this._spacesSpring?.destroy());
         this._spacesSpring = null;
+
+        // Takes away a thumbnail still showing, and the notification it held back.
+        this._guard('removing the screenshot thumbnail', () => this._screenshotThumbnail?.destroy());
+        this._screenshotThumbnail = null;
 
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one

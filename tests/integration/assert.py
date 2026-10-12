@@ -1618,6 +1618,145 @@ if state and os.environ.get("PEAR_UP_SCREENSHOT", "1") != "0":
     print(f"  note: screenshot {size // 1024} KiB" if size else
           "  note: no screenshot on this release")
 
+# ------------------------------------------------- the screenshot thumbnail
+# Shots are taken the way Print takes one, through the shell's own
+# captureScreenshot, so the file is saved and the notification posted exactly
+# as they would be.
+def thumbnail_state():
+    return json.loads(hook("GetScreenshotThumbnailState"))
+
+
+def take_screenshot(wait_ms):
+    hook("TakeTestScreenshot")
+    GLib.usleep(wait_ms * 1000)
+    return thumbnail_state()
+
+
+def wait_thumbnail_gone(timeout_s):
+    for _ in range(int(timeout_s * 10)):
+        shot = thumbnail_state()
+        if not shot["cards"]:
+            return shot, True
+        GLib.usleep(100 * 1000)
+    return shot, False
+
+
+thumbnail_ran = False
+# GNOME 45 shows a banner however the notification is marked.
+try:
+    SHELL_MAJOR = int(subprocess.run(["gnome-shell", "--version"], capture_output=True, text=True,
+                                     check=False).stdout.split()[-1].split(".")[0])
+except (ValueError, IndexError):
+    SHELL_MAJOR = 0
+print()
+print("  the screenshot thumbnail:")
+if state:
+    try:
+        shot = take_screenshot(1500)
+        last = shot["last"] or {}
+        # GNOME 45's captureScreenshot saves the file but returns nothing.
+        if last.get("pending") or "error" in last:
+            print(f"  note: no screenshot could be taken here ({last}), so the thumbnail is not exercised")
+        else:
+            thumbnail_ran = True
+            check("off by default, a screenshot shows no thumbnail",
+                  pear_up_value("screenshot-thumbnail") == "false" and not shot["cards"],
+                  f"{len(shot['cards'])} cards")
+            # The shell's own banner for that one. A headless shell has no
+            # user activity, and the tray keeps a banner up until there is
+            # some, so it is cleared rather than waited out.
+            hook("ClearScreenshotNotifications")
+            GLib.usleep(600 * 1000)
+
+            pear_up_setting("screenshot-thumbnail", "true")
+            GLib.usleep(300 * 1000)
+            hook("TakeTestScreenshot")
+            first = None
+            for _ in range(150):
+                cards = thumbnail_state()["cards"]
+                if cards:
+                    first = cards[0]
+                    break
+                GLib.usleep(10 * 1000)
+            GLib.usleep(900 * 1000)
+            shot = thumbnail_state()
+            cards = shot["cards"]
+            card = cards[0] if cards else None
+            work = shot["workArea"]
+            check("on, a screenshot shows one thumbnail", len(cards) == 1, f"{len(cards)} cards")
+            if card:
+                check("it starts from the whole screen and shrinks into place",
+                      first and (first["scale"][0] > 1.2 or not shot["animations"]),
+                      f"first seen at scale {first and first['scale']}, animations {shot['animations']}")
+                x, y, width, height = card["box"]
+                check("it sits in the bottom right corner of the work area, 18px in",
+                      abs((x + width) - (work[0] + work[2] - 18)) <= 2
+                      and abs((y + height) - (work[1] + work[3] - 18)) <= 2,
+                      f"card={card['box']} work area={work}")
+                check("it is a card about 220px across, with rounded corners",
+                      max(card["width"], card["height"]) == 220 and card["rounded"]
+                      and card["scale"] == [1, 1] and card["opacity"] == 255,
+                      f"{card['width']}x{card['height']} rounded={card['rounded']} scale={card['scale']}")
+                check("it knows the file the shell saved",
+                      card["file"] and os.path.exists(card["file"])
+                      and card["file"] == (shot["last"].get("path") or card["file"]),
+                      f"{card['file']} vs {shot['last'].get('path')}")
+                held_back = SHELL_MAJOR >= 46
+                if not held_back:
+                    print(f"  note: GNOME {SHELL_MAJOR} shows its banner regardless")
+                check("GNOME's banner is held back while it shows, the notification kept",
+                      not held_back or
+                      not shot["bannerIsScreenshot"]
+                      and any(n["acknowledged"] for n in shot["notifications"]),
+                      f"banner: {shot['bannerTitle']}, notifications: {shot['notifications']}")
+                gone, went = wait_thumbnail_gone(6)
+                check("it slides away on its own after about five seconds", went)
+                check("and takes the held-back notification with it",
+                      not held_back or not gone["notifications"], f"{gone['notifications']}")
+
+            # Resting on it keeps it.
+            shot = take_screenshot(900)
+            if shot["cards"]:
+                x, y, width, height = shot["cards"][0]["box"]
+                # Moved onto it from beside it, so it sees the pointer arrive.
+                hook("MovePointer", (x - 40, y + height / 2), "(dd)")
+                GLib.usleep(200 * 1000)
+                hook("MovePointer", (x + width / 2, y + height / 2), "(dd)")
+                GLib.usleep(500 * 1000)
+                over = thumbnail_state()["cards"]
+                GLib.usleep(6000 * 1000)
+                held = thumbnail_state()
+                check("the pointer resting on it keeps it past five seconds", len(held["cards"]) == 1,
+                      f"{len(held['cards'])} cards, hover was {over and over[0]['hover']}")
+                hook("MovePointer", (10, y + height / 2), "(dd)")
+                _, went = wait_thumbnail_gone(7)
+                check("and it goes once the pointer leaves", went)
+            else:
+                check("a second screenshot shows a thumbnail too", False)
+
+            # Dragged to the right, it goes at once; a second shot replaces the first.
+            take_screenshot(300)
+            shot = take_screenshot(900)
+            check("a new screenshot replaces the thumbnail before it", len(shot["cards"]) == 1,
+                  f"{len(shot['cards'])} cards")
+            hook("DragThumbnail", (160.0,), "(d)")
+            _, went = wait_thumbnail_gone(1.5)
+            check("dragged to the right, it goes at once", went)
+
+            # With the banner allowed, both show.
+            pear_up_setting("screenshot-thumbnail-hide-banner", "false")
+            GLib.usleep(300 * 1000)
+            shot = take_screenshot(900)
+            check("with Hide the Screenshot Banner off, GNOME's banner shows beside it",
+                  len(shot["cards"]) == 1 and (shot["bannerIsScreenshot"] or SHELL_MAJOR < 46),
+                  f"{len(shot['cards'])} cards, banner: {shot['bannerTitle']}")
+            pear_up_gsettings("reset", "org.gnome.shell.extensions.pear-up",
+                              "screenshot-thumbnail-hide-banner")
+            hook("DragThumbnail", (160.0,), "(d)")
+            wait_thumbnail_gone(1.5)
+    except GLib.Error as exc:
+        check("the screenshot thumbnail could be exercised", False, exc.message.splitlines()[0])
+
 # ------------------------------------------------------- dock magnification
 # Last, because it switches Dash to Dock on: everything above runs against the
 # stock shell, as it always has.
@@ -1666,9 +1805,25 @@ if smoothing:
     except GLib.Error as exc:
         check("a fade could be started before disabling", False, exc.message.splitlines()[0])
 
+thumbnail_at_disable = False
+if thumbnail_ran:
+    try:
+        thumbnail_at_disable = bool(take_screenshot(900)["cards"])
+    except GLib.Error:
+        pass
+
 call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
      "DisableExtension", (UUID,), "(s)")
 GLib.usleep(2 * 1000 * 1000)
+
+if thumbnail_at_disable:
+    try:
+        left = thumbnail_state()
+        check("disabling takes a showing screenshot thumbnail away, and its notification",
+              not left["cards"] and (SHELL_MAJOR < 46 or not left["notifications"]),
+              f"{len(left['cards'])} cards, {left['notifications']}")
+    except GLib.Error as exc:
+        check("the thumbnail could be checked after disabling", False, exc.message.splitlines()[0])
 
 after = extension_info()
 check("extension reports itself disabled", after.get("state") != 1,
@@ -1845,6 +2000,10 @@ if state:
         if moved["active"] != desktops["active"]:
             switch_desktop("Page_Up")
         check("notifications go to the right again", banner_state()["alignment"] == END)
+        if thumbnail_ran:
+            again_shot = take_screenshot(900)
+            check("a screenshot shows one thumbnail again, not one per enable",
+                  len(again_shot["cards"]) == 1, f"{len(again_shot['cards'])} cards")
         if smoothing:
             again_bright = brightness_state()
             hook("ClearBrightnessWrites")
@@ -1860,6 +2019,10 @@ if state:
         call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
              "DisableExtension", (UUID,), "(s)")
         GLib.usleep(2 * 1000 * 1000)
+        if thumbnail_ran:
+            pear_up_gsettings("reset", "org.gnome.shell.extensions.pear-up", "screenshot-thumbnail")
+            left_over = thumbnail_state()["cards"]
+            check("and no thumbnail is left behind", not left_over, f"{left_over}")
         desktops = workspace_state()
         check("disabled again, the shell's own methods are back, with nothing left wrapped",
               desktops["popupDisplayIsShells"] and desktops["stripRuleIsShells"]

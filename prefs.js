@@ -1483,6 +1483,25 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             conflicts: MACOS_SCREENSHOT_CONFLICTS,
         });
 
+        const settings = this.getSettings();
+        const thumbnailRow = new Adw.SwitchRow({
+            title: 'Floating Thumbnail',
+            subtitle: 'After a shot, a preview sits in the bottom right corner for a few seconds. ' +
+                'Click it to open the file, drag or swipe it right to put it away',
+        });
+        thumbnailRow.set_subtitle_lines(0);
+        shotGroup.add(thumbnailRow);
+        settings.bind('screenshot-thumbnail', thumbnailRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const bannerRow = new Adw.SwitchRow({
+            title: 'Hide the Screenshot Banner',
+            subtitle: 'GNOME’s “Screenshot captured” notification stays out of sight while the thumbnail shows',
+        });
+        bannerRow.set_subtitle_lines(0);
+        shotGroup.add(bannerRow);
+        settings.bind('screenshot-thumbnail-hide-banner', bannerRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        settings.bind('screenshot-thumbnail', bannerRow, 'sensitive', Gio.SettingsBindFlags.GET);
+
         const windowGroup = new Adw.PreferencesGroup({ title: 'Windows' });
         page.add(windowGroup);
         this._addShortcutSetRow(windowGroup, {

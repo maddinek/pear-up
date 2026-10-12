@@ -292,6 +292,19 @@ it back when they are switched off.
   screen locks goes straight to where it was heading. On by default, in the
   Desktop group.
 
+- **Floating Thumbnail after a screenshot, on the Keyboard page.** As on
+  macOS, the shot shrinks from where it was taken — the whole screen, the
+  selection or the window — into a 220px card with rounded corners in the
+  bottom right corner, left of a dock on the right edge (or above one along
+  the bottom), stays five seconds, longer while the pointer rests on it, and
+  slides off to the right. Clicking opens the file in its default app;
+  dragging or swiping it right puts it away at once; a new shot replaces it.
+  It follows the shell's own "Screenshot captured" notification, so Print,
+  Cmd+Shift+3/4 and window shots all show it and screencasts do not. Hide the
+  Screenshot Banner (on) keeps GNOME's banner out of sight meanwhile, from
+  GNOME 46; the notification stays in the list until the card goes. Off by
+  default; the arrival and leaving follow the shell's animation settings.
+
 - **macOS-Like Scroll Acceleration, in a Trackpad group on the Keyboard
   page.** libinput scrolls by the same amount for every millimetre two
   fingers travel, about 10.5 units, however slowly they go, so a page moves

@@ -144,7 +144,12 @@ read Cmd as the Super or Windows key.
 | `Ctrl+Cmd+Q` | Lock the screen |
 | `Ctrl+↑` | Overview, like Mission Control |
 
-Screenshots land in `~/Pictures/Screenshots`, and `Print` keeps working alongside. Each accelerator is
+Screenshots land in `~/Pictures/Screenshots`, and `Print` keeps working alongside. With Floating
+Thumbnail on (off by default, in the same group), each shot shrinks from where it was taken into a small
+card in the bottom right corner, beside the dock, as on macOS: it stays five seconds, longer while the
+pointer rests on it, opens the file when clicked and goes away when dragged or swiped to the right.
+GNOME's "Screenshot captured" banner is held back while it shows (GNOME 46 on); the notification stays in
+the list until the card goes. Each accelerator is
 added next to GNOME's own rather than replacing it, so switching a set off leaves your own bindings
 untouched. Where Dash to Dock already grabs a chord — it takes `Cmd+number` and `Cmd+Q` — the switch
 stands that down and offers to move the dock shortcuts to `Cmd+F1…F9` instead.

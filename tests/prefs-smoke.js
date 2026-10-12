@@ -2372,6 +2372,44 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     }
 }
 
+// The floating screenshot thumbnail, with the screenshot shortcuts on the
+// Keyboard page: off by default; its banner switch on by default and greyed
+// out while the thumbnail is off.
+{
+    const problemsBefore = problems.length;
+    const settings = preferences.getSettings();
+    const keyboard = pages.find(page => page.title === 'Keyboard');
+    const rowTitled = title => keyboard && findWidget(keyboard, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === title);
+    const thumbnail = rowTitled('Floating Thumbnail');
+    const banner = rowTitled('Hide the Screenshot Banner');
+    const expect = (label, got, wanted) => {
+        if (got !== wanted)
+            problems.push(`screenshot thumbnail: ${label} is ${got}, expected ${wanted}`);
+    };
+    if (!thumbnail || !banner) {
+        problems.push('the Keyboard page has no Floating Thumbnail and Hide the Screenshot Banner switches');
+    } else {
+        expect('the default of screenshot-thumbnail',
+            settings.get_default_value('screenshot-thumbnail').unpack(), false);
+        expect('the default of screenshot-thumbnail-hide-banner',
+            settings.get_default_value('screenshot-thumbnail-hide-banner').unpack(), true);
+        expect('"Floating Thumbnail" at first', thumbnail.active, false);
+        expect('"Hide the Screenshot Banner" while the thumbnail is off, sensitive', banner.sensitive, false);
+        thumbnail.active = true;
+        expect('screenshot-thumbnail after switching it on', settings.get_boolean('screenshot-thumbnail'), true);
+        expect('"Hide the Screenshot Banner" with the thumbnail on, sensitive', banner.sensitive, true);
+        banner.active = false;
+        expect('screenshot-thumbnail-hide-banner after switching it off',
+            settings.get_boolean('screenshot-thumbnail-hide-banner'), false);
+        settings.reset('screenshot-thumbnail');
+        settings.reset('screenshot-thumbnail-hide-banner');
+        expect('"Floating Thumbnail" after a reset', thumbnail.active, false);
+    }
+    if (problems.length === problemsBefore)
+        print('  screenshot thumbnail: off by default, its banner switch greyed out until it is on');
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);

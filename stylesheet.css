@@ -152,3 +152,17 @@
 #uiGroup.pearup-osd-top-right .osd-window {
   margin: 4px 4px 0 0;
 }
+
+/* The floating thumbnail after a screenshot (screenshotThumbnail.js). The
+   picture inside is clipped to the same radius by a shader; the edge is a
+   hairline drawn over it, as macOS outlines its thumbnail. */
+.pearup-screenshot-thumbnail {
+  border-radius: 10px;
+  background-color: rgba(30, 30, 30, 0.6);
+  box-shadow: 0 6px 22px 2px rgba(0, 0, 0, 0.45);
+}
+
+.pearup-screenshot-thumbnail-edge {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
