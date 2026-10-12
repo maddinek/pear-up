@@ -185,6 +185,16 @@ has them. It needs GNOME 50, whose compositor loads the user's libinput plugins,
 the next login; the switch says so on anything older. Switching it off removes the one file it
 installed, `~/.config/libinput/plugins/10-pear-up-scroll-acceleration.lua`.
 
+**Browsers that scroll smoothly.** Chromium on Wayland multiplies touchpad scrolling by 12, so
+Brave, Chromium and Chrome move the page about five times as far as GNOME's own apps for the same
+movement of the fingers — tens of pixels a frame, jumps instead of a glide. Smooth Browser Scrolling,
+in the same Trackpad group, sets Chromium's own scale for it
+(`--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/2.5`, Chromium 155 and
+later) in the flags file of each Flatpak browser installed (`~/.var/app/<app>/config/<name>-flags.conf`),
+with a speed to choose. It writes two lines and takes only those out again; a file that already has
+an `--enable-features` of its own is left alone and named. It takes effect when the browser restarts.
+Electron apps read no flags file and get the feature with Electron 45.
+
 **Your own menus.** Add any number of extra top-level menus whose items run shell commands or send
 keyboard shortcuts.
 

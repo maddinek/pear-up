@@ -208,6 +208,33 @@ const SCROLL_STRENGTHS = [
 ];
 const SCROLL_STRENGTH_DEFAULT = 1;
 
+// Chromium on Wayland multiplies touchpad scrolling by 12 — the 10-per-wheel-
+// click convention turned into its 120 — so a browser moves the page about
+// five times as far per millimetre as GNOME's own apps do, in steps of tens of
+// pixels a frame: jumpy rather than smooth. Chromium's own switch for that,
+// the WaylandUnscaledTouchpadScrolling feature (Chromium 155 and later), takes
+// the scale as its scroll_scaling_factor; 2.5 is Chromium's default and
+// matches GTK. It is a command-line flag, which the Flatpak builds read from a
+// flags file in their own config directory (cobalt's "<name>-flags.conf"). The
+// file is all the state there is: Pear Up's two lines, the comment and the
+// flag, are what is installed, and only they are ever written or removed. A
+// file that already has an --enable-features of its own is left alone, as
+// Chromium only reads the last one. Electron apps read no such file, and
+// before Electron 45 (Chromium 156) do not have the feature at all.
+const BROWSER_SCROLL_COMMENT = '# Pear Up: touchpad scrolling as far as in GNOME’s apps (Keyboard → Trackpad)';
+const BROWSER_SCROLL_FLAG = /^--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor\/([0-9.]+)$/m;
+const BROWSER_SCROLL_BROWSERS = [
+    { name: 'Brave', app: 'com.brave.Browser', file: 'brave-flags.conf' },
+    { name: 'Chromium', app: 'org.chromium.Chromium', file: 'chromium-flags.conf' },
+    { name: 'Google Chrome', app: 'com.google.Chrome', file: 'chrome-flags.conf' },
+];
+const BROWSER_SCROLL_SPEEDS = [
+    { title: 'As in GNOME’s Apps', factor: 2.5 },
+    { title: 'Slower', factor: 1.5 },
+    { title: 'Slowest', factor: 1 },
+];
+const BROWSER_SCROLL_SPEED_DEFAULT = 0;
+
 // The keys macOS uses inside apps — Option+←/→ by word, Ctrl+←/→ to the next
 // desktop, Cmd+C and its kind — are libinput/10-pear-up-macos-keys.lua. Apps
 // read their own keys, so no GNOME shortcut changes what those do: they have to
@@ -1540,7 +1567,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     _buildTrackpadGroup(page) {
         const group = new Adw.PreferencesGroup({
             title: 'Trackpad',
-            description: 'A plugin for libinput, which GNOME loads when you log in',
+            description: 'Scroll acceleration is a plugin for libinput, which GNOME loads when you log in',
         });
         page.add(group);
 
@@ -1616,6 +1643,162 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 return;
             write(strength.gain);
         });
+
+        this._buildBrowserScrollRows(group);
+    }
+
+    // Browser scrolling: one switch and a speed, written into the flags file of
+    // every Flatpak Chromium browser that is installed. `home` is the home
+    // directory they are looked for in.
+    _buildBrowserScrollRows(group, home = GLib.get_home_dir()) {
+        const subtitle = 'Brave, Chromium and Chrome scroll about five times as far as GNOME’s apps for the same ' +
+            'movement of the fingers, in jumps instead of a glide. This sets Chromium’s own scale for touchpad ' +
+            'scrolling. Takes effect when the browser is restarted.';
+        const row = new Adw.SwitchRow({ title: 'Smooth Browser Scrolling', subtitle });
+        row.set_subtitle_lines(0);
+        group.add(row);
+
+        const speeds = Gtk.StringList.new(BROWSER_SCROLL_SPEEDS.map(speed => speed.title));
+        const speedRow = new Adw.ComboRow({
+            title: 'Browser Scroll Speed',
+            subtitle: 'How far the page moves for the same movement of the fingers',
+            model: speeds,
+        });
+        group.add(speedRow);
+
+        let problem = null;
+        let busy = false;
+        const refresh = () => {
+            if (busy)
+                return;
+            busy = true;
+            const state = this._browserScrollState(home);
+            let text = subtitle;
+            if (state.browsers.length === 0)
+                text = 'None of Brave, Chromium or Chrome is installed from Flathub.';
+            else if (state.foreign.length > 0)
+                text = `${subtitle} Left alone: ${state.foreign.map(target => this._tildePath(target.path)).join(', ')}, ` +
+                    'which already set --enable-features. Add ' +
+                    'WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/2.5 to it by hand.';
+            row.set_active(state.installed);
+            row.set_sensitive(state.installed || state.browsers.length > state.foreign.length);
+            row.set_subtitle(problem ?? text);
+            const index = BROWSER_SCROLL_SPEEDS.findIndex(speed => speed.factor === state.factor);
+            speeds.splice(BROWSER_SCROLL_SPEEDS.length, speeds.get_n_items() - BROWSER_SCROLL_SPEEDS.length,
+                state.installed && index < 0 ? [`Custom (${state.factor})`] : []);
+            speedRow.set_selected(!state.installed ? BROWSER_SCROLL_SPEED_DEFAULT
+                : index < 0 ? BROWSER_SCROLL_SPEEDS.length : index);
+            speedRow.set_sensitive(state.installed);
+            busy = false;
+        };
+        refresh();
+
+        const write = factor => {
+            problem = this._setBrowserScroll(factor, home);
+            refresh();
+        };
+        row.connect('notify::active', () => {
+            if (busy || row.active === this._browserScrollState(home).installed)
+                return;
+            const speed = BROWSER_SCROLL_SPEEDS[speedRow.selected] ?? BROWSER_SCROLL_SPEEDS[BROWSER_SCROLL_SPEED_DEFAULT];
+            write(row.active ? speed.factor : null);
+        });
+        speedRow.connect('notify::selected', () => {
+            const speed = BROWSER_SCROLL_SPEEDS[speedRow.selected];
+            if (busy || !speed || !this._browserScrollState(home).installed)
+                return;
+            write(speed.factor);
+        });
+        return [row, speedRow];
+    }
+
+    // The Flatpak browsers installed for this user or the system, each with the
+    // flags file it reads from its own config directory.
+    _browserScrollTargets(home) {
+        return BROWSER_SCROLL_BROWSERS.filter(browser => [
+            GLib.build_filenamev([home, '.var', 'app', browser.app]),
+            GLib.build_filenamev([home, '.local', 'share', 'flatpak', 'app', browser.app]),
+            GLib.build_filenamev(['/var/lib/flatpak/app', browser.app]),
+        ].some(dir => GLib.file_test(dir, GLib.FileTest.IS_DIR))).map(browser => ({
+            ...browser,
+            path: GLib.build_filenamev([home, '.var', 'app', browser.app, 'config', browser.file]),
+        }));
+    }
+
+    _readTextOrNull(path) {
+        try {
+            const [, bytes] = Gio.File.new_for_path(path).load_contents(null);
+            return new TextDecoder().decode(bytes);
+        } catch (e) {
+            if ([Gio.IOErrorEnum.NOT_FOUND, Gio.IOErrorEnum.NOT_DIRECTORY].some(code => e.matches?.(Gio.IOErrorEnum, code)))
+                return null;
+            throw e;
+        }
+    }
+
+    // Whether Pear Up's flag is in the flags files, at what factor, and which
+    // files have an --enable-features of their own and are left alone. On means
+    // the flag is in at least one file.
+    _browserScrollState(home) {
+        const browsers = this._browserScrollTargets(home);
+        const foreign = [];
+        let factor = null;
+        for (const target of browsers) {
+            let text;
+            try {
+                text = this._readTextOrNull(target.path);
+            } catch {
+                foreign.push(target);
+                continue;
+            }
+            const ours = text?.match(BROWSER_SCROLL_FLAG);
+            if (ours)
+                factor ??= Number(ours[1]);
+            else if (text && /^\s*--enable-features[=\s]/m.test(text))
+                foreign.push(target);
+        }
+        return { browsers, foreign, installed: factor !== null, factor };
+    }
+
+    // Writes Pear Up's flag with `factor` into each browser's flags file, or
+    // with null takes Pear Up's two lines out again, removing a file that is
+    // then empty. Everything else in the files stays as it was. Returns what
+    // went wrong, or null.
+    _setBrowserScroll(factor, home) {
+        const failed = [];
+        for (const target of this._browserScrollTargets(home)) {
+            try {
+                const text = this._readTextOrNull(target.path);
+                const lines = text === null ? [] : text.split('\n');
+                const isOurs = line => line === BROWSER_SCROLL_COMMENT ||
+                    new RegExp(BROWSER_SCROLL_FLAG.source).test(line);
+                const kept = lines.filter(line => !isOurs(line));
+                while (kept.length > 0 && kept[kept.length - 1] === '')
+                    kept.pop();
+                const file = Gio.File.new_for_path(target.path);
+                if (factor === null) {
+                    if (!lines.some(isOurs))
+                        continue;
+                    if (kept.length === 0) {
+                        file.delete(null);
+                        continue;
+                    }
+                } else {
+                    if (kept.some(line => /^\s*--enable-features[=\s]/.test(line)))
+                        continue;
+                    kept.push(BROWSER_SCROLL_COMMENT,
+                        `--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/${factor}`);
+                }
+                const dir = GLib.path_get_dirname(target.path);
+                if (GLib.mkdir_with_parents(dir, 0o755) !== 0)
+                    throw new Error(`${this._tildePath(dir)} cannot be created`);
+                file.replace_contents(new TextEncoder().encode(`${kept.join('\n')}\n`), null, false,
+                    Gio.FileCreateFlags.NONE, null);
+            } catch (e) {
+                failed.push(`${this._tildePath(target.path)}: ${e.message}`);
+            }
+        }
+        return failed.length ? `Could not ${factor === null ? 'change' : 'write'} ${failed.join('; ')}` : null;
     }
 
     _scrollPluginPath() {
