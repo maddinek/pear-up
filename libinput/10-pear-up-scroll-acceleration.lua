@@ -285,6 +285,24 @@ function M.frame(tp, frame, time)
             f.outy = math.floor(f.y + f.oy + 0.5)
         end
     end
+    -- libinput scrolls by the fingers' average, so while two are scrolled
+    -- their sum is what has to be right. Rounded each on its own, both shifts
+    -- round the same way, and the scroll steps by whole units: at a slow gain
+    -- one frame moves twice as far as the next, and the page judders. The
+    -- second finger instead makes up what rounding took from the first, which
+    -- halves the step and keeps the sum within half a unit of the exact one.
+    if tp.pair then
+        local a, b = slots[known[1]], slots[known[2]]
+        for _, axis in ipairs({ "x", "y" }) do
+            local o = "o" .. axis
+            local sum = math.floor(a[axis] + a[o] + b[axis] + b[o] + 0.5)
+            local low, high = tp[axis .. "min"], tp[axis .. "max"]
+            local out = sum - a["out" .. axis]
+            if out >= low and out <= high then
+                b["out" .. axis] = out
+            end
+        end
+    end
 
     -- The positions in the frame, rewritten.
     local changed = false

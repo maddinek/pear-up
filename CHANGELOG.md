@@ -77,6 +77,15 @@ it back when they are switched off.
   The extension watches the directory and patches again after a Steam update; off puts Steam's files
   back exactly. Steps aside where Adwaita for Steam is installed.
 
+- **Smooth Browser Scrolling.** A switch and a speed in the Trackpad group
+  write Chromium's own touchpad scale
+  (`WaylandUnscaledTouchpadScrolling:scroll_scaling_factor`, 2.5 by default,
+  which matches GTK) into the flags file of each Flatpak Brave, Chromium and
+  Chrome, which otherwise multiply touchpad scrolling by 12 on Wayland and
+  move the page in jumps of tens of pixels a frame. Only Pear Up's two lines
+  are written and taken out; a file with an `--enable-features` of its own is
+  left alone and named.
+
 - **An Appearance page, starting with type and the accent.** macOS-Like Type
   sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
   own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns
@@ -631,6 +640,13 @@ it back when they are switched off.
   readouts with Pear Up on and off.
 
 ### Fixed
+
+- **Slow scrolls step evenly with scroll acceleration on.** The plugin rounded
+  both fingers' shifted positions alike, so libinput's average moved in whole
+  units and, at the slow gain, one frame scrolled twice as far as the next.
+  The second finger now makes up the first one's rounding, which keeps their
+  sum within half a unit and halves the step (frame-to-frame variation in a
+  replay with sensor noise: 0.36 → 0.21, libinput alone 0.16).
 
 - **Log Out is always there to click, and the power items stay current.** The
   pear menu greyed Log Out out on a machine with one account, and only in some

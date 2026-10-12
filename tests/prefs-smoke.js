@@ -2338,6 +2338,80 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     }
 }
 
+// Browser scrolling is two lines in the flags file of each Flatpak Chromium
+// browser installed, in a home directory made up for the test: written, set to
+// another speed, taken out again with the rest of the file as it was, and a
+// file with an --enable-features of its own left alone.
+{
+    const problemsBefore = problems.length;
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`browser scrolling: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+    const home = GLib.dir_make_tmp('pear-up-browser-home-XXXXXX');
+    const read = path => GLib.file_test(path, GLib.FileTest.IS_REGULAR)
+        ? new TextDecoder().decode(GLib.file_get_contents(path)[1]) : null;
+    const write = (path, text) => {
+        GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
+        GLib.file_set_contents(path, new TextEncoder().encode(text));
+    };
+    const rowsOf = () => {
+        const group = new Adw.PreferencesGroup();
+        windowsKept.push(group);
+        return new Preferences(metadata)._buildBrowserScrollRows(group, home);
+    };
+    const comment = '# Pear Up: touchpad scrolling as far as in GNOME’s apps (Keyboard → Trackpad)';
+    const flag = factor => `--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/${factor}`;
+    const brave = `${home}/.var/app/com.brave.Browser/config/brave-flags.conf`;
+    const chromium = `${home}/.var/app/org.chromium.Chromium/config/chromium-flags.conf`;
+    const theirs = '--enable-features=VaapiVideoDecoder\n--ozone-platform=wayland\n';
+    const flatpakSystem = ['com.brave.Browser', 'org.chromium.Chromium', 'com.google.Chrome']
+        .some(app => GLib.file_test(`/var/lib/flatpak/app/${app}`, GLib.FileTest.IS_DIR));
+
+    let [row] = rowsOf();
+    let speed;
+    if (!flatpakSystem) {
+        expect('the switch with no browser, sensitive', row.sensitive, false);
+        if (!/None of/.test(row.subtitle ?? ''))
+            problems.push(`browser scrolling: no browser is not explained (${row.subtitle})`);
+    }
+
+    write(brave, '--password-store=basic\n');
+    write(chromium, theirs);
+    [row, speed] = rowsOf();
+    expect('the switch with nothing written', row.active, false);
+    expect('the switch with a browser, sensitive', row.sensitive, true);
+    expect('the speed while off, sensitive', speed.sensitive, false);
+    row.active = true;
+    expect('Brave\'s file after switching on', read(brave), `--password-store=basic\n${comment}\n${flag(2.5)}\n`);
+    expect('Chromium\'s file of its own after switching on', read(chromium), theirs);
+    if (!/Left alone: .*chromium-flags\.conf/.test(row.subtitle ?? ''))
+        problems.push(`browser scrolling: the file left alone is not named (${row.subtitle})`);
+    speed.selected = 2;
+    expect('Brave\'s file at Slowest', read(brave), `--password-store=basic\n${comment}\n${flag(1)}\n`);
+    [row, speed] = rowsOf();
+    expect('the switch reopened', row.active, true);
+    expect('the speed reopened', speed.selected, 2);
+    row.active = false;
+    expect('Brave\'s file after switching off', read(brave), '--password-store=basic\n');
+    expect('Chromium\'s file after switching off', read(chromium), theirs);
+
+    // A file Pear Up made is gone again when switched off.
+    GLib.unlink(brave);
+    GLib.unlink(chromium);
+    [row] = rowsOf();
+    row.active = true;
+    expect('Brave\'s new file', read(brave), `${comment}\n${flag(2.5)}\n`);
+    expect('Chromium\'s new file', read(chromium), `${comment}\n${flag(2.5)}\n`);
+    row.active = false;
+    expect('Brave\'s file after switching off', read(brave), null);
+    expect('Chromium\'s file after switching off', read(chromium), null);
+
+    GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(home)}`);
+    if (problems.length === problemsBefore)
+        print('  browser scrolling: writes and removes only its own two lines, leaves a file with its own features alone');
+}
+
 // The macOS keys are one file too, with a line for each of three switches,
 // the Alt/Cmd swap written in as it is set, and the Cmd key list kept as found.
 // All three off removes it; nothing else in the directory is touched. An
