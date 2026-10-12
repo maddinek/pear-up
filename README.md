@@ -55,8 +55,9 @@ Just Perfection does at its defaults whenever it is enabled.
 ![A desktop with Pear Up: the app's menus in the bar, window buttons on the left, a dock on the right](assets/screenshots/desktop.jpg)
 
 **The rest of the desktop, where macOS has it.** Notifications appear in the top right corner, under
-the clock, and the bubble a volume or brightness key brings up sits there too, under the bar, rather
-than at the bottom of the screen. Switching desktops slides the desktop across with no popup, and the
+the clock (and, with a switch, slide in from the right edge and back out, as macOS banners do), and
+the bubble a volume or brightness key brings up sits there too, under the bar, rather than at the
+bottom of the screen. Switching desktops slides the desktop across with no popup, and the
 overview always shows the desktops along its top, as Mission Control shows its Spaces, where GNOME
 hides them until two are in use. And a login starts on the desktop rather than in the overview. With
 Automatic Screen Brightness on, the screen fades to each new light level over a few seconds, quicker

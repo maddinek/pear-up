@@ -259,6 +259,13 @@ def shot(fn):
     return fn
 
 
+def opt_in_shot(fn):
+    """A shot taken only when PREVIEW_SHOTS names it: a frame sequence of an
+    animation, say, which is slow and only wanted by whoever is changing it."""
+    fn.opt_in = True
+    return shot(fn)
+
+
 @shot
 def desktop():
     """1 + 2 + 3: an app in front, its menus in the bar, window buttons, dock."""
@@ -359,6 +366,61 @@ def notification():
         return bin && bin.get_n_children() > 0 ? box(bin) : null;""")
     capture("05-notification", {"banner": pad(banner, 16)})
     clear_notifications()
+
+
+@opt_in_shot
+def notification_slide():
+    """Opt-in: frames of a banner sliding in from the right and back out, with
+    Pear Up's banners-slide-from-right on and the shell slowed down (in the
+    container only) so that a picture every second or so catches it moving."""
+    slow = 40
+    focus_app(FRONT_APP)
+    clear_notifications()
+    settings = f"pv.Main.extensionManager.lookup('{PEAR_UP}').stateObj.getSettings()"
+    jsfn(f"{settings}.set_boolean('banners-slide-from-right', true); return true;")
+    jsfn(f"pv.St.Settings.get().slow_down_factor = {slow}; return true;")
+    wait(0.5)
+    state = """
+        const tray = pv.Main.messageTray, bin = tray._bannerBin;
+        const monitor = pv.Main.layoutManager.primaryMonitor;
+        return {shown: bin.get_n_children() > 0 && tray.visible, tx: bin.translation_x,
+                y: bin.y, width: bin.width, height: bin.height,
+                animations: pv.St.Settings.get().enable_animations,
+                monitor: [monitor.x, monitor.y, monitor.width, monitor.height],
+                panel: box(pv.Main.layoutManager.panelBox)};"""
+    try:
+        call("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+             "org.freedesktop.Notifications", "Notify",
+             ("Files", 0, "org.gnome.Nautilus", "Copy finished",
+              "3 files were copied to Documents.", [],
+              {"desktop-entry": GLib.Variant("s", "org.gnome.Nautilus")}, 0),
+             "(susssasa{sv}i)")
+
+        def frames(prefix, done, limit=14):
+            region = None
+            for i in range(limit):
+                st = jsfn(state)
+                if region is None and st["width"] > 0:
+                    mx, my, mw, mh = st["monitor"]
+                    w = st["width"] + 120
+                    region = [mx + mw - w, my, w, st["panel"][3] + st["height"] + 40]
+                print(f"  {prefix} {i:02d}: shown={st['shown']} x={st['tx']:.0f} y={st['y']:.0f}"
+                      f" animations={st['animations']}")
+                capture(f"07-{prefix}-{i:02d}-x{round(st['tx'])}", {"corner": region}, keep_full=False)
+                if done(st):
+                    return
+
+        frames("slide-in", lambda st: st["shown"] and st["tx"] == 0)
+        jsfn("""
+            const tray = pv.Main.messageTray;
+            tray._notificationExpired = true;
+            tray._updateState();
+            return true;""")
+        frames("slide-out", lambda st: not st["shown"], limit=24)
+    finally:
+        jsfn("pv.St.Settings.get().slow_down_factor = 1; return true;")
+        jsfn(f"{settings}.reset('banners-slide-from-right'); return true;")
+        clear_notifications()
 
 
 @shot
@@ -567,7 +629,7 @@ def main():
     facts()
     pointer()  # parked over the wallpaper before the first picture
     for fn in SHOTS:
-        if ONLY and fn.__name__ not in ONLY:
+        if (ONLY or getattr(fn, "opt_in", False)) and fn.__name__ not in ONLY:
             continue
         print(f"== {fn.__name__}")
         try:

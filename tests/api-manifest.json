@@ -288,6 +288,8 @@
     "xdndHandler",
     "bannerAlignment",
     "_bannerBin",
+    "_updateShowingNotification",
+    "_hideNotification",
     "osdWindowManager",
     "_osdWindows",
     "MonitorConstraint",

@@ -950,6 +950,106 @@ if state:
         check("notifications and the volume bubble could be exercised", False,
               exc.message.splitlines()[0])
 
+    # Banners that slide in from the right edge and back out, as on macOS.
+    # Off by default; on, a banner should never move up or down, only along x,
+    # and leave nothing of itself behind once it is gone.
+    def banner_trace(ms, action):
+        hook("TraceBanner", (ms,), "(u)")
+        hook(action)
+        GLib.usleep((ms + 300) * 1000)
+        trace = json.loads(hook("GetBannerTrace"))
+        return trace, [s for s in trace["samples"] if s["shown"]]
+
+    # Until no banner is up and none is waiting: an expired banner makes way
+    # for the next in the queue, which would otherwise be the one traced.
+    def settle_banner():
+        for _ in range(6):
+            try:
+                if not hook("ExpireTestNotification"):
+                    return
+            except GLib.Error:
+                return
+            GLib.usleep(1200 * 1000)
+
+    try:
+        settle_banner()
+        idle = banner_state()
+        check("banners slide off by default, with the shell's own methods in place",
+              pear_up_value("banners-slide-from-right") == "false"
+              and idle["showIsShells"] and idle["hideIsShells"],
+              f"show is the shell's: {idle['showIsShells']}, hide: {idle['hideIsShells']}")
+
+        pear_up_setting("banners-slide-from-right", "true")
+        GLib.usleep(500 * 1000)
+        trace, shown = banner_trace(1200, "ShowTestNotification")
+        if not shown:
+            print("  note: no banner was drawn here, so how it slides is not checked")
+        elif not trace["animations"]:
+            check("with animations off, a banner is simply there, in place",
+                  all(s["tx"] == 0 and s["y"] == 0 for s in shown),
+                  f"{[(s['tx'], s['y']) for s in shown[:5]]}")
+        else:
+            xs = [s["tx"] for s in shown]
+            moving = [s for s in shown if s["tx"] > 0]
+            check("switched on, a banner comes in from beyond the right edge, along x only",
+                  moving and moving[0]["tx"] >= 0.5 * moving[0]["width"]
+                  and all(s["y"] == 0 for s in shown)
+                  and all(b <= a for a, b in zip(xs, xs[1:])) and xs[-1] == 0,
+                  f"x {[round(x) for x in xs[:12]]}…; y {sorted({s['y'] for s in shown})}")
+            check("and with no overshoot, and in about a third of a second",
+                  min(xs) == 0 and len(moving) >= 3
+                  and 150 <= (moving[-1]["t"] - shown[0]["t"]) / trace["slowDown"] <= 600,
+                  f"moving for {moving[-1]['t'] - shown[0]['t']:.0f} ms over {len(moving)} samples"
+                  if moving else "never moved")
+            placed = banner_state()
+            check("and it ends against the right edge, under the bar",
+                  placed["shown"] and abs(right_edge(placed["box"]) - right_edge(placed["workArea"])) <= 2
+                  and placed["box"][1] >= placed["panelBottom"] - 1,
+                  f"banner={placed['box']} work area={placed['workArea']}")
+
+            trace, shown = banner_trace(1000, "ExpireTestNotification")
+            xs = [s["tx"] for s in shown]
+            gone = banner_state()
+            check("when its time is up it slides back out to the right, without fading, "
+                  "and is put back in place once gone",
+                  len(xs) >= 3 and all(b >= a for a, b in zip(xs, xs[1:]))
+                  and xs[-1] >= 0.8 * shown[-1]["width"]
+                  and all(s["y"] == 0 and s["opacity"] == 255 for s in shown)
+                  and not gone["shown"] and gone["translationX"] == 0 and gone["trayClip"],
+                  f"x {[round(x) for x in xs]}; then shown={gone['shown']} x={gone['translationX']} "
+                  f"tray clipped to itself={gone['trayClip']}")
+        check("nothing of the slide is left on the banner between calls",
+              not any(s["ownEase"] for s in trace["samples"]) and not banner_state()["ownEase"])
+        settle_banner()
+
+        # Only from the corner: centred by someone else, banners drop as GNOME's do.
+        pear_up_setting("notifications-top-right", "false")
+        GLib.usleep(500 * 1000)
+        trace, shown = banner_trace(800, "ShowTestNotification")
+        if shown and trace["animations"]:
+            check("with banners not in the corner, they drop from the top as GNOME's do",
+                  all(s["tx"] == 0 for s in shown) and any(s["y"] < 0 for s in shown),
+                  f"x {sorted({s['tx'] for s in shown})}; y from {min(s['y'] for s in shown)}")
+        settle_banner()
+        pear_up_setting("notifications-top-right", "true")
+
+        pear_up_setting("banners-slide-from-right", "false")
+        GLib.usleep(500 * 1000)
+        off = banner_state()
+        check("switched off, the shell's own methods are back",
+              off["showIsShells"] and off["hideIsShells"] and off["translationX"] == 0
+              and off["trayClip"])
+        trace, shown = banner_trace(800, "ShowTestNotification")
+        if shown and trace["animations"]:
+            check("and banners drop from the top again",
+                  all(s["tx"] == 0 for s in shown) and any(s["y"] < 0 for s in shown))
+        settle_banner()
+    except GLib.Error as exc:
+        check("sliding banners could be exercised", False, exc.message.splitlines()[0])
+    finally:
+        pear_up_gsettings("reset", "org.gnome.shell.extensions.pear-up", "banners-slide-from-right")
+        pear_up_gsettings("reset", "org.gnome.shell.extensions.pear-up", "notifications-top-right")
+
 # ------------------------------------------------------------------ desktops
 # Switched with the keyboard, the way GNOME's own bindings do it, so the popup
 # is made by the window manager exactly as it would be: Cmd+PageDown, then back.

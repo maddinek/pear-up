@@ -136,6 +136,11 @@
       <summary>Show notification banners in the top right corner</summary>
       <description>Under the clock, as on macOS. GNOME puts them under the clock too, centred while it is in the middle; this keeps them on the right wherever the clock is, and whatever another extension sets.</description>
     </key>
+    <key name="banners-slide-from-right" type="b">
+      <default>false</default>
+      <summary>Slide notification banners in from the right edge</summary>
+      <description>As on macOS: a banner comes in from beyond the right edge of the screen and goes back out there when its time is up or it is dismissed, instead of dropping from the top. Only while notifications are in the top right corner. Follows the shell's animation settings.</description>
+    </key>
     <key name="osd-top-right" type="b">
       <default>true</default>
       <summary>Show the volume and brightness bubble in the top right corner</summary>

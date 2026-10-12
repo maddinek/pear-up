@@ -1,6 +1,6 @@
 // Pieces of the shell that macOS arranges differently, set the way it has them:
 // notifications and the volume and brightness bubble in the top right corner,
-// under the bar; no popup when switching desktops; the desktops always along
+// under the bar, with banners that slide in from the right edge; no popup when switching desktops; the desktops always along
 // the top of the overview, as Mission Control shows its Spaces; and the desktop,
 // not the overview, at login.
 //
@@ -14,6 +14,8 @@
 //
 // GNOME internals this depends on, listed in tests/api-manifest.json too:
 //   - Main.messageTray.bannerAlignment, the x-align of its _bannerBin
+//   - MessageTray.prototype._updateShowingNotification and _hideNotification,
+//     which ease the _bannerBin in and out
 //   - Main.osdWindowManager._osdWindows, each window held to its monitor by a
 //     Layout.MonitorConstraint, whose work-area keeps it off the bar
 //   - WorkspaceSwitcherPopup.prototype.display, called by the window manager's
@@ -27,12 +29,14 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Layout from 'resource:///org/gnome/shell/ui/layout.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as OverviewControls from 'resource:///org/gnome/shell/ui/overviewControls.js';
 import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import * as WorkspaceThumbnail from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
 
 export const SHELL_TWEAK_KEYS = [
     'notifications-top-right',
+    'banners-slide-from-right',
     'osd-top-right',
     'hide-workspace-popup',
     'always-show-workspace-thumbnails',
@@ -143,6 +147,158 @@ const thumbnailsPatch = new MethodPatch(
         this.notify('should-show');
     });
 
+// A banner on macOS comes in from beyond the right edge of the screen and, when
+// its time is up or it is dismissed, goes back out the same way; GNOME drops it
+// from the top with a bounce and pulls it back up. The shell does each with two
+// calls to its banner bin's ease(): one for the opacity, one for y (and, from
+// GNOME 49, a scale). These wrappers hand that bin, for the length of the
+// shell's own call and no longer, an ease() that turns the y into a slide along
+// translation_x — keeping the shell's own onComplete and onStopped, which move
+// the tray from state to state, and its duration of 0 when it hides a banner at
+// once. Everything else those methods do is the shell's.
+//
+// Durations are before the shell's slow-down factor, which ease() applies, as
+// it does the switch for animations: off, the banner is simply there and gone.
+const SLIDE_IN_MS = 340;
+const SLIDE_OUT_MS = 280;
+
+// The bin while it is in the corner, and nobody else has given it an ease() of
+// its own; null for the shell to do as it does.
+function slidingBin(tray) {
+    const bin = tray?._bannerBin;
+    if (!bin || Object.hasOwn(bin, 'ease') || bin.get_x_align?.() !== Clutter.ActorAlign.END)
+        return null;
+    return bin;
+}
+
+// The tray spans the work area and clips to it, so with the dock on the right
+// its edge is the dock's, not the screen's, and a banner would be cut off there
+// on its way. While one slides, the tray clips to its monitor instead; the
+// tray's own clip is back once the slide is over, whichever way it ends.
+let trayClip = null;
+
+function clipToMonitor(tray) {
+    const monitor = Main.layoutManager.primaryMonitor;
+    if (!monitor)
+        return;
+    if (!trayClip)
+        trayClip = { tray, clipToAllocation: tray.clip_to_allocation };
+    const [x, y] = tray.get_transformed_position();
+    tray.clip_to_allocation = false;
+    tray.set_clip(monitor.x - x, monitor.y - y, monitor.width, monitor.height);
+}
+
+function restoreTrayClip() {
+    const clip = trayClip;
+    if (!clip)
+        return;
+    trayClip = null;
+    try {
+        clip.tray.remove_clip();
+        clip.tray.clip_to_allocation = clip.clipToAllocation;
+    } catch {
+        // Gone with the shell, at logout.
+    }
+}
+
+// From where the bin sits to just past the right edge of the monitor. A new
+// banner is not laid out yet, and neither is the tray it was hidden with; the
+// bin's width is then the one it asks for, and it will sit against the right
+// edge of the work area, which is the tray's.
+function slideDistance(bin) {
+    const layout = Main.layoutManager;
+    const monitor = layout.primaryMonitor;
+    let gap = 0;
+    if (monitor) {
+        const area = layout.getWorkAreaForMonitor(layout.primaryIndex);
+        gap = monitor.x + monitor.width - (area.x + area.width);
+    }
+    return Math.ceil(bin.width + Math.max(gap, 0));
+}
+
+// The shell's own callbacks, run once the tray has its clip back and, after a
+// slide out, the bin is back where the next banner expects it.
+function afterSlide(params, out, bin) {
+    for (const name of ['onComplete', 'onStopped']) {
+        const callback = params[name];
+        if (typeof callback === 'function') {
+            params[name] = (...args) => {
+                if (out)
+                    bin.translation_x = 0;
+                restoreTrayClip();
+                return callback(...args);
+            };
+        }
+    }
+    return params;
+}
+
+function slideParams(tray, bin, showing, params) {
+    // The opacity half. A banner going out slides, as on macOS, rather than
+    // fading as it goes.
+    if (!('y' in params))
+        return showing ? params : { ...params, opacity: 255 };
+
+    // eslint-disable-next-line no-unused-vars
+    const { y, scale_x, scale_y, ...rest } = params;
+    const animate = rest.duration !== 0;
+
+    if (showing) {
+        // _showNotification puts a new banner above the screen, out of sight,
+        // before it calls this. Asked again for a banner already in place — the
+        // notification was updated — the shell's own nudge stays.
+        const fresh = bin.y < 0;
+        if (!fresh && bin.translation_x === 0)
+            return params;
+        bin.y = 0;
+        bin.scale_x = 1;
+        bin.scale_y = 1;
+        if (fresh)
+            bin.translation_x = slideDistance(bin);
+        if (animate)
+            clipToMonitor(tray);
+        return afterSlide({
+            ...rest,
+            translation_x: 0,
+            duration: animate ? SLIDE_IN_MS : 0,
+            mode: Clutter.AnimationMode.EASE_OUT_QUINT,
+        }, false, bin);
+    }
+
+    if (animate)
+        clipToMonitor(tray);
+    return afterSlide({
+        ...rest,
+        translation_x: slideDistance(bin),
+        duration: animate ? SLIDE_OUT_MS : 0,
+        mode: Clutter.AnimationMode.EASE_IN_CUBIC,
+    }, true, bin);
+}
+
+function slideWith(showing) {
+    return function (original, ...args) {
+        const tray = this;
+        const bin = slidingBin(tray);
+        if (!bin)
+            return original.apply(this, args);
+
+        const ease = bin.ease;
+        bin.ease = function (params) {
+            return ease.call(this, slideParams(tray, this, showing, params));
+        };
+        try {
+            return original.apply(this, args);
+        } finally {
+            delete bin.ease;
+        }
+    };
+}
+
+const bannerShowPatch = new MethodPatch(
+    () => MessageTray.MessageTray?.prototype, '_updateShowingNotification', slideWith(true));
+const bannerHidePatch = new MethodPatch(
+    () => MessageTray.MessageTray?.prototype, '_hideNotification', slideWith(false));
+
 export class ShellTweaks {
     constructor(uuid, settings) {
         this._uuid = uuid;
@@ -165,6 +321,8 @@ export class ShellTweaks {
 
         this._toggle('notifications-top-right', 'moving notifications',
             () => this._moveBanners(), () => this._restoreBanners());
+        this._toggle('banners-slide-from-right', 'sliding notifications in from the right',
+            () => this._slideBanners(), () => this._restoreBannerSlide());
         this._toggle('osd-top-right', 'moving the volume and brightness bubble',
             () => this._moveOsd(), () => this._restoreOsd());
         this._toggle('hide-workspace-popup', 'hiding the desktop switch popup',
@@ -182,6 +340,7 @@ export class ShellTweaks {
         this._sources.clear();
 
         this._guard('restoring notifications', () => this._restoreBanners());
+        this._guard('restoring how notifications come and go', () => this._restoreBannerSlide());
         this._guard('restoring the volume and brightness bubble', () => this._restoreOsd());
         this._guard('restoring the desktop switch popup', () => popupPatch.disable());
         this._guard('restoring the desktops in the overview', () => this._restoreThumbnails());
@@ -300,6 +459,31 @@ export class ShellTweaks {
             // Gone with the shell, at logout.
         }
         banner.tray.bannerAlignment = banner.previous;
+    }
+
+    // Only with the banners in the corner: from the top centre, a slide in from
+    // the side would come from nowhere. The wrappers check the corner again on
+    // every banner, for another extension that has taken it since.
+    _slideBanners() {
+        if (!this._settings.get_boolean('notifications-top-right')) {
+            this._restoreBannerSlide();
+            return;
+        }
+        if (!Main.messageTray?._bannerBin || !bannerShowPatch.enable() || !bannerHidePatch.enable()) {
+            this._restoreBannerSlide();
+            this._warnOnce('banner-slide',
+                'This shell shows notifications in a way Pear Up does not know; leaving them to drop from the top.');
+        }
+    }
+
+    // A banner on its way in or out finishes the way it started, and puts the
+    // tray's clip back as it ends; a hidden one is left where the shell's own
+    // animation expects it.
+    _restoreBannerSlide() {
+        bannerShowPatch.disable();
+        bannerHidePatch.disable();
+        if (!trayClip?.tray._bannerBin?.get_transition?.('translation-x'))
+            restoreTrayClip();
     }
 
     _unqueue(name) {

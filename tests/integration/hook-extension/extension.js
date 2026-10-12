@@ -17,6 +17,7 @@ import St from 'gi://St';
 import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
@@ -176,6 +177,16 @@ const IFACE = `
     </method>
     <method name="GetBannerState">
       <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="ExpireTestNotification">
+      <arg type="b" direction="out" name="expired"/>
+    </method>
+    <method name="TraceBanner">
+      <arg type="u" direction="in" name="ms"/>
+      <arg type="b" direction="out" name="started"/>
+    </method>
+    <method name="GetBannerTrace">
+      <arg type="s" direction="out" name="trace"/>
     </method>
     <method name="ShowTestOsd">
       <arg type="b" direction="out" name="shown"/>
@@ -469,6 +480,7 @@ export default class TestHookExtension extends Extension {
     disable() {
         this.LogoutCalls();
         this.ReleaseLeftEdge();
+        this._stopBannerTrace();
         this._pointer = null;
         this._keyboard = null;
         this._export?.unexport();
@@ -1256,12 +1268,79 @@ export default class TestHookExtension extends Extension {
         const tray = Main.messageTray;
         const bin = tray._bannerBin;
         const shown = (bin?.get_n_children?.() ?? 0) > 0;
+        const source = name => MessageTray.MessageTray.prototype[name]?.toString() ?? '';
         return JSON.stringify({
             alignment: tray.bannerAlignment,
             shown,
             box: shown ? stageBox(bin) : null,
+            translationX: bin?.translation_x ?? null,
+            // The tray clips to the work area; only while a banner slides does
+            // it clip to the monitor instead.
+            trayClip: tray.clip_to_allocation && !tray.has_clip,
+            // An ease() of its own on the bin would outlive the call it was for.
+            ownEase: bin ? Object.hasOwn(bin, 'ease') : null,
+            // The shell's state names, on every release from 45 to 50, and in no
+            // wrapper.
+            showIsShells: source('_updateShowingNotification').includes('State.SHOWING'),
+            hideIsShells: source('_hideNotification').includes('State.HIDING'),
             ...screenGeometry(Main.layoutManager.primaryIndex),
         });
+    }
+
+    // What the shell does when a banner's time is up and nobody is pointing
+    // at it: hidden with its animation, kept in the list.
+    ExpireTestNotification() {
+        const tray = Main.messageTray;
+        if (!tray._notification)
+            return false;
+        tray._notificationExpired = true;
+        tray._updateState();
+        return true;
+    }
+
+    // The banner bin, every 16 ms for `ms`, to see how it moves: a D-Bus round
+    // trip per sample would be too slow for an animation a third of a second
+    // long.
+    TraceBanner(ms) {
+        this._stopBannerTrace();
+        const bin = Main.messageTray._bannerBin;
+        const start = GLib.get_monotonic_time();
+        const settings = St.Settings.get();
+        this._bannerTrace = {
+            animations: settings.enable_animations,
+            slowDown: settings.slow_down_factor,
+            samples: [],
+        };
+        const sample = () => {
+            const t = (GLib.get_monotonic_time() - start) / 1000;
+            this._bannerTrace.samples.push({
+                t,
+                shown: bin.get_n_children() > 0 && Main.messageTray.visible,
+                tx: bin.translation_x,
+                y: bin.y,
+                scale: bin.scale_x,
+                opacity: bin.opacity,
+                width: bin.width,
+                ownEase: Object.hasOwn(bin, 'ease'),
+            });
+            if (t < ms)
+                return GLib.SOURCE_CONTINUE;
+            this._bannerTraceId = 0;
+            return GLib.SOURCE_REMOVE;
+        };
+        sample();
+        this._bannerTraceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, sample);
+        return true;
+    }
+
+    GetBannerTrace() {
+        return JSON.stringify(this._bannerTrace ?? null);
+    }
+
+    _stopBannerTrace() {
+        if (this._bannerTraceId)
+            GLib.source_remove(this._bannerTraceId);
+        this._bannerTraceId = 0;
     }
 
     // The volume bubble, as a volume key brings it up, on every monitor.
