@@ -1929,8 +1929,25 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         expect(`"${title}" after an outside change`, row.active, true);
         settings.reset(key);
     }
+    // Springy Desktop Switching is the one in the group that starts off.
+    const springTitle = 'Springy Desktop Switching';
+    const springRow = page && findWidget(page, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === springTitle);
+    if (!springRow) {
+        problems.push(`the General page has no "${springTitle}" switch`);
+    } else {
+        expect('the default of spaces-spring', settings.get_default_value('spaces-spring').unpack(), false);
+        expect(`"${springTitle}" at first`, springRow.active, false);
+        springRow.active = true;
+        expect(`spaces-spring after switching "${springTitle}" on`, settings.get_boolean('spaces-spring'), true);
+        settings.set_boolean('spaces-spring', false);
+        expect(`"${springTitle}" after an outside change`, springRow.active, false);
+        settings.reset('spaces-spring');
+    }
+
     if (problems.length === problemsBefore)
-        print(`  desktop group: ${rows.length} switches, on by default, each writing its own key; ` +
+        print(`  desktop group: ${rows.length} switches, on by default, each writing its own key, ` +
+            `and ${springTitle}, off by default; ` +
             `GNOME ${release}, so ${release >= 49 ? 'with' : 'without'} ${brightnessTitle}`);
 }
 

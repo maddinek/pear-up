@@ -302,7 +302,25 @@
     "runStartupAnimation",
     "startup-complete",
     "_stateAdjustment",
-    "ControlsState"
+    "ControlsState",
+    "_workspaceAnimation",
+    "animateSwitch",
+    "_switchData",
+    "_prepareWorkspaceSwitch",
+    "_finishWorkspaceSwitch",
+    "_swipeTracker",
+    "_touchpadGesture",
+    "confirmSwipe",
+    "_getBounds",
+    "_snapPoints",
+    "_initialProgress",
+    "_endGesture",
+    "_container",
+    "baseDistance",
+    "MonitorGroup",
+    "setCustomKeybindingHandler",
+    "_showWorkspaceSwitcher",
+    "switch-to-workspace-left"
   ],
 
   "shellInternalsWith": {
