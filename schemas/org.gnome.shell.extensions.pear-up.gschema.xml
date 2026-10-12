@@ -166,6 +166,19 @@
       <description>With Automatic Screen Brightness on, the screen moves to each new light level over a few seconds, brightening faster than it darkens, as on macOS. The brightness slider and keys still act at once, and so does dimming when idle.</description>
     </key>
 
+    <!-- The floating thumbnail macOS shows after a screenshot. Off by default:
+         it is new, and it reads the shell's screenshot notification. -->
+    <key name="screenshot-thumbnail" type="b">
+      <default>false</default>
+      <summary>Show a floating thumbnail after a screenshot</summary>
+      <description>The picture shrinks into the bottom right corner, beside the dock, and stays there for five seconds, longer while the pointer rests on it. Clicking it opens the file; dragging or swiping it to the right puts it away.</description>
+    </key>
+    <key name="screenshot-thumbnail-hide-banner" type="b">
+      <default>true</default>
+      <summary>Hide GNOME's Screenshot captured banner while the thumbnail shows</summary>
+      <description>The notification stays in the list until the thumbnail goes. GNOME 46 and later; GNOME 45 always shows the banner.</description>
+    </key>
+
     <!-- The panel button is this extension's own, so it works with no search
          extension installed at all. What it opens is left open: GNOME's search
          needs nothing, and anything else people already use can be named. -->

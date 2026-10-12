@@ -32,7 +32,11 @@
       "get_default_backend",
       "Actor",
       "Clone",
-      "Timeline"
+      "Timeline",
+      "ContentGravity",
+      "ScalingFilter",
+      "ScrollDirection",
+      "AnimationMode"
     ],
     "Meta": [
       "WindowType",
@@ -48,13 +52,15 @@
       "IconTheme",
       "Widget",
       "Side",
-      "Settings"
+      "Settings",
+      "ImageContent"
     ],
     "Shell": [
       "AppSystem",
       "WindowTracker",
       "AppUsage",
-      "ActionMode"
+      "ActionMode",
+      "GLSLEffect"
     ],
     "GObject": [
       "signal_lookup"
@@ -67,7 +73,8 @@
       "FileCreateFlags",
       "Icon",
       "Settings",
-      "SettingsSchemaSource"
+      "SettingsSchemaSource",
+      "app_info_launch_default_for_uri"
     ],
     "GLib": [
       "idle_add",
@@ -86,7 +93,9 @@
       "PRIORITY_DEFAULT",
       "SOURCE_CONTINUE",
       "USEC_PER_SEC",
-      "Source"
+      "Source",
+      "UserDirectory",
+      "get_user_special_dir"
     ]
   },
 
@@ -142,7 +151,10 @@
       "get_preferred_width",
       "get_preferred_height",
       "get_first_child",
-      "get_constraints"
+      "get_constraints",
+      "set_content_scaling_filters",
+      "add_effect",
+      "remove_transition"
     ],
     "Clutter.Timeline": [
       "start",
@@ -159,6 +171,11 @@
     ],
     "Shell.Global": [
       "get_pointer"
+    ],
+    "Shell.GLSLEffect": [
+      "add_glsl_snippet",
+      "get_uniform_location",
+      "set_uniform_float"
     ],
     "Shell.AppUsage": [
       "get_most_used"
@@ -302,7 +319,17 @@
     "runStartupAnimation",
     "startup-complete",
     "_stateAdjustment",
-    "ControlsState"
+    "ControlsState",
+    "source-added",
+    "getSources",
+    "notification-added",
+    "NotificationDestroyedReason",
+    "screenshotUI",
+    "_getSelectedGeometry",
+    "_windowButton",
+    "_windowSelectors",
+    "addTopChrome",
+    "captureScreenshot"
   ],
 
   "shellInternalsWith": {
