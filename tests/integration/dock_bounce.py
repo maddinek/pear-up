@@ -53,6 +53,7 @@ class BounceChecks:
         self._check = dock_checks._check
         self._baseline = {}
         self._used = set()
+        self.ready = False
 
     # ---------------------------------------------------------------- plumbing
     def _hook(self, method, args=None, signature="()"):
@@ -182,7 +183,23 @@ class BounceChecks:
             return
         d._away()
         self._record_baseline()
-        check("nothing bounces while nothing starts", not d.state()["bounces"])
+        state = d.state()
+        check("nothing bounces while nothing starts", not state["bounces"])
+
+        # The shell itself turns animations off where it renders in software
+        # on some releases, and the bounce follows it, as its transitions do.
+        if not state.get("animations"):
+            print("  note: this shell has animations off (software rendering), "
+                  "so nothing may bounce; checking that nothing does")
+            app = self._fresh_app(self._dock(state))
+            self._hook("ActivateDockApp", (app,), "(s)")
+            samples = self._sample(app, 0.8)
+            check("with the shell's animations off nothing bounces",
+                  not any(s["clones"] for s in samples))
+            d._pear_up_setting("dock-bounce-on-launch", "false")
+            self.ready = False
+            return
+        self.ready = True
 
         # ---- a dock click on a stopped app: bounces while it starts, capped
         dock = self._dock()

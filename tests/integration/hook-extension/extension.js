@@ -1266,6 +1266,9 @@ export default class TestHookExtension extends Extension {
             docks,
             overlays,
             bounces,
+            // The shell's own answer, which also says no on software
+            // rendering in some releases (GNOME 45 in this container).
+            animations: St.Settings.get().enable_animations,
             // For a failure message: what is there when no dock is found.
             uiGroup: children.map(actor => actor.name || actor.constructor.name),
         });

@@ -84,7 +84,7 @@ Everything is read, nothing is written; see [Safety](#safety).
 | `05-notification.png` (+ `-banner`) | a notification banner where the notification settings put it |
 | `05b-app-name-menu.png` (+ `-menu`) | the bold app-name menu |
 | `06-dock-hover.png` (+ `-dock`) | the pointer resting on the dock (magnification) |
-| `07-dock-bounce-NN-dock.png`, `07b-dock-bounce-magnified-NN-dock.png` | a dock favourite clicked and bouncing as it starts, frame by frame, plain and under the pointer; animations slowed six times inside the container, each frame's lift printed in the driver output |
+| `07-dock-bounce-NN-dock.png`, `07b-dock-bounce-magnified-NN-dock.png` | a dock favourite clicked and bouncing as it starts, frame by frame, plain and under the pointer; animations slowed twelve times inside the container, each frame's lift printed in the driver output |
 | `10-prefs-<page>.png` (+ `-window`), `10-prefs-<page>-2-window.png`, `-3-window`, … | Pear Up's preferences window at its own default size, one page after another (General, Menus, Custom Menus, Dock, Appearance and Windows where the branch has them, Keyboard, About); a long page is scrolled a screenful at a time and each further screenful is saved as a window crop |
 
 Clicks go through mutter's RemoteDesktop API inside the container's session, as Pear Up's

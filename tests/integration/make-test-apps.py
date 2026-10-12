@@ -81,10 +81,9 @@ def main():
             handle.write("[Desktop Entry]\n"
                          "Type=Application\n"
                          f"Name=Test App {index}\n"
-                         # Still nothing to see, but alive for a while and
-                         # launched with startup notification, so a launch
-                         # leaves the app starting: what the dock bounce
-                         # checks bounce on.
+                         # Still nothing to see, but launched with startup
+                         # notification, so a launch leaves the app starting
+                         # for a moment: what the dock bounce checks bounce on.
                          "Exec=sleep 30\n"
                          "StartupNotify=true\n"
                          f"Icon={icon}\n")

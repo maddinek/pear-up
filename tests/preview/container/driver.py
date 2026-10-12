@@ -391,10 +391,11 @@ def dock_hover():
 
 
 def _bounce_frames(prefix, app_index, hover):
-    """Click a dock favourite (it launches nothing, so it stays starting) and
-    photograph the dock while its icon bounces. Animations run slowed down six
-    times, inside this container only, so a capture lands every few
-    hundredths of a hop; each frame's lift is read back from the overlay."""
+    """Click a dock favourite (it launches nothing, so it is starting only
+    briefly, and its icon lands after the hop in the air) and photograph the
+    dock while it bounces. Animations run slowed down twelve times, inside this
+    container only, so several captures land in one hop; each frame's lift is
+    read back from the overlay just before it is taken."""
     app = jsfn(f"""
         const dock = pv.Main.layoutManager.uiGroup.get_children()
             .find(a => a.name === 'dashtodockContainer' && a.visible);
@@ -416,7 +417,7 @@ def _bounce_frames(prefix, app_index, hover):
         return true;""")
     started = time.monotonic()
     region = pad(dock_rect(), 80)
-    for frame in range(9):
+    for frame in range(18):
         lift = jsfn("""
             const overlay = pv.Main.layoutManager.uiGroup.get_children()
                 .find(a => a.name === 'pearup-dock-bounce');
@@ -444,7 +445,7 @@ def dock_bounce():
         const settings = pv.Main.extensionManager.lookup('{PEAR_UP}')?.stateObj?.getSettings();
         if (!settings) return false;
         settings.set_boolean('dock-bounce-on-launch', true);
-        pv.St.Settings.get().slow_down_factor = 6;
+        pv.St.Settings.get().slow_down_factor = 12;
         return true;""")
     wait(0.5)
     try:

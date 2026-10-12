@@ -1305,7 +1305,7 @@ bounce_ready = False
 if dock.ready:
     try:
         bounce.run()
-        bounce_ready = True
+        bounce_ready = bounce.ready
     except GLib.Error as exc:
         check("the dock bounce could be exercised", False, exc.message.splitlines()[0])
 
