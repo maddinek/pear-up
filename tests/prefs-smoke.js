@@ -807,6 +807,56 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         expect('minimize off after hand-set', wm.get_strv('minimize'), ['<Super>h']);
         expect('tray off after hand-set', shell.get_strv('toggle-message-tray').includes('<Super>m'), true);
 
+        // Super+M in minimize while the tray still holds it, as the old window
+        // set left it: Cmd+M does not minimize yet, so the row reads off, and
+        // switching it on takes Super+M from the tray without adding it twice.
+        reset();
+        wm.set_strv('minimize', ['<Super>h', '<Super>m']);
+        shell.set_strv('toggle-message-tray', ['<Super>v', '<Super>m']);
+        row = rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes');
+        expect('Cmd+M row while the tray holds it', row.enable_expansion, false);
+        row.enable_expansion = true;
+        expect('minimize on over the old set', wm.get_strv('minimize'), ['<Super>h', '<Super>m']);
+        expect('tray on over the old set', shell.get_strv('toggle-message-tray'), ['<Super>v']);
+
+        // Cmd+M has one owner. The macOS Window Shortcuts set no longer lists
+        // it, and switching that set off leaves Cmd+M Minimizes and its Super+M
+        // alone; switching Cmd+M off then leaves the set on.
+        const WINDOW_SET = 'macOS Window Shortcuts';
+        const media = preferences._settingsForSchema('org.gnome.settings-daemon.plugins.media-keys');
+        const windowSetKeys = [[wm, 'close'], [wm, 'toggle-fullscreen'],
+            [shell, 'toggle-overview'], [pearUp, 'quit-app']];
+        if (media && preferences._schemaHasKey(media, 'screensaver'))
+            windowSetKeys.push([media, 'screensaver']);
+        reset();
+        for (const [settings, key] of windowSetKeys)
+            settings.reset(key);
+        row = rowOf(Adw.ExpanderRow, WINDOW_SET);
+        const listed = [];
+        findWidget(row, widget => {
+            if (widget instanceof Adw.ActionRow && widget !== row)
+                listed.push(`${widget.title} ${widget.subtitle}`);
+            return false;
+        });
+        expect('window set lists Cmd+M', listed.some(title => /Cmd\+M|Super\+M/i.test(title)), false);
+        row.enable_expansion = true;
+        expect('minimize after the window set alone', wm.get_strv('minimize').includes('<Super>m'), false);
+        rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes').enable_expansion = true;
+        expect('minimize with both on', wm.get_strv('minimize').filter(a => a === '<Super>m').length, 1);
+        rowOf(Adw.ExpanderRow, WINDOW_SET).enable_expansion = false;
+        expect('minimize after the window set goes off', wm.get_strv('minimize').includes('<Super>m'), true);
+        expect('Cmd+M row after the window set goes off',
+            rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes').enable_expansion, true);
+        expect('tray after the window set goes off',
+            shell.get_strv('toggle-message-tray').includes('<Super>m'), false);
+        rowOf(Adw.ExpanderRow, WINDOW_SET).enable_expansion = true;
+        rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes').enable_expansion = false;
+        expect('minimize after Cmd+M goes off', wm.get_strv('minimize').includes('<Super>m'), false);
+        expect('window set after Cmd+M goes off', rowOf(Adw.ExpanderRow, WINDOW_SET).enable_expansion, true);
+        rowOf(Adw.ExpanderRow, WINDOW_SET).enable_expansion = false;
+        for (const [settings, key] of windowSetKeys)
+            settings.reset(key);
+
         // Cmd+D
         reset();
         wm.set_strv('show-desktop', []);
@@ -852,7 +902,7 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
 
         reset();
         if (problems.length === problemsBefore)
-            print('  window keys: Cmd+M, Cmd+D and the tiling keys set, read back and restore');
+            print('  window keys: Cmd+M, Cmd+D and the tiling keys set, read back and restore; Cmd+M has one owner');
     }
 }
 

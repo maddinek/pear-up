@@ -142,7 +142,6 @@ read Cmd as the Super or Windows key.
 | `Cmd+Shift+5` | Screen recording |
 | `Cmd+Q` | Quit the app, every window of it |
 | `Cmd+W` | Close the window |
-| `Cmd+M` | Minimize |
 | `Ctrl+Cmd+F` | Full screen |
 | `Ctrl+Cmd+Q` | Lock the screen |
 | `Ctrl+↑` | Overview, like Mission Control |
@@ -157,8 +156,8 @@ added next to GNOME's own rather than replacing it, so switching a set off leave
 untouched. Where Dash to Dock already grabs a chord — it takes `Cmd+number` and `Cmd+Q` — the switch
 stands that down and offers to move the dock shortcuts to `Cmd+F1…F9` instead.
 
-**Window Keys.** Three more switches on the Keyboard page: `Cmd+M` minimizes (and leaves the message
-tray its other shortcuts), `Cmd+D` shows the desktop, and Restore GNOME Window Keys refills
+**Window Keys.** Three more switches on the Keyboard page: `Cmd+M` minimizes (it takes `Super+M` from
+the message tray and leaves the tray its other shortcuts; it is this switch's alone, not the set above's), `Cmd+D` shows the desktop, and Restore GNOME Window Keys refills
 `Super+↑`, `Super+↓` and `Super+←/→` for maximize, restore and tiling when another extension has
 emptied them. A key that is already set reads as on, and switching off puts back what was there.
 

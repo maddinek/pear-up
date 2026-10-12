@@ -263,7 +263,6 @@ const MACOS_SCREENSHOT_SHORTCUTS = [
 const MACOS_WINDOW_SHORTCUTS = [
     [PEAR_UP_SCHEMA, 'quit-app', '<Super>q', 'Quit the app, every window (Cmd+Q)'],
     ['org.gnome.desktop.wm.keybindings', 'close', '<Super>w', 'Close the window (Cmd+W)'],
-    ['org.gnome.desktop.wm.keybindings', 'minimize', '<Super>m', 'Minimize (Cmd+M)'],
     ['org.gnome.desktop.wm.keybindings', 'toggle-fullscreen', '<Super><Control>f', 'Full screen (Ctrl+Cmd+F)'],
     ['org.gnome.shell.keybindings', 'toggle-overview', '<Control>Up', 'Overview, like Mission Control'],
     ['org.gnome.settings-daemon.plugins.media-keys', 'screensaver', '<Super><Control>q', 'Lock the screen (Ctrl+Cmd+Q)'],
@@ -283,6 +282,10 @@ const MACOS_SCREENSHOT_CONFLICTS = [
 // defined winner. Super+D is the Linux convention for the desktop; macOS uses
 // Cmd+F3 / F11, and F3 is a media key on a Framework laptop. A conflict's value
 // is given what the key holds now, so only Super+M leaves the tray's list.
+//
+// Cmd+M is this set's alone. The macOS Window Shortcuts set used to add it too,
+// without taking it from the tray, and either switch going off took it away
+// from the other.
 const MINIMIZE_SHORTCUTS = [
     ['org.gnome.desktop.wm.keybindings', 'minimize', '<Super>m', 'Minimize the window (Cmd+M)'],
 ];
@@ -1551,7 +1554,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         page.add(windowGroup);
         this._addShortcutSetRow(windowGroup, {
             title: 'macOS Window Shortcuts',
-            subtitle: 'Quit, close, minimize, full screen, lock and the overview',
+            subtitle: 'Quit, close, full screen, lock and the overview',
             shortcuts: MACOS_WINDOW_SHORTCUTS,
             conflicts: MACOS_WINDOW_CONFLICTS,
         });
@@ -1566,6 +1569,9 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             subtitle: 'Takes Cmd+M from the message tray, which keeps its other shortcuts',
             shortcuts: MINIMIZE_SHORTCUTS,
             conflicts: MINIMIZE_CONFLICTS,
+            // Super+M in minimize alone is not Cmd+M minimizing while the tray
+            // holds it too; the old window set left it like that.
+            appliedNeedsConflicts: true,
         });
         this._addShortcutSetRow(windowKeysGroup, {
             title: 'Cmd+D Shows the Desktop',
@@ -2186,8 +2192,12 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // One switch drives a whole set of accelerators. Each is appended to
     // GNOME's existing list and removed again on the way out, so a user's own
     // bindings for the same action are never disturbed. Conflicting grabs from
-    // other extensions are stood down while the set is on.
-    _addShortcutSetRow(group, { title, subtitle, shortcuts, conflicts = [], rows = null }) {
+    // other extensions are stood down while the set is on. With
+    // `appliedNeedsConflicts` the row only reads on when they are stood down as
+    // well, for a set whose accelerator does nothing while another grab holds it.
+    _addShortcutSetRow(group, {
+        title, subtitle, shortcuts, conflicts = [], rows = null, appliedNeedsConflicts = false,
+    }) {
         // Bindings displaced by a set, kept so they can be handed back. Backed
         // by our own settings rather than memory alone, so they survive the
         // preferences process exiting between enabling a set and disabling it.
@@ -2205,8 +2215,13 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         shortcuts = shortcuts.filter(usable);
         conflicts = conflicts.filter(usable);
 
+        const conflictStoodDown = ([schemaId, key, valueWhenApplied]) => {
+            const current = this._settingsForSchema(schemaId).get_value(key);
+            return current.equal(valueWhenApplied(current));
+        };
         const isApplied = () => shortcuts.length > 0 && shortcuts.every(([schemaId, key, accel]) =>
-            this._settingsForSchema(schemaId).get_strv(key).includes(accel));
+            this._settingsForSchema(schemaId).get_strv(key).includes(accel)) &&
+            (!appliedNeedsConflicts || conflicts.every(conflictStoodDown));
 
         const detailRows = rows ?? shortcuts.map(([, , accel, description]) => ({
             title: this._describeAccelerator(accel),

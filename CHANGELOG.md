@@ -43,7 +43,10 @@ it back when they are switched off.
   restore and the tile-left and tile-right keys from GNOME's defaults when
   another extension, Tiling Shell for one, has emptied them, and leaves keys
   that hold something alone. A value that is already right reads as on, and
-  switching off puts back what was displaced.
+  switching off puts back what was displaced. Cmd+M left the macOS Window
+  Shortcuts set for it: both added Super+M to minimize, so switching either off
+  took it from the other, and the set never took it from the message tray.
+  Cmd+M Minimizes reads on only once the tray has given it up.
 
 - **Windows that open and close like macOS** (Windows page, Animation, *Open and
   Close Like macOS*, key `macos-window-animations`, off by default). A new
