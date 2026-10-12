@@ -95,6 +95,22 @@ const IFACE = `
     <method name="GetDockState">
       <arg type="s" direction="out" name="state"/>
     </method>
+    <method name="ActivateDockApp">
+      <arg type="s" direction="in" name="appId"/>
+      <arg type="b" direction="out" name="activated"/>
+    </method>
+    <method name="LaunchApp">
+      <arg type="s" direction="in" name="appId"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="DemandAttention">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="s" direction="out" name="how"/>
+    </method>
+    <method name="FocusWindowOf">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="b" direction="out" name="focused"/>
+    </method>
     <method name="OpenDockMenu">
       <arg type="s" direction="in" name="appId"/>
       <arg type="b" direction="out" name="opened"/>
@@ -424,6 +440,7 @@ function childAddedSignal(actor) {
 // The overlay Pear Up draws magnified dock icons into. Found by name, the same
 // way Looking Glass would find it.
 const MAGNIFIER_NAME = 'pearup-dock-magnifier';
+const BOUNCE_NAME = 'pearup-dock-bounce';
 
 // The weight the theme actually resolved for an actor's text, as a Pango
 // weight (400 regular, 700 bold) — what is drawn, rather than what a
@@ -924,6 +941,52 @@ export default class TestHookExtension extends Extension {
         return null;
     }
 
+    // A click on a dock icon, as Dash to Dock handles one: a stopped app is
+    // launched, through the shell, with startup notification.
+    ActivateDockApp(appId) {
+        const icon = this._dockAppIcon(appId);
+        if (typeof icon?.activate !== 'function')
+            return false;
+        icon.activate(1);
+        return true;
+    }
+
+    // Launches an app the way the overview does, whether or not it is in the
+    // dock. Answers with its state right after, as a Shell.AppState number.
+    LaunchApp(appId) {
+        const app = Shell.AppSystem.get_default().lookup_app(appId);
+        if (!app)
+            return 'missing';
+        app.activate();
+        return String(app.state);
+    }
+
+    // A window asking for attention, as mutter marks one: only a window that
+    // is covered or elsewhere can, so where mutter declines the signal is sent
+    // the way mutter would have sent it.
+    DemandAttention(wmClass) {
+        const window = global.get_window_actors()
+            .map(actor => actor.meta_window)
+            .find(win => win?.get_wm_class() === wmClass);
+        if (!window)
+            return 'missing';
+        window.set_demands_attention();
+        if (window.demands_attention)
+            return 'mutter';
+        global.display.emit('window-demands-attention', window);
+        return 'emitted';
+    }
+
+    FocusWindowOf(wmClass) {
+        const window = global.get_window_actors()
+            .map(actor => actor.meta_window)
+            .find(win => win?.get_wm_class() === wmClass);
+        if (!window)
+            return false;
+        window.activate(global.get_current_time());
+        return true;
+    }
+
     OpenDockMenu(appId) {
         const icon = this._dockAppIcon(appId);
         if (typeof icon?.popupMenu !== 'function')
@@ -1130,6 +1193,12 @@ export default class TestHookExtension extends Extension {
                         slot: stageBox(slot),
                         icon: icon ? stageBox(icon) : null,
                         opacity: icon ? base.opacity : slot.opacity,
+                        // The St.Icon's own opacity, which the bounce hides.
+                        iconOpacity: icon ? icon.opacity : null,
+                        // Dash to Dock's urgent wiggle turns the icon's bin,
+                        // which skews the box read for the icon.
+                        iconRotation: icon ? icon.get_parent()?.rotation_angle_z ?? 0 : null,
+                        appState: slot.child?.app?.state ?? null,
                         siblingOpacities: siblings.map(child => child.opacity),
                         focused: slot.child?.focused ?? null,
                         // The backdrop Dash to Dock draws behind a focused
@@ -1178,11 +1247,25 @@ export default class TestHookExtension extends Extension {
                 })),
             }));
 
+        const bounces = children
+            .filter(actor => actor.name === BOUNCE_NAME)
+            .map(overlay => ({
+                previousSibling: overlay.get_previous_sibling()?.name ?? null,
+                children: overlay.get_children().map(child => ({
+                    type: child instanceof Clutter.Clone ? 'clone' : 'other',
+                    source: child.source instanceof St.Icon ? 'icon' : null,
+                    box: stageBox(child),
+                    opacity: child.opacity,
+                    visible: child.visible,
+                })),
+            }));
+
         const [x, y] = global.get_pointer();
         return JSON.stringify({
             pointer: [x, y],
             docks,
             overlays,
+            bounces,
             // For a failure message: what is there when no dock is found.
             uiGroup: children.map(actor => actor.name || actor.constructor.name),
         });

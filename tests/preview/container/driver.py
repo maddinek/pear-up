@@ -390,6 +390,75 @@ def dock_hover():
     pointer().park()
 
 
+def _bounce_frames(prefix, app_index, hover):
+    """Click a dock favourite (it launches nothing, so it stays starting) and
+    photograph the dock while its icon bounces. Animations run slowed down six
+    times, inside this container only, so a capture lands every few
+    hundredths of a hop; each frame's lift is read back from the overlay."""
+    app = jsfn(f"""
+        const dock = pv.Main.layoutManager.uiGroup.get_children()
+            .find(a => a.name === 'dashtodockContainer' && a.visible);
+        const items = dock?.dash?._box.get_children().filter(i => i.child?.app) ?? [];
+        const item = items[Math.min({app_index}, items.length - 1)];
+        if (!item) return null;
+        return {{id: item.child.app.get_id(), slot: box(item), icon: box(item.child.icon.icon)}};""")
+    if not app:
+        print("  !! no dock favourite to bounce")
+        return
+    x, y, w, h = app["slot"]
+    if hover:
+        pointer().move(x + w / 2, y + h / 2, settle=1.2)
+    jsfn(f"""
+        const dock = pv.Main.layoutManager.uiGroup.get_children()
+            .find(a => a.name === 'dashtodockContainer' && a.visible);
+        const item = dock.dash._box.get_children().find(i => i.child?.app?.get_id() === '{app["id"]}');
+        item.child.activate(1);
+        return true;""")
+    started = time.monotonic()
+    region = pad(dock_rect(), 80)
+    for frame in range(9):
+        lift = jsfn("""
+            const overlay = pv.Main.layoutManager.uiGroup.get_children()
+                .find(a => a.name === 'pearup-dock-bounce');
+            const clone = overlay?.get_children().find(c => c.opacity > 0);
+            const copies = pv.Main.layoutManager.uiGroup.get_children()
+                .find(a => a.name === 'pearup-dock-magnifier');
+            return {clone: clone ? box(clone) : null, magnified: !!copies};""")
+        name = f"{prefix}-{frame:02d}"
+        capture(name, {"dock": region}, keep_full=False)
+        print(f"    t={time.monotonic() - started:.2f}s clone={lift['clone']} "
+              f"icon={app['icon']} magnified={lift['magnified']}")
+    if hover:
+        pointer().park()
+
+
+@shot
+def dock_bounce():
+    """Extra: a dock icon bouncing as its app starts (Pear Up's dock bounce),
+    plain and under magnification, as a frame sequence."""
+    focus_app(FRONT_APP)
+    if not dock_rect():
+        print("  !! no dock")
+        return
+    jsfn(f"""
+        const settings = pv.Main.extensionManager.lookup('{PEAR_UP}')?.stateObj?.getSettings();
+        if (!settings) return false;
+        settings.set_boolean('dock-bounce-on-launch', true);
+        pv.St.Settings.get().slow_down_factor = 6;
+        return true;""")
+    wait(0.5)
+    try:
+        _bounce_frames("07-dock-bounce", 1, hover=False)
+        wait(1.0)
+        _bounce_frames("07b-dock-bounce-magnified", 2, hover=True)
+    finally:
+        jsfn(f"""
+            pv.St.Settings.get().slow_down_factor = 1;
+            pv.Main.extensionManager.lookup('{PEAR_UP}')?.stateObj?.getSettings()
+                ?.reset('dock-bounce-on-launch');
+            return true;""")
+
+
 # ---------------------------------------------------------------- preferences
 # Pear Up's preferences window, page by page. It is a separate GTK4 process, so
 # it is driven through the accessibility bus (AT-SPI): each page's tab in the

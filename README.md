@@ -106,7 +106,8 @@ the macOS Dock marks it with its dot alone; a switch brings it back. Magnificati
 macOS Dock: the icon under the pointer grows while its neighbours grow less and move apart. It is off
 until you switch it on, and a slider then runs from weak to strong. Pear Up draws it on top of Dash
 to Dock without changing any of Dash to Dock's settings, and clicks and drag-and-drop still go to
-Dash to Dock's own icons.
+Dash to Dock's own icons. Icons can also bounce as on macOS: away from the screen edge while their app
+starts, and three times when an app in the background asks for attention; each has its own switch.
 
 **A frosted-glass dock.** With [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/)
 installed, a Glass group on the same page turns the dock into the floating, frosted pill macOS has. One
@@ -317,7 +318,11 @@ front, and disabling it leaves nothing behind.
 With Dash to Dock installed in the same container, a virtual pointer then hovers the dock, on the right
 edge and along the bottom: the icon under it has to reach exactly the chosen size, its neighbours less
 and pushed outward, and leaving the dock, switching magnification off mid-hover or disabling Pear Up
-has to give every icon its opacity back and leave no overlay behind.
+has to give every icon its opacity back and leave no overlay behind. Launching an app from the dock
+then has to bounce its icon away from each of the four edges by half its size, keep bouncing while the
+app starts and land once its window appears or after ten seconds; a covered window asking for
+attention has to bounce its app three times, or less once brought forward; and under magnification
+the magnified copy has to do the bouncing, with nothing drawn twice.
 
 The menus are asserted rather than clicked. Activating them through the structure runs the same code
 a click would, without depending on pixel coordinates or animation timing, which is where interface

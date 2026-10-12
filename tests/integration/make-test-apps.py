@@ -81,9 +81,27 @@ def main():
             handle.write("[Desktop Entry]\n"
                          "Type=Application\n"
                          f"Name=Test App {index}\n"
-                         "Exec=true\n"
+                         # Still nothing to see, but alive for a while and
+                         # launched with startup notification, so a launch
+                         # leaves the app starting: what the dock bounce
+                         # checks bounce on.
+                         "Exec=sleep 30\n"
+                         "StartupNotify=true\n"
                          f"Icon={icon}\n")
         ids.append(desktop_id)
+
+    # An app that does start, its window appearing after a delay; not a
+    # favourite, so it only shows in the dock while it runs. Its id is the
+    # application id test-window.js is given, which is how the shell matches
+    # its window to this entry.
+    launch_id = "io.github.maddinek.PearUpTestLaunch"
+    with open(os.path.join(apps, f"{launch_id}.desktop"), "w") as handle:
+        handle.write("[Desktop Entry]\n"
+                     "Type=Application\n"
+                     "Name=Test Launch\n"
+                     f"Exec=gjs -m /src/tests/integration/test-window.js {launch_id} 2500\n"
+                     "StartupNotify=true\n"
+                     f"Icon={os.path.join(icons, 'app1.png')}\n")
 
     print("[" + ", ".join(f"'{desktop_id}'" for desktop_id in ids) + "]")
     return 0

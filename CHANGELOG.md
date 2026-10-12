@@ -124,6 +124,18 @@ it back when they are switched off.
   drag-and-drop still reach Dash to Dock's own icons. It magnifies Dash to
   Dock's icons, so the group appears only when Dash to Dock is installed.
 
+- **Dock bounce**: an app's dock icon hops away from the screen edge while the
+  app starts, until its first window appears (at most ten seconds), and three
+  times when a window of an app in the background asks for attention, landing
+  early once the app is brought forward — leftwards for a dock on the right,
+  upwards for one at the bottom. Each hop takes 0.6 s and rises half the
+  icon's size, rising and falling like a thrown ball; it is slowed with the
+  shell's own animations and skipped when animations are off. Two switches in
+  a new Bounce group on the Dock page, `dock-bounce-on-launch` and
+  `dock-bounce-on-attention`, both off by default. Drawn over Dash to Dock like
+  magnification, which lifts its magnified copy instead while the pointer is on
+  the dock; the running dot stays put, as on macOS.
+
 - **A Glass group on the Dock page, for a frosted-glass dock.** The floating,
   frosted pill macOS has is [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/)
   blurring and tinting what is behind Dash to Dock, and the group sets how. It is
