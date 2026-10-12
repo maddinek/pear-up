@@ -229,6 +229,10 @@
 
   "shellInternals": [
     "_updatePanel",
+    "_shouldAnimateActor",
+    "_mapWindow",
+    "_destroyWindow",
+    "is_attached_dialog",
     "addKeybinding",
     "removeKeybinding",
     "_rightBox",

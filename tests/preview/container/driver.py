@@ -507,6 +507,105 @@ def prefs():
     wait(1.0)
 
 
+# ------------------------------------------------- opening and closing windows
+# Pear Up's Open and Close Like macOS, at a twenty-fifth of the speed so a
+# picture can be taken several times while a window opens and again while it
+# closes, then GNOME's own opening for comparison. Each frame is cropped around
+# the window, with room for the shadow, and its scale and opacity are printed.
+ANIMATION_SLOW_DOWN = 25
+ANIMATED_APP = "org.gnome.TextEditor.desktop"
+
+
+def _animated_actor_js(body):
+    """Runs body with `actor` the window being animated: the new window, once
+    _open_animated_window has seen it, kept until it is destroyed."""
+    return jsfn(f"""
+        const actor = globalThis.pvAnimated ?? null;
+        {body}""")
+
+
+def _animation_frames(prefix, label, done_js, crop, limit=10):
+    for index in range(1, limit + 1):
+        state = _animated_actor_js(f"""
+            if (!actor) return null;
+            const [px, py] = actor.get_pivot_point();
+            return {{sx: actor.scale_x, sy: actor.scale_y, px, py, opacity: actor.opacity,
+                     done: {done_js}}};""")
+        if state is None:
+            print(f"  {label} {index}: the window is gone")
+            return
+        name = f"{prefix}-{index}"
+        capture(name, {"window": crop}, keep_full=False)
+        print(f"  {label} {index}: scale {state['sx']:.3f} x {state['sy']:.3f}, "
+              f"pivot {state['px']:.2f},{state['py']:.2f}, opacity {state['opacity']}")
+        if state["done"]:
+            return
+
+
+def _open_animated_window():
+    jsfn(f"""
+        const app = pv.Shell.AppSystem.get_default().lookup_app('{ANIMATED_APP}');
+        globalThis.pvKnownWindows = app?.get_windows?.() ?? [];
+        globalThis.pvAnimated = null;
+        app?.open_new_window(-1);
+        return true;""")
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        rect = jsfn(f"""
+            const app = pv.Shell.AppSystem.get_default().lookup_app('{ANIMATED_APP}');
+            const actor = (app?.get_windows?.() ?? [])
+                .filter(w => !globalThis.pvKnownWindows.includes(w))
+                .map(w => w.get_compositor_private())
+                .find(a => a && a.visible);
+            if (!actor) return null;
+            if (globalThis.pvAnimated !== actor) {{
+                globalThis.pvAnimated = actor;
+                actor.connect('destroy', () => {{
+                    if (globalThis.pvAnimated === actor) globalThis.pvAnimated = null;
+                }});
+            }}
+            const r = actor.meta_window.get_frame_rect();
+            return [r.x, r.y, r.width, r.height];""")
+        if rect:
+            return rect
+        time.sleep(0.02)
+    return None
+
+
+@shot
+def window_open_close():
+    settings = ("pv.Main.extensionManager.lookup('%s').stateObj.getSettings()" % PEAR_UP)
+    js(f"{settings}.set_boolean('macos-window-animations', true); "
+       f"pv.St.Settings.get().slow_down_factor = {ANIMATION_SLOW_DOWN}; true")
+    try:
+        rect = _open_animated_window()
+        if not rect:
+            print("  !! no new window appeared")
+            return
+        crop = pad(rect, 80)
+        _animation_frames("20-macos-open", "opening",
+                          "actor.opacity === 255 && actor.scale_x === 1", crop)
+        time.sleep(0.5)
+        capture("20-macos-open-settled", {"window": crop}, keep_full=False)
+        _animated_actor_js("actor?.meta_window.delete(global.get_current_time()); return true;")
+        time.sleep(0.05)
+        _animation_frames("21-macos-close", "closing", "false", crop)
+        time.sleep(1.0)
+
+        js(f"{settings}.set_boolean('macos-window-animations', false); true")
+        rect = _open_animated_window()
+        if rect:
+            crop = pad(rect, 80)
+            _animation_frames("22-stock-open", "stock opening",
+                              "actor.opacity === 255 && actor.scale_x === 1", crop, limit=4)
+            js("pv.St.Settings.get().slow_down_factor = 1; true")
+            _animated_actor_js("actor?.meta_window.delete(global.get_current_time()); return true;")
+            time.sleep(1.0)
+    finally:
+        js(f"{settings}.reset('macos-window-animations'); "
+           "pv.St.Settings.get().slow_down_factor = 1; delete globalThis.pvKnownWindows; delete globalThis.pvAnimated; true")
+
+
 # ---------------------------------------------------------------- facts
 def facts():
     info = jsfn("""

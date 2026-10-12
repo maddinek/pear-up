@@ -10,6 +10,7 @@ import { SearchButton } from './searchButton.js';
 import { DockMagnifier } from './dockMagnifier.js';
 import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
+import { WindowAnimations, WINDOW_ANIMATIONS_KEY } from './windowAnimations.js';
 import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
@@ -99,6 +100,7 @@ export default class GlobalMenuExtension extends Extension {
         this._dockMagnifier = null;
         this._shellTweaks = null;
         this._smoothBrightness = null;
+        this._windowAnimations = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -188,6 +190,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._shellTweaks?.sync();
             else if (key === SMOOTH_BRIGHTNESS_KEY)
                 this._smoothBrightness?.sync();
+            else if (key === WINDOW_ANIMATIONS_KEY)
+                this._windowAnimations?.sync();
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -239,6 +243,11 @@ export default class GlobalMenuExtension extends Extension {
         // sets the brightness itself (GNOME 49 on).
         this._guard('smoothing automatic brightness', () => {
             this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
+        });
+
+        // Windows that open and close as they do on macOS, off by default.
+        this._guard('restyling window animations', () => {
+            this._windowAnimations = new WindowAnimations(this.metadata.uuid, this._settings);
         });
 
         // GNOME can close a window from the keyboard but has nothing that
@@ -1227,6 +1236,10 @@ export default class GlobalMenuExtension extends Extension {
         // Stops the fade and applies where it was heading.
         this._guard('restoring automatic brightness', () => this._smoothBrightness?.destroy());
         this._smoothBrightness = null;
+
+        // Animations already running finish as they began.
+        this._guard('restoring window animations', () => this._windowAnimations?.destroy());
+        this._windowAnimations = null;
 
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one

@@ -166,6 +166,15 @@
       <description>With Automatic Screen Brightness on, the screen moves to each new light level over a few seconds, brightening faster than it darkens, as on macOS. The brightness slider and keys still act at once, and so does dimming when idle.</description>
     </key>
 
+    <!-- Restyles the shell's own open and close animations; see
+         windowAnimations.js. Off by default: it changes how every window
+         appears. -->
+    <key name="macos-window-animations" type="b">
+      <default>false</default>
+      <summary>Open and close windows as macOS does</summary>
+      <description>A new window fades in while growing slightly from its centre, and a closing one fades while shrinking slightly, instead of GNOME's pop up from the bottom edge. Dialogs attached to their window keep GNOME's unfold.</description>
+    </key>
+
     <!-- The panel button is this extension's own, so it works with no search
          extension installed at all. What it opens is left open: GNOME's search
          needs nothing, and anything else people already use can be named. -->

@@ -84,6 +84,7 @@ Everything is read, nothing is written; see [Safety](#safety).
 | `05-notification.png` (+ `-banner`) | a notification banner where the notification settings put it |
 | `05b-app-name-menu.png` (+ `-menu`) | the bold app-name menu |
 | `06-dock-hover.png` (+ `-dock`) | the pointer resting on the dock (magnification) |
+| `20-macos-open-<n>-window.png`, `21-macos-close-<n>-window.png`, `22-stock-open-<n>-window.png` | Open and Close Like macOS at a 25th of the speed: frames of a new Text Editor window opening and closing, then GNOME's own opening for comparison, each cropped around the window; the driver log prints each frame's scale, pivot and opacity |
 | `10-prefs-<page>.png` (+ `-window`), `10-prefs-<page>-2-window.png`, `-3-window`, … | Pear Up's preferences window at its own default size, one page after another (General, Menus, Custom Menus, Dock, Appearance and Windows where the branch has them, Keyboard, About); a long page is scrolled a screenful at a time and each further screenful is saved as a window crop |
 
 Clicks go through mutter's RemoteDesktop API inside the container's session, as Pear Up's

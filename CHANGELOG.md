@@ -14,6 +14,27 @@ it back when they are switched off.
 
 ### Added
 
+- **Windows that open and close like macOS** (Windows page, Animation, *Open and
+  Close Like macOS*, key `macos-window-animations`, off by default). A new
+  window fades in while growing from nine tenths of its size around its centre
+  (230 ms, ease-out cubic), and a closing one fades while shrinking back to nine
+  tenths (190 ms), where GNOME pops a window up from a sliver at its bottom edge.
+  It restyles the shell's own animation rather than replacing it: the window
+  manager's `_shouldAnimateActor` is wrapped on `Main.wm` — on the instance,
+  so it sits in one chain with Magic Lamp's wrapper whichever was enabled first —
+  and when the shell is about to animate a normal window or a dialog of its own
+  opening or closing, that window's next `ease()` gets other values. The shell
+  still decides whether to animate, keeps its books and finishes the window
+  through its own `onStopped`, so a window closed mid-animation is finished as
+  without Pear Up. Attached dialogs keep GNOME's unfold, which is close to a
+  macOS sheet; menus and tooltips are never touched; minimizing stays Magic
+  Lamp's. The slow-down factor and Reduce Animation apply as to the shell's own.
+  Burn My Windows, if it has an effect for a window, takes precedence.
+  Integration tests sample the animation at a quarter speed on GNOME 48 and 50
+  (GNOME 45 does not animate windows headless), with a stand-in for Magic Lamp,
+  and check that nothing is left behind; the preview takes a frame sequence of
+  both and of GNOME's own opening.
+
 - **An Appearance page, starting with type and the accent.** macOS-Like Type
   sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
   own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns

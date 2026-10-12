@@ -932,6 +932,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         if (maximizeRow)
             page.add(openingGroup);
 
+        this._buildWindowAnimationGroup(page);
         this._buildRoundedCornersGroup(page);
         this._buildGenieGroup(page);
 
@@ -1427,6 +1428,21 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         // Nothing to set while the extension is off, as with the other sliders.
         radius.row.set_sensitive(switchRow.active);
         switchRow.connect('notify::active', () => radius.row.set_sensitive(switchRow.active));
+    }
+
+    // Pear Up's own, unlike the rest of the page: it restyles the shell's
+    // animations rather than setting anything of GNOME's.
+    _buildWindowAnimationGroup(page) {
+        const group = new Adw.PreferencesGroup({ title: 'Animation' });
+        page.add(group);
+        const row = new Adw.SwitchRow({
+            title: 'Open and Close Like macOS',
+            subtitle: 'Windows fade in growing slightly from their centre, and fade out shrinking, ' +
+                'instead of popping up from the bottom edge',
+        });
+        group.add(row);
+        this.getSettings().bind('macos-window-animations', row, 'active',
+            Gio.SettingsBindFlags.DEFAULT);
     }
 
     _buildGenieGroup(page) {
