@@ -320,6 +320,35 @@ do
     ratio = out / raw
     check(string.format("in between (40 mm/s), in between (%.3f)", ratio), ratio > 0.45 and ratio < 0.75)
 
+    -- A slow scroll steps evenly. libinput scrolls by the fingers' average,
+    -- and positions are whole units: rounded alike, both fingers' shifts round
+    -- the same way and the average moves in whole units, at 0.35 a step of one
+    -- frame twice the next. Rounded together, their sum stays within half a
+    -- unit of the exact one, and no frame's step strays further than that.
+    rig = new_rig(0.35)
+    local ax, bx, ay, by = mm(45), mm(61), mm(15), mm(15)
+    step(rig, { [0] = { ax, ay } })
+    for _ = 1, 3 do step(rig, { [0] = { ax, ay }, [1] = { bx, by } }) end
+    local worst_sum, steps, last = 0, {}, nil
+    for i = 1, 120 do
+        ay, by = ay + mm(25 * FRAME_US / 1e6), by + mm(25.5 * FRAME_US / 1e6)
+        step(rig, { [0] = { ax, ay }, [1] = { bx, by } })
+        local a, b = rig.tp.slots[0], rig.tp.slots[1]
+        local exact = a.y + a.oy + b.y + b.oy
+        local sent = rig.view.slots[0].y + rig.view.slots[1].y
+        worst_sum = math.max(worst_sum, math.abs(sent - exact))
+        if last and i > 20 then steps[#steps + 1] = sent / 2 - last end
+        last = sent / 2
+    end
+    local mean = 0
+    for _, s in ipairs(steps) do mean = mean + s / #steps end
+    local worst_step = 0
+    for _, s in ipairs(steps) do worst_step = math.max(worst_step, math.abs(s - mean)) end
+    check(string.format("slowly, the fingers' sum is within half a unit of the exact one (%.2f)", worst_sum),
+        worst_sum <= 0.5 + 1e-9)
+    check(string.format("and each frame's step within half a unit of the mean %.2f (%.2f)", mean, worst_step),
+        worst_step <= 0.5 + 1e-9)
+
     -- Touchpads do not always report both fingers in every frame: here each
     -- frame carries one of them, by twice the step. Measured over a window
     -- they still move together.
