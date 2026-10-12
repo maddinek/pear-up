@@ -36,6 +36,15 @@ it back when they are switched off.
   tracker is changed, on that instance, so the overview's swipe is untouched.
   The rubber band needs GNOME 49 or later; 45 to 48 get the spring and the bump.
 
+- **Window Keys on the Keyboard page.** Cmd+M Minimizes adds Super+M to the
+  minimize shortcut and takes it from the message tray, which keeps its other
+  keys; Cmd+D Shows the Desktop adds Super+D (macOS uses Cmd+F3 or F11, and F3 is
+  a media key on a Framework). Restore GNOME Window Keys refills maximize,
+  restore and the tile-left and tile-right keys from GNOME's defaults when
+  another extension, Tiling Shell for one, has emptied them, and leaves keys
+  that hold something alone. A value that is already right reads as on, and
+  switching off puts back what was displaced.
+
 - **An Appearance page, starting with type and the accent.** macOS-Like Type
   sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
   own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns

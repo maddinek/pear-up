@@ -744,6 +744,118 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
     }
 }
 
+// The Window Keys group: Cmd+M and Cmd+D are shortcut sets, the tiling keys a
+// switch that refills only what is empty. Each is driven through a second
+// preferences object after the first, as after the window was reopened, and
+// must hand the user's own values back. Settings live in memory here.
+{
+    const WM = 'org.gnome.desktop.wm.keybindings';
+    const MUTTER = 'org.gnome.mutter.keybindings';
+    const SHELL = 'org.gnome.shell.keybindings';
+    const wm = preferences._settingsForSchema(WM);
+    const mutter = preferences._settingsForSchema(MUTTER);
+    const shell = preferences._settingsForSchema(SHELL);
+    const pearUp = preferences.getSettings();
+    const problemsBefore = problems.length;
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`window keys: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+
+    if (!wm || !mutter || !shell || !preferences._schemaHasKey(shell, 'toggle-message-tray') ||
+        !preferences._schemaHasKey(mutter, 'toggle-tiled-left')) {
+        print('  window keys: skipped, the GNOME keybinding schemas are not complete here');
+    } else {
+        const kept = [];
+        const rowOf = (type, title) => {
+            const page = new Preferences(metadata)._buildKeyboardPage();
+            kept.push(page);
+            return findWidget(page, widget => widget instanceof type && widget.title === title);
+        };
+        const reset = () => {
+            for (const [settings, key] of [[wm, 'minimize'], [wm, 'show-desktop'], [wm, 'maximize'],
+                [wm, 'unmaximize'], [mutter, 'toggle-tiled-left'], [mutter, 'toggle-tiled-right'],
+                [shell, 'toggle-message-tray']])
+                settings.reset(key);
+            pearUp.reset('displaced-keybindings');
+            pearUp.reset('displaced-settings');
+        };
+
+        // Cmd+M: minimize gains it, the tray loses only it, and off puts both back.
+        reset();
+        wm.set_strv('minimize', ['<Super>h']);
+        shell.set_strv('toggle-message-tray', ['<Super>v', '<Super>m', '<Super>n']);
+        let row = rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes');
+        expect('Cmd+M row before', row.enable_expansion, false);
+        row.enable_expansion = true;
+        expect('minimize on', wm.get_strv('minimize'), ['<Super>h', '<Super>m']);
+        expect('tray on', shell.get_strv('toggle-message-tray'), ['<Super>v', '<Super>n']);
+        row = rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes');
+        expect('Cmd+M row reopened', row.enable_expansion, true);
+        row.enable_expansion = false;
+        expect('minimize off', wm.get_strv('minimize'), ['<Super>h']);
+        expect('tray off', shell.get_strv('toggle-message-tray'), ['<Super>v', '<Super>m', '<Super>n']);
+        expect('keybinding notes after Cmd+M', pearUp.get_string('displaced-keybindings'), '{}');
+
+        // Already set by hand, as on framy: reads on, off goes back to GNOME's own.
+        reset();
+        wm.set_strv('minimize', ['<Super>h', '<Super>m']);
+        shell.set_strv('toggle-message-tray', ['<Super>v']);
+        row = rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes');
+        expect('Cmd+M row set by hand', row.enable_expansion, true);
+        row.enable_expansion = false;
+        expect('minimize off after hand-set', wm.get_strv('minimize'), ['<Super>h']);
+        expect('tray off after hand-set', shell.get_strv('toggle-message-tray').includes('<Super>m'), true);
+
+        // Cmd+D
+        reset();
+        wm.set_strv('show-desktop', []);
+        row = rowOf(Adw.ExpanderRow, 'Cmd+D Shows the Desktop');
+        expect('Cmd+D row before', row.enable_expansion, false);
+        row.enable_expansion = true;
+        expect('show-desktop on', wm.get_strv('show-desktop'), ['<Super>d']);
+        rowOf(Adw.ExpanderRow, 'Cmd+D Shows the Desktop').enable_expansion = false;
+        expect('show-desktop off', wm.get_strv('show-desktop'), []);
+        wm.set_strv('show-desktop', ['<Super>d']);
+        expect('Cmd+D row set by hand', rowOf(Adw.ExpanderRow, 'Cmd+D Shows the Desktop').enable_expansion, true);
+
+        // Tiling keys: emptied ones refilled, a key the user filled is not touched.
+        const TILING = 'Restore GNOME Window Keys';
+        const state = () => [wm.get_strv('maximize'), wm.get_strv('unmaximize'),
+            mutter.get_strv('toggle-tiled-left'), mutter.get_strv('toggle-tiled-right')];
+        reset();
+        wm.set_strv('maximize', []);
+        wm.set_strv('unmaximize', []);
+        mutter.set_strv('toggle-tiled-left', []);
+        mutter.set_strv('toggle-tiled-right', ['<Super>Right', '<Alt>r']);
+        row = rowOf(Adw.SwitchRow, TILING);
+        expect('tiling switch while emptied', row.active, false);
+        row.active = true;
+        expect('tiling keys refilled', state(), [['<Super>Up'], ['<Super>Down', '<Alt>F5'],
+            ['<Super>Left'], ['<Super>Right', '<Alt>r']]);
+        row = rowOf(Adw.SwitchRow, TILING);
+        expect('tiling switch reopened', row.active, true);
+        row.active = false;
+        expect('tiling keys handed back', state(), [[], [], [], ['<Super>Right', '<Alt>r']]);
+        expect('settings notes after tiling', pearUp.get_string('displaced-settings'), '{}');
+
+        // Filled by hand already reads on and is left alone when switched off.
+        wm.set_strv('maximize', ['<Super>Up']);
+        wm.set_strv('unmaximize', ['<Super>Down', '<Alt>F5']);
+        mutter.set_strv('toggle-tiled-left', ['<Super>Left']);
+        mutter.set_strv('toggle-tiled-right', ['<Super>Right']);
+        row = rowOf(Adw.SwitchRow, TILING);
+        expect('tiling switch set by hand', row.active, true);
+        row.active = false;
+        expect('tiling keys set by hand stay', state(), [['<Super>Up'], ['<Super>Down', '<Alt>F5'],
+            ['<Super>Left'], ['<Super>Right']]);
+
+        reset();
+        if (problems.length === problemsBefore)
+            print('  window keys: Cmd+M, Cmd+D and the tiling keys set, read back and restore');
+    }
+}
+
 // The Windows page drives GNOME's window settings, the user's gtk.css files and
 // two other extensions. As with Appearance, the checks that matter are what is
 // written and what is handed back; run here the settings land in the in-memory
