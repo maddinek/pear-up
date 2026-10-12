@@ -278,6 +278,35 @@ const MACOS_SCREENSHOT_CONFLICTS = [
         'Dash to Dock stops launching apps with Cmd+number'],
 ];
 
+// Cmd+M minimises and Cmd+D shows the desktop. GNOME hands Super+M to the
+// message tray, which has to give it up: two grabs on one accelerator have no
+// defined winner. Super+D is the Linux convention for the desktop; macOS uses
+// Cmd+F3 / F11, and F3 is a media key on a Framework laptop. A conflict's value
+// is given what the key holds now, so only Super+M leaves the tray's list.
+const MINIMIZE_SHORTCUTS = [
+    ['org.gnome.desktop.wm.keybindings', 'minimize', '<Super>m', 'Minimize the window (Cmd+M)'],
+];
+
+const MINIMIZE_CONFLICTS = [
+    ['org.gnome.shell.keybindings', 'toggle-message-tray',
+        current => GLib.Variant.new_strv(current.get_strv().filter(accel => accel !== '<Super>m')),
+        'The message tray gives up Cmd+M and keeps its other shortcuts'],
+];
+
+const SHOW_DESKTOP_SHORTCUTS = [
+    ['org.gnome.desktop.wm.keybindings', 'show-desktop', '<Super>d', 'Show the desktop (Cmd+D)'],
+];
+
+// Maximise, restore and tile left or right. Another extension (Tiling Shell is
+// one) can empty these keys and never fill them again; they are refilled from
+// GNOME's own defaults, and only the ones that are empty.
+const WINDOW_TILING_KEYS = [
+    ['org.gnome.desktop.wm.keybindings', 'maximize'],
+    ['org.gnome.desktop.wm.keybindings', 'unmaximize'],
+    ['org.gnome.mutter.keybindings', 'toggle-tiled-left'],
+    ['org.gnome.mutter.keybindings', 'toggle-tiled-right'],
+];
+
 const MACOS_WINDOW_CONFLICTS = [
     [DASH_TO_DOCK_SCHEMA, 'shortcut', () => GLib.Variant.new_strv([]),
         'Dash to Dock stops revealing the dock with Cmd+Q'],
@@ -1491,6 +1520,35 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             conflicts: MACOS_WINDOW_CONFLICTS,
         });
 
+        const windowKeysGroup = new Adw.PreferencesGroup({
+            title: 'Window Keys',
+            description: 'Super is Cmd on this keyboard (Alt and Cmd are swapped)',
+        });
+        page.add(windowKeysGroup);
+        this._addShortcutSetRow(windowKeysGroup, {
+            title: 'Cmd+M Minimizes',
+            subtitle: 'Takes Cmd+M from the message tray, which keeps its other shortcuts',
+            shortcuts: MINIMIZE_SHORTCUTS,
+            conflicts: MINIMIZE_CONFLICTS,
+        });
+        this._addShortcutSetRow(windowKeysGroup, {
+            title: 'Cmd+D Shows the Desktop',
+            subtitle: 'macOS uses Cmd+F3 or F11; Super+D is the Linux habit, and F3 is a media key on a Framework',
+            shortcuts: SHOW_DESKTOP_SHORTCUTS,
+        });
+        this._addDisplacingSwitchRow(windowKeysGroup, {
+            title: 'Restore GNOME Window Keys',
+            subtitle: 'Refills Super+↑, Super+↓ and Super+←/→ for maximize, restore and tiling ' +
+                'when another extension has emptied them. Keys that hold something are left alone',
+            targets: WINDOW_TILING_KEYS.map(([schemaId, key]) => [schemaId, key, () => {
+                const settings = this._settingsForSchema(schemaId);
+                const current = settings.get_value(key);
+                return current.get_strv().length > 0
+                    ? current
+                    : settings.settings_schema.get_key(key).get_default_value();
+            }]),
+        });
+
         if (this._dashToDockSettings()) {
             const dockGroup = new Adw.PreferencesGroup({
                 title: 'Dock',
@@ -2161,8 +2219,9 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 if (wanted) {
                     // Keep whatever was there so switching off restores the
                     // user's own binding rather than the schema default.
-                    displacedValues.set(`${schemaId}:${key}`, settings.get_value(key));
-                    settings.set_value(key, valueWhenApplied());
+                    const before = settings.get_value(key);
+                    displacedValues.set(`${schemaId}:${key}`, before);
+                    settings.set_value(key, valueWhenApplied(before));
                 } else {
                     const saved = displacedValues.get(`${schemaId}:${key}`);
                     if (saved)

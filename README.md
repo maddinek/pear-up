@@ -143,6 +143,11 @@ added next to GNOME's own rather than replacing it, so switching a set off leave
 untouched. Where Dash to Dock already grabs a chord — it takes `Cmd+number` and `Cmd+Q` — the switch
 stands that down and offers to move the dock shortcuts to `Cmd+F1…F9` instead.
 
+**Window Keys.** Three more switches on the Keyboard page: `Cmd+M` minimizes (and leaves the message
+tray its other shortcuts), `Cmd+D` shows the desktop, and Restore GNOME Window Keys refills
+`Super+↑`, `Super+↓` and `Super+←/→` for maximize, restore and tiling when another extension has
+emptied them. A key that is already set reads as on, and switching off puts back what was there.
+
 **macOS keys inside apps.** An app reads its own keys, so `Cmd+C` in an app, or `Option+←` in a
 text field, cannot be rebound by any GNOME shortcut: Linux apps know those as `Ctrl+C` and `Ctrl+←`,
 and the keys have to be different before they arrive. Three switches in the Inside Apps group of the
