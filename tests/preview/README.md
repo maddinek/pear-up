@@ -85,6 +85,7 @@ Everything is read, nothing is written; see [Safety](#safety).
 | `05b-app-name-menu.png` (+ `-menu`) | the bold app-name menu |
 | `06-dock-hover.png` (+ `-dock`) | the pointer resting on the dock (magnification) |
 | `07-slide-in-NN-x<offset>-corner.png`, `07-slide-out-…` | opt-in, only when `PREVIEW_SHOTS` names `notification_slide`: frames of a banner sliding in from the right and back out with `banners-slide-from-right` on, the shell slowed down 40 times inside the container; each name carries the banner's offset from its place |
+| `07-dock-bounce-NN-dock.png`, `07b-dock-bounce-magnified-NN-dock.png` | a dock favourite clicked and bouncing as it starts, frame by frame, plain and under the pointer; animations slowed twelve times inside the container, each frame's lift printed in the driver output |
 | `10-prefs-<page>.png` (+ `-window`), `10-prefs-<page>-2-window.png`, `-3-window`, … | Pear Up's preferences window at its own default size, one page after another (General, Menus, Custom Menus, Dock, Appearance and Windows where the branch has them, Keyboard, About); a long page is scrolled a screenful at a time and each further screenful is saved as a window crop |
 
 Clicks go through mutter's RemoteDesktop API inside the container's session, as Pear Up's
@@ -144,8 +145,8 @@ y, w, h]})` saves the picture and crops (logical coordinates, saved at the monit
   whatever fontconfig picks. Fonts in `~/.local/share/fonts` are not copied.
 - **Display.** A virtual monitor (`Meta-0`, 60 Hz) instead of the real one, with its refresh rate
   and variable refresh; software rendering (llvmpipe). Stills only: no animations, no cursor in
-  the pictures. A fractional scale needs mutter's `scale-monitor-framebuffer` experimental feature,
-  which comes with the dconf if it is set.
+  the pictures, except the dock bounce shot's slowed frame sequence. A fractional scale needs
+  mutter's `scale-monitor-framebuffer` experimental feature, which comes with the dconf if it is set.
 - **Session.** No GDM and no real logind seat, so the pear menu's Sleep, Restart and Shut Down are
   greyed out. Log Out comes out active in some runs and greyed in others: GNOME says no to it for a
   single local user with `always-show-log-out` off, and Pear Up reads that once when it builds the

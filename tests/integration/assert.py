@@ -21,6 +21,7 @@ import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib
 
+from dock_bounce import BounceChecks
 from dock_magnification import DockChecks
 
 UUID = sys.argv[1]
@@ -1397,12 +1398,31 @@ try:
 except GLib.Error as exc:
     check("dock magnification could be exercised", False, exc.message.splitlines()[0])
 
+print()
+print("  dock bounce:")
+bounce = BounceChecks(dock)
+bounce_ready = False
+if dock.ready:
+    try:
+        bounce.run()
+        bounce_ready = bounce.ready
+    except GLib.Error as exc:
+        check("the dock bounce could be exercised", False, exc.message.splitlines()[0])
+
 # ------------------------------------------------------------ clean teardown
 # Disabled with the dock still magnified, so there is something to undo.
 try:
     dock.hover_before_disable()
 except GLib.Error as exc:
     check("the dock could be hovered before disabling", False, exc.message.splitlines()[0])
+
+# And an icon in the air, under the magnified dock, for the bounce to undo.
+if bounce_ready:
+    try:
+        bounce_ready = bounce.bounce_before_disable()
+    except GLib.Error as exc:
+        check("an icon could be bounced before disabling", False, exc.message.splitlines()[0])
+        bounce_ready = False
 
 # Part-way through a fade, so that disabling has one to stop.
 fading_at_disable = None
@@ -1540,6 +1560,8 @@ if state:
 
 if dock.ready:
     dock.check_left_nothing("Pear Up is disabled")
+if bounce_ready:
+    bounce.check_left_nothing("Pear Up is disabled")
 
 # GNOME shows no switch popup with a single desktop, so a window makes a second,
 # now that nothing else here could be disturbed by one. It stays for the second

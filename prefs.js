@@ -606,6 +606,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         }
 
         this._buildDockMagnificationGroup(page, settings);
+        this._buildDockBounceGroup(page, settings);
         this._buildGlassGroup(page);
 
         if (has('dock-fixed') && has('autohide') && has('intellihide')) {
@@ -2363,6 +2364,27 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             strengthRow.row.set_sensitive(settings.get_boolean('dock-magnification'));
         syncStrengthSensitivity();
         settings.connect('changed::dock-magnification', syncStrengthSensitivity);
+    }
+
+    // Pear Up's own settings as well, drawn over Dash to Dock like
+    // magnification, and offered here for the same reason.
+    _buildDockBounceGroup(page, settings) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Bounce',
+            description: 'Icons hop away from the screen edge, as in the macOS Dock',
+        });
+        page.add(group);
+
+        for (const [key, title, subtitle] of [
+            ['dock-bounce-on-launch', 'Bounce While Opening',
+                'An app’s icon bounces until its first window appears'],
+            ['dock-bounce-on-attention', 'Bounce for Attention',
+                'An app in the background that needs you bounces its icon three times'],
+        ]) {
+            const row = new Adw.SwitchRow({ title, subtitle });
+            group.add(row);
+            settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        }
     }
 
     // Whether the dock is dark glass or light glass when Frosted Glass is switched

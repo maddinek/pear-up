@@ -206,6 +206,44 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
     }
 }
 
+// Bouncing is Pear Up's own as well, and offered on the Dock page only when
+// there is a Dash to Dock to bounce.
+{
+    const dockPage = pages.find(page => page.title === 'Dock');
+    const rows = ['Bounce While Opening', 'Bounce for Attention'].map(title => dockPage &&
+        findWidget(dockPage, widget => widget instanceof Adw.SwitchRow && widget.title === title));
+    const keys = ['dock-bounce-on-launch', 'dock-bounce-on-attention'];
+
+    if (!preferences._dashToDockSettings()) {
+        if (rows.some(Boolean))
+            problems.push('the Dock page offers bouncing although Dash to Dock is not installed');
+    } else if (GLib.getenv('PREFS_SMOKE_DOCK')) {
+        if (!rows.every(Boolean)) {
+            problems.push(`Dash to Dock is installed but the Dock page lacks a bounce switch (${rows.map(Boolean)})`);
+        } else {
+            const settings = preferences.getSettings();
+            const problemsBefore = problems.length;
+            const expect = (label, got, wanted) => {
+                if (got !== wanted)
+                    problems.push(`bounce: ${label} is ${got}, expected ${wanted}`);
+            };
+            rows.forEach((row, index) => {
+                const key = keys[index];
+                expect(`${key} switch at first`, row.active, false);
+                row.active = true;
+                expect(`${key} after switching on`, settings.get_boolean(key), true);
+                row.active = false;
+                expect(`${key} after switching off`, settings.get_boolean(key), false);
+                settings.set_boolean(key, true);
+                expect(`${key} switch after an outside change`, row.active, true);
+                settings.reset(key);
+            });
+            if (problems.length === problemsBefore)
+                print('  bounce: both switches write their keys and follow outside changes');
+        }
+    }
+}
+
 // The focused-app backdrop is Pear Up's own setting too, offered beside the
 // running indicator whenever there is a Dash to Dock to draw it — including one
 // too old for the single dot, which leaves that group with this row alone.

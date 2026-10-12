@@ -54,7 +54,11 @@
       "AppSystem",
       "WindowTracker",
       "AppUsage",
-      "ActionMode"
+      "ActionMode",
+      "AppState"
+    ],
+    "Graphene": [
+      "Point3D"
     ],
     "GObject": [
       "signal_lookup"
@@ -121,7 +125,8 @@
       "get_frame_rect",
       "unmaximize",
       "maximize",
-      "is_skip_taskbar"
+      "is_skip_taskbar",
+      "has_focus"
     ],
     "Clutter.VirtualInputDevice": [
       "notify_keyval"
@@ -142,7 +147,10 @@
       "get_preferred_width",
       "get_preferred_height",
       "get_first_child",
-      "get_constraints"
+      "get_constraints",
+      "get_previous_sibling",
+      "apply_transform_to_point",
+      "set_size"
     ],
     "Clutter.Timeline": [
       "start",
@@ -214,7 +222,14 @@
       "icon_name"
     ],
     "St.Settings": [
-      "enable_animations"
+      "enable_animations",
+      "slow_down_factor"
+    ],
+    "Shell.App": [
+      "state"
+    ],
+    "Shell.WindowTracker": [
+      "focus_app"
     ]
   },
 
