@@ -14,6 +14,17 @@ it back when they are switched off.
 
 ### Added
 
+- **Notifications Slide In from the Right.** A new switch under Notifications
+  at the Top Right, off by default: a banner comes in from beyond the right
+  edge of the screen (an ease-out over about a third of a second, with no
+  bounce) and, when its time is up or it is closed, slides back out to the
+  right, as on macOS, instead of dropping from the top. It wraps the message
+  tray's `_updateShowingNotification` and `_hideNotification` only for the
+  length of each call, so the shell's own state handling is untouched; it
+  follows the animation switch and slow-down factor, does nothing while the
+  banners are not in the corner, and leaves GNOME's drop where those methods
+  are missing.
+
 - **An Appearance page, starting with type and the accent.** macOS-Like Type
   sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
   own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns

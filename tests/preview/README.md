@@ -84,6 +84,7 @@ Everything is read, nothing is written; see [Safety](#safety).
 | `05-notification.png` (+ `-banner`) | a notification banner where the notification settings put it |
 | `05b-app-name-menu.png` (+ `-menu`) | the bold app-name menu |
 | `06-dock-hover.png` (+ `-dock`) | the pointer resting on the dock (magnification) |
+| `07-slide-in-NN-x<offset>-corner.png`, `07-slide-out-…` | opt-in, only when `PREVIEW_SHOTS` names `notification_slide`: frames of a banner sliding in from the right and back out with `banners-slide-from-right` on, the shell slowed down 40 times inside the container; each name carries the banner's offset from its place |
 | `10-prefs-<page>.png` (+ `-window`), `10-prefs-<page>-2-window.png`, `-3-window`, … | Pear Up's preferences window at its own default size, one page after another (General, Menus, Custom Menus, Dock, Appearance and Windows where the branch has them, Keyboard, About); a long page is scrolled a screenful at a time and each further screenful is saved as a window crop |
 
 Clicks go through mutter's RemoteDesktop API inside the container's session, as Pear Up's

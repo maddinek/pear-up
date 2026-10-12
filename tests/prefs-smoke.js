@@ -1873,6 +1873,43 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     settings.reset('desktop-app-name');
 }
 
+// Notifications Slide In from the Right: off out of the box, under the switch
+// that puts banners in the corner, and greyed out while that one is off.
+{
+    const settings = preferences.getSettings();
+    const page = pages.find(candidate => candidate.title === 'General');
+    const problemsBefore = problems.length;
+    const key = 'banners-slide-from-right';
+    const title = 'Notifications Slide In from the Right';
+    const expect = (label, got, wanted) => {
+        if (got !== wanted)
+            problems.push(`banner slide: ${label} is ${got}, expected ${wanted}`);
+    };
+    const row = page && findWidget(page, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === title);
+    const corner = page && findWidget(page, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === 'Notifications at the Top Right');
+    if (!row || !corner) {
+        problems.push(`the General page has no "${title}" switch under the corner one`);
+    } else {
+        expect('the default', settings.get_default_value(key).unpack(), false);
+        expect('the row at first', row.active, false);
+        expect('the row right under the corner switch', corner.get_next_sibling() === row, true);
+        row.active = true;
+        expect('the key after switching it on', settings.get_boolean(key), true);
+        settings.set_boolean(key, false);
+        expect('the row after an outside change', row.active, false);
+        expect('the row while banners are in the corner', row.sensitive, true);
+        settings.set_boolean('notifications-top-right', false);
+        expect('the row while banners are not in the corner', row.sensitive, false);
+        settings.reset('notifications-top-right');
+        expect('the row with the corner back', row.sensitive, true);
+        settings.reset(key);
+        if (problems.length === problemsBefore)
+            print('  banner slide: off by default, written and followed, greyed out without the corner');
+    }
+}
+
 // The Desktop group on the General page: the shell's pieces that are not the bar,
 // one switch each, all on out of the box like the bar's own tweaks. Each row has
 // to write its own key and follow it when it changes from outside.

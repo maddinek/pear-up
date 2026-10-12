@@ -2958,6 +2958,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             const row = new Adw.SwitchRow({ title, subtitle });
             group.add(row);
             settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+            if (key === 'notifications-top-right')
+                this._buildBannerSlideRow(group, settings);
         }
 
         // Before GNOME 49 the brightness is gnome-settings-daemon's to set, and
@@ -2970,6 +2972,19 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             group.add(row);
             settings.bind('smooth-auto-brightness', row, 'active', Gio.SettingsBindFlags.DEFAULT);
         }
+    }
+
+    // How banners come and go only means something while they are in the
+    // corner, so the row follows that switch. Off by default: it reaches
+    // further into the shell than the corner does.
+    _buildBannerSlideRow(group, settings) {
+        const row = new Adw.SwitchRow({
+            title: 'Notifications Slide In from the Right',
+            subtitle: 'And back out to the right, as on macOS; GNOME drops them from the top',
+        });
+        group.add(row);
+        settings.bind('banners-slide-from-right', row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        settings.bind('notifications-top-right', row, 'sensitive', Gio.SettingsBindFlags.GET);
     }
 
     // A visual icon picker: a grid of the bundled distro icons plus a
