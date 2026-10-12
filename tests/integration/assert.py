@@ -1226,6 +1226,92 @@ elif bright:
 # Whether the checks after disabling have a stand-in screen to read.
 smoothing = bool(bright and bright["manager"])
 
+# ------------------------------------------------- Steam's window buttons
+# A made-up Steam in the user's data directory: switched on, the extension
+# patches it, patches it again after a "Steam update" rewrites a stylesheet,
+# rewrites the rules when GNOME's layout changes, and gives Steam's files back
+# when switched off.
+print("\n== Steam: Buttons on the Left ==")
+
+
+def steam_buttons():
+    import shutil
+    import time
+
+    steam = os.path.join(os.environ.get("HOME", "/root"), ".local/share/Steam")
+    css = os.path.join(steam, "steamui/css")
+    os.makedirs(css, exist_ok=True)
+    library = ".title-area{display:flex}\n" + "".join(f".x{i}{{color:red}}\n" for i in range(40))
+    recording = "._3rMEP{position:absolute}\n" + "".join(f".y{i}{{color:blue}}\n" for i in range(20))
+    with open(os.path.join(css, "library.css"), "w") as f:
+        f.write(library)
+    with open(os.path.join(css, "gamerecording.css"), "w") as f:
+        f.write(recording)
+    with open(os.path.join(steam, "steamui/chunk~test.js"), "w") as f:
+        f.write('x={TopBar:"tb",OSX:"o",WindowControls:"wc",DragArea:"d",TitleBarControls:"c",TitleBar:"t"}')
+
+    def read(name):
+        try:
+            with open(os.path.join(css, name)) as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+
+    rules = os.path.join(steam, "steamui/pear-up/window-buttons.css")
+    header = "/* Pear Up: Steam window buttons */"
+
+    def wait_for(condition, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if condition():
+                return True
+            time.sleep(0.2)
+        return condition()
+
+    wm = ["gsettings", "set", "org.gnome.desktop.wm.preferences", "button-layout"]
+    subprocess.run([*wm, "close,minimize,maximize:appmenu"], check=False)
+    pear_up_setting("steam-buttons-left", "true")
+    check("Steam's stylesheets are patched when the switch goes on",
+          wait_for(lambda: (read("library.css") or "").startswith(header)
+                   and (read("gamerecording.css") or "").startswith(header)))
+    check("the patch has the original's size", len(read("library.css") or "") == len(library))
+    check("the originals are kept", read("library.pear-up-original.css") == library
+          and read("gamerecording.pear-up-original.css") == recording)
+    check("the rules use the main window's classes",
+          wait_for(lambda: os.path.exists(rules) and ".t > .wc {" in open(rules).read()))
+
+    updated = library + ".new{color:green}\n"
+    with open(os.path.join(css, "library.css"), "w") as f:
+        f.write(updated)
+    check("a Steam update is patched again",
+          wait_for(lambda: (read("library.css") or "").startswith(header)
+                   and read("library.pear-up-original.css") == updated))
+
+    subprocess.run([*wm, "appmenu:minimize,maximize,close"], check=False)
+    check("a layout with the buttons on the right empties the rules",
+          wait_for(lambda: os.path.exists(rules) and "{" not in open(rules).read()))
+    subprocess.run([*wm, "close,minimize,maximize:appmenu"], check=False)
+    check("and one with them on the left fills them again",
+          wait_for(lambda: os.path.exists(rules) and "closeButton" in open(rules).read()))
+
+    pear_up_setting("steam-buttons-left", "false")
+    check("switched off, Steam's files are given back exactly",
+          wait_for(lambda: read("library.css") == updated and read("gamerecording.css") == recording))
+    check("and nothing of Pear Up's is left",
+          read("library.pear-up-original.css") is None and read("gamerecording.pear-up-original.css") is None
+          and not os.path.exists(os.path.dirname(rules)))
+
+    with open(os.path.join(css, "library.css"), "w") as f:
+        f.write(library)
+    time.sleep(4)
+    check("switched off, a Steam update is left alone", read("library.css") == library)
+
+    subprocess.run(["gsettings", "reset", "org.gnome.desktop.wm.preferences", "button-layout"], check=False)
+    shutil.rmtree(steam, ignore_errors=True)
+
+
+steam_buttons()
+
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
 # something consumes its output, and the shell's screenshot API returns an empty

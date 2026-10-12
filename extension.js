@@ -10,6 +10,7 @@ import { SearchButton } from './searchButton.js';
 import { DockMagnifier } from './dockMagnifier.js';
 import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
+import { SteamButtonsKeeper, STEAM_BUTTONS_KEY } from './steamButtons.js';
 import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
@@ -99,6 +100,7 @@ export default class GlobalMenuExtension extends Extension {
         this._dockMagnifier = null;
         this._shellTweaks = null;
         this._smoothBrightness = null;
+        this._steamButtons = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -188,6 +190,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._shellTweaks?.sync();
             else if (key === SMOOTH_BRIGHTNESS_KEY)
                 this._smoothBrightness?.sync();
+            else if (key === STEAM_BUTTONS_KEY)
+                this._guard('updating Steam\'s window buttons', () => this._steamButtons?.sync());
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -239,6 +243,12 @@ export default class GlobalMenuExtension extends Extension {
         // sets the brightness itself (GNOME 49 on).
         this._guard('smoothing automatic brightness', () => {
             this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
+        });
+
+        // Steam's own title bar, patched to follow GNOME's button layout, and
+        // patched again when a Steam update writes its stylesheets afresh.
+        this._guard('watching Steam\'s window buttons', () => {
+            this._steamButtons = new SteamButtonsKeeper(this.metadata.uuid, this._settings);
         });
 
         // GNOME can close a window from the keyboard but has nothing that
@@ -1227,6 +1237,10 @@ export default class GlobalMenuExtension extends Extension {
         // Stops the fade and applies where it was heading.
         this._guard('restoring automatic brightness', () => this._smoothBrightness?.destroy());
         this._smoothBrightness = null;
+
+        // Stops watching; the patch itself stays, as it does over a screen lock.
+        this._guard('unwatching Steam\'s window buttons', () => this._steamButtons?.destroy());
+        this._steamButtons = null;
 
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one

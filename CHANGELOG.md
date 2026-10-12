@@ -14,6 +14,13 @@ it back when they are switched off.
 
 ### Added
 
+- **Steam: Buttons on the Left** (Windows page, off by default, shown when Steam is installed).
+  Steam's client draws its own title bar with the buttons on the right whatever GNOME's layout says.
+  The switch patches `steamui/css/library.css` and `gamerecording.css` the way Adwaita for Steam
+  does — one line importing the original, kept beside it byte for byte, then Pear Up's rules, padded
+  to the original's size so Steam's size check passes — and the rules follow GNOME's button layout.
+  The extension watches the directory and patches again after a Steam update; off puts Steam's files
+  back exactly. Steps aside where Adwaita for Steam is installed.
 - **An Appearance page, starting with type and the accent.** macOS-Like Type
   sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
   own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns

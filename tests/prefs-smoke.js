@@ -2280,6 +2280,60 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     }
 }
 
+// Steam: Buttons on the Left. The row is there only where Steam is, so it is
+// checked in the run that has put a made-up Steam into the user's data
+// directory (PREFS_SMOKE_STEAM): on patches both stylesheets and keeps the
+// originals, off gives back exactly what was there.
+{
+    const TITLE = 'Steam: Buttons on the Left';
+    const steam = GLib.getenv('PREFS_SMOKE_STEAM');
+    const problemsBefore = problems.length;
+    const row = windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE);
+    if (!steam) {
+        if (row)
+            problems.push('steam buttons: the row is there with no Steam installed');
+    } else if (!row) {
+        problems.push('steam buttons: the Windows page has no Steam row with Steam installed');
+    } else {
+        const css = `${steam}/steamui/css`;
+        const read = path => GLib.file_test(path, GLib.FileTest.EXISTS)
+            ? new TextDecoder().decode(GLib.file_get_contents(path)[1]) : null;
+        const library = read(`${css}/library.css`);
+        const recording = read(`${css}/gamerecording.css`);
+        const pearUp = preferences.getSettings();
+        const expect = windowsExpecter('steam buttons');
+
+        const wm = preferences._settingsForSchema('org.gnome.desktop.wm.preferences');
+        wm.set_string('button-layout', BUTTON_LAYOUT_LEFT);
+        expect('the switch before', row.active, false);
+        row.active = true;
+        expect('the setting after switching on', pearUp.get_boolean('steam-buttons-left'), true);
+        expect('library.css patched', read(`${css}/library.css`)?.startsWith('/* Pear Up: Steam window buttons */'), true);
+        expect('the patch the original\'s size', read(`${css}/library.css`)?.length, library.length);
+        expect('the original kept', read(`${css}/library.pear-up-original.css`), library);
+        expect('the rules written', read(`${steam}/steamui/pear-up/window-buttons.css`)?.includes('closeButton'), true);
+        expect('the switch on a fresh page',
+            windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE).active, true);
+        row.active = false;
+        expect('the setting after switching off', pearUp.get_boolean('steam-buttons-left'), false);
+        expect('library.css given back', read(`${css}/library.css`), library);
+        expect('gamerecording.css given back', read(`${css}/gamerecording.css`), recording);
+        expect('no original left', read(`${css}/library.pear-up-original.css`), null);
+        expect('no rules left', GLib.file_test(`${steam}/steamui/pear-up`, GLib.FileTest.EXISTS), false);
+
+        // Adwaita for Steam's patch greys the row out and is never touched.
+        const adwaita = `/* Adwaita-for-Steam */\n${library.slice(23)}`;
+        GLib.file_set_contents(`${css}/library.css`, adwaita);
+        const greyed = windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE);
+        expect('the row with Adwaita for Steam', [greyed.active, greyed.sensitive], [false, false]);
+        GLib.file_set_contents(`${css}/library.css`, library);
+        wm.reset('button-layout');
+    }
+    if (steam && problems.length === problemsBefore)
+        print('  steam buttons: patches both stylesheets keeping the originals, gives them back exactly, ' +
+            'and leaves Adwaita for Steam alone');
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);

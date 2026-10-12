@@ -85,7 +85,12 @@ the shell, as the Extensions app does. The small buttons are CSS, kept in a mark
 `~/.config/gtk-4.0/gtk.css` and `~/.config/gtk-3.0/gtk.css` — one reaches libadwaita apps, the other GTK 3
 apps and the Electron ones, such as Claude, ChatGPT and Cursor, that draw GTK 3 title buttons — which
 apps read when they next start. Everything outside the block is left exactly as it is, and rules of your
-own that already shrink the buttons are never removed.
+own that already shrink the buttons are never removed. Steam draws its own title bar and ignores GNOME's
+layout; Steam: Buttons on the Left (off by default, shown when Steam is installed) patches two of its
+client stylesheets, keeping the originals beside them, so its buttons follow the layout too from Steam's
+next start. A Steam update undoes it and Pear Up patches it again; switching it off gives Steam its own
+files back. Where [Adwaita for Steam](https://github.com/tkashkin/Adwaita-for-Steam) is installed the row
+steps aside, as that theme moves the buttons itself.
 
 **macOS type, accent, icons and cursor.** One switch sets the interface, document and window-title
 fonts to Adwaita Sans — GNOME's own fork of Inter, shipped from GNOME 48, or Inter itself where that
