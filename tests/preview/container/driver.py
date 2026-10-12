@@ -390,6 +390,185 @@ def dock_hover():
     pointer().park()
 
 
+# ---------------------------------------------------------------- desktop switching
+# Spaces Spring: a branch that has it gets frames of its animations, each taken
+# from the animation paused and set to a chosen moment, so a slow software-
+# rendered capture cannot blur or skip them, plus the numbers behind them in
+# spaces-trace.json. The keyboard switch and the bump go through real key
+# presses (the RemoteDesktop keyboard); the pull past the end is the swipe
+# tracker fed touchpad updates, the way the touchpad feeds it.
+SPACES_KEY = "spaces-spring"
+EXT = f"pv.Main.extensionManager.lookup('{PEAR_UP}')?.stateObj"
+SPACES_JS = """
+const ext = %s;
+const anim = pv.Main.wm._workspaceAnimation;
+const groups = () => anim._switchData?.monitors ?? [];
+const seek = (t, ms) => { t.advance(ms); t.emit('new-frame', ms); };
+const ws = () => global.workspace_manager.get_active_workspace_index();
+const shift = () => { const g = groups()[0]; return g ? {progress: +g.progress.toFixed(4),
+    tx: +g._container.translation_x.toFixed(1)} : null; };
+""" % EXT
+
+
+def spaces(body):
+    return jsfn(SPACES_JS + body)
+
+
+def press(*keysyms):
+    p = pointer()
+    for sym in keysyms:
+        call(p.RD, p.rd, f"{p.RD}.Session", "NotifyKeyboardKeysym", (sym, True), "(ub)")
+    for sym in reversed(keysyms):
+        call(p.RD, p.rd, f"{p.RD}.Session", "NotifyKeyboardKeysym", (sym, False), "(ub)")
+
+
+CTRL, ALT, LEFT, RIGHT = 0xffe3, 0xffe9, 0xff51, 0xff53
+
+
+@shot
+def desktop_switch():
+    """07: switching desktops on Spaces Spring's spring: a keyboard switch part
+    way, the desktops pulled past the last one and springing back, the bump."""
+    if not spaces(f"return !!ext?._settings?.settings_schema?.has_key('{SPACES_KEY}');"):
+        print("  (this branch has no Spaces Spring)")
+        return
+    was_on = spaces(f"const on = ext._settings.get_boolean('{SPACES_KEY}'); "
+                    f"ext._settings.set_boolean('{SPACES_KEY}', true); return on;")
+    focus_app(FRONT_APP)
+    spaces("global.workspace_manager.get_workspace_by_index(0).activate(global.get_current_time()); return 1;")
+    wait(1.0)
+    trace = {"state": spaces("return ext._spacesSpring.state;")}
+    WINDOWS_JS = ("return global.get_window_actors().map(a => [a.meta_window.get_title(), "
+                  "a.meta_window.get_workspace()?.index(), a.visible, a.meta_window.minimized]);")
+    trace["windowsAtStart"] = spaces(WINDOWS_JS)
+    W = jsfn("return pv.Main.layoutManager.primaryMonitor.width;")
+    H = jsfn("return pv.Main.layoutManager.primaryMonitor.height;")
+    edge = {"edge": [W - 360, 0, 360, H]}
+
+    # The keyboard switch, Ctrl+Alt+Right, paused the moment it starts.
+    press(CTRL, ALT, RIGHT)
+    info = spaces("""
+        const t = groups()[0]?.get_transition('progress');
+        if (!t) return null;
+        t.pause();
+        const T = t.get_duration();
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(t, ms); samples.push([ms, shift().progress]); }
+        seek(t, 60);
+        return {duration: T, samples, to: ws()};""")
+    trace["keyboard"] = info
+    if info:
+        for ms in (60, 140):
+            spaces(f"const t = groups()[0].get_transition('progress'); seek(t, {ms}); return 1;")
+            capture(f"07-spaces-switch-{ms}ms", keep_full=True)
+        spaces("groups().forEach(g => g.get_transition('progress')?.start()); return 1;")
+    else:
+        print("  !! the keyboard switch did not animate")
+    wait(1.2)
+
+    # On the last desktop: a swipe pulled past it, step by step.
+    pull = spaces("""
+        const tr = anim._swipeTracker;
+        let time = global.get_current_time();
+        const last = global.workspace_manager.n_workspaces - 1;
+        global.workspace_manager.get_workspace_by_index(last).activate(time);
+        return last;""")
+    wait(1.0)
+    trace["pull"] = spaces("""
+        const tr = anim._swipeTracker;
+        let time = global.get_current_time();
+        tr._touchpadGesture.emit('begin', time, 700, 500);
+        const steps = [];
+        for (let i = 1; i <= 16; i++) {
+            tr._touchpadGesture.emit('update', time += 16, 16, 400);
+            steps.push([i * 16, shift()?.tx, +ext._spacesSpring.state.stretch.toFixed(3)]);
+        }
+        return {last: ws(), steps};""")
+    capture("07-spaces-pull", edge)
+    trace["springBack"] = spaces("""
+        const tr = anim._swipeTracker;
+        tr._touchpadGesture.emit('end', global.get_current_time() + 16, 400);
+        const sb = ext._spacesSpring._springBack;
+        groups().forEach(g => g.get_transition('progress')?.pause());
+        if (!sb) return null;
+        sb.timeline.pause();
+        const T = sb.timeline.get_duration();
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(sb.timeline, ms); samples.push([ms, shift().tx]); }
+        seek(sb.timeline, 80);
+        return {duration: T, samples};""")
+    if trace["springBack"]:
+        capture("07-spaces-spring-back-80ms", edge, keep_full=False)
+        spaces("""
+            ext._spacesSpring._springBack?.timeline.start();
+            groups().forEach(g => g.get_transition('progress')?.start()); return 1;""")
+    else:
+        print("  !! no spring back")
+    wait(1.2)
+
+    # A swipe back towards the first desktop let go half way: the release.
+    trace["release"] = spaces("""
+        const tr = anim._swipeTracker;
+        let time = global.get_current_time();
+        tr._touchpadGesture.emit('begin', time, 700, 500);
+        for (let i = 0; i < 10; i++) tr._touchpadGesture.emit('update', time += 16, -24, 400);
+        tr._touchpadGesture.emit('end', time + 16, 400);
+        const t = groups()[0]?.get_transition('progress');
+        if (!t) return null;
+        t.pause();
+        const T = t.get_duration();
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(t, ms); samples.push([ms, shift().progress]); }
+        seek(t, T); t.start();
+        return {duration: T, samples};""")
+    wait(1.2)
+
+    # The bump: Ctrl+Alt+Left on the first desktop.
+    spaces("global.workspace_manager.get_workspace_by_index(0).activate(global.get_current_time()); return 1;")
+    wait(1.0)
+    focus_app(FRONT_APP)
+    trace["windowsAtBump"] = spaces(WINDOWS_JS)
+    press(CTRL, ALT, LEFT)
+    trace["bump"] = spaces("""
+        const b = ext._spacesSpring._bump;
+        if (!b) return null;
+        b.timeline.pause();
+        const T = b.timeline.get_duration();
+        const tx = () => +b.groups[0]._container.translation_x.toFixed(1);
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(b.timeline, ms); samples.push([ms, tx()]); }
+        seek(b.timeline, 50);
+        return {duration: T, samples, ws: ws()};""")
+    if trace["bump"]:
+        capture("07-spaces-bump-50ms", {"edge": [0, 0, 360, H]}, keep_full=False)
+        spaces("ext._spacesSpring._bump?.timeline.start(); return 1;")
+    else:
+        print("  !! no bump")
+    wait(1.0)
+
+    # The same keyboard switch with the switch off, for comparison: GNOME's own.
+    spaces(f"ext._settings.set_boolean('{SPACES_KEY}', false); return 1;")
+    spaces("global.workspace_manager.get_workspace_by_index(0).activate(global.get_current_time()); return 1;")
+    wait(1.0)
+    press(CTRL, ALT, RIGHT)
+    trace["keyboardOff"] = spaces("""
+        const t = groups()[0]?.get_transition('progress');
+        if (!t) return null;
+        t.pause();
+        const T = t.get_duration();
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(t, ms); samples.push([ms, shift().progress]); }
+        seek(t, T); t.start();
+        return {duration: T, samples};""")
+    wait(1.0)
+
+    with open(os.path.join(OUT, "spaces-trace.json"), "w") as handle:
+        json.dump(trace, handle, indent=1)
+    print("  spaces-trace.json")
+    if was_on:
+        spaces(f"ext._settings.set_boolean('{SPACES_KEY}', true); return 1;")
+
+
 # ---------------------------------------------------------------- preferences
 # Pear Up's preferences window, page by page. It is a separate GTK4 process, so
 # it is driven through the accessibility bus (AT-SPI): each page's tab in the
