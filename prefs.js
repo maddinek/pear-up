@@ -2972,6 +2972,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 'Under the bar; GNOME shows them at the bottom centre'],
             ['hide-workspace-popup', 'No Popup When Switching Desktops',
                 'The desktop slides across, and nothing else shows'],
+            ['spaces-spring', 'Springy Desktop Switching',
+                'Lands softly like Spaces, and stretches and springs back at the first and last desktop'],
             ['always-show-workspace-thumbnails', 'Always Show the Desktops in the Overview',
                 'Along the top, like Mission Control; GNOME hides them until two are in use'],
             ['start-on-desktop', 'Start on the Desktop',

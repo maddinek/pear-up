@@ -151,6 +151,11 @@
       <summary>Show no popup when switching desktops</summary>
       <description>GNOME shows the desktops for a moment whenever a shortcut switches to another one or moves a window there. macOS only slides the desktop across, which the shell still does.</description>
     </key>
+    <key name="spaces-spring" type="b">
+      <default>false</default>
+      <summary>Switch desktops on a spring, with a rubber band at the ends</summary>
+      <description>As Spaces move on macOS: a keyboard switch, and the slide after a three- or four-finger swipe, land softly in about 0.4 seconds; pulled past the first or last desktop they stretch and spring back, and the switch shortcut there gives a small bump. With dynamic workspaces the last desktop is the empty one GNOME keeps.</description>
+    </key>
     <key name="always-show-workspace-thumbnails" type="b">
       <default>true</default>
       <summary>Always show the desktops along the top of the overview</summary>

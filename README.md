@@ -65,6 +65,10 @@ brightening than darkening, as on macOS, rather than jumping there; the slider, 
 and dimming when idle still act at once. That one is for GNOME 49 and later, where the shell sets the
 brightness itself. Each is a switch of its own in the Desktop group of the General page, on by default,
 and switching one off gives back what GNOME does.
+**Springy Desktop Switching**, in the same group and off by default, moves the desktops the way Spaces
+move: a keyboard switch and the slide after a swipe land on a spring in about 0.4 s, pulled past the
+first or last desktop they stretch with resistance and spring back, and the switch shortcut there gives
+a small bump (the stretch needs GNOME 49 or later).
 [Just Perfection](https://extensions.gnome.org/extension/3843/just-perfection/) is no longer needed
 for the macOS layout: none of this wants it, and neither does Dash to Dock's own switch for starting
 without the overview. Left installed at its defaults, Just Perfection does not get in the way.
@@ -307,7 +311,8 @@ desktop you are using.
 **Does it still behave?** Boots a real GNOME Shell headless against a virtual monitor, loads the
 extension the way a login would, and checks what it actually did to the panel: the clock moved, and
 back in its corner after another extension moves it, notifications and the volume bubble in the top
-right corner, no popup when switching desktops, the overview's desktops always shown, the session
+right corner, no popup when switching desktops, the overview's desktops always shown, desktop switches
+on a spring with a rubber band at the ends, the session
 starting on the desktop, automatic brightness fading with no step over 5% while the slider and dimming
 act at once, the System Menu appeared with its entries, the power icon is hidden but a
 battery is not, the titles and clock are regular weight with the app name bold, an indicator added

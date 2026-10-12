@@ -37,6 +37,7 @@ EXTRA_SOURCES=(
     dockMagnifier.js
     shellTweaks.js
     smoothBrightness.js
+    spacesSpring.js
     recentItems.js
     forceQuit.js
     util.js

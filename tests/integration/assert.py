@@ -1127,6 +1127,237 @@ if state:
             desktop_window.wait()
             GLib.usleep(800 * 1000)
 
+# ------------------------------------------------------- desktop switching
+# Springy Desktop Switching (spaces-spring), read from the shell's own switch:
+# the controller's progress curve, sampled by pausing it and setting its time;
+# the desktops' shift beyond their progress while they are pulled past the end;
+# the bump, a one-desktop switch the shell's way. Keys go through the virtual
+# keyboard, so the shell's own keybinding reaches Pear Up's handler; the
+# touchpad is the tracker's touchpad gesture, fed as libinput feeds it.
+def switch_state():
+    return json.loads(hook("GetSwitchState"))
+
+
+def swipe(phase, delta=0.0):
+    return json.loads(hook("SwipeTouchpad", (phase, delta), "(sd)"))
+
+
+def settle(timeout=3.0):
+    for _ in range(int(timeout / 0.05)):
+        now = switch_state()
+        if not now["switching"] and not now["others"]:
+            return now
+        GLib.usleep(50 * 1000)
+    return switch_state()
+
+
+def keyboard_switch(key):
+    """Ctrl+Alt+<key>; the switch's curve, or None if nothing animated."""
+    hook("PressKeys", (["Control_L", "Alt_L", key],), "(as)")
+    for _ in range(40):
+        sampled = json.loads(hook("SampleSwitch"))
+        if sampled:
+            return sampled
+        GLib.usleep(10 * 1000)
+    return None
+
+
+def share(sampled, ms):
+    """How far along the switch is at ms, from its first to its last sample."""
+    first, last = sampled["samples"][0][1], sampled["samples"][-1][1]
+    at = min(sampled["samples"], key=lambda s: abs(s[0] - ms))[1]
+    return (at - first) / (last - first) if last != first else 1.0
+
+
+def watch_bump(seconds=0.8):
+    shifts = []
+    for _ in range(int(seconds / 0.03)):
+        now = switch_state()
+        if now["switching"] and not now["gesture"] and now["indices"] == 1 and now["shift"]:
+            shifts.append(now["shift"][0])
+        GLib.usleep(30 * 1000)
+    return shifts
+
+
+SPRING_OWN = {"animateSwitch", "_prepareWorkspaceSwitch"}
+RUBBER_OWN = {"confirmSwipe", "_reset", "_updateGesture", "_endGesture"}
+
+print()
+print("  desktop switching:")
+spring_window = None
+try:
+    pear_up_setting("spaces-spring", "false")
+    GLib.usleep(500 * 1000)
+    off = switch_state()
+    check("off by default, the desktop switch and swipe are the shell's own",
+          pear_up_value("spaces-spring") == "false" and not off["controllerOwn"]
+          and not off["trackerOwn"],
+          f"own on the controller: {off['controllerOwn']}, on the tracker: {off['trackerOwn']}")
+
+    spring_window = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(20):
+        GLib.usleep(500 * 1000)
+        if test_windows() >= 1:
+            break
+    hook("FocusFirstWindow")
+    GLib.usleep(1000 * 1000)
+
+    pear_up_setting("spaces-spring", "true")
+    GLib.usleep(500 * 1000)
+    on = switch_state()
+    rubber = on["updateThroughInstance"]
+    check("on, the switch is Pear Up's, and the overview's swipe is still the shell's",
+          SPRING_OWN <= set(on["controllerOwn"]) and on["overviewTrackerOwn"] == []
+          and (RUBBER_OWN <= set(on["trackerOwn"]) if rubber else not on["trackerOwn"]),
+          f"controller: {on['controllerOwn']}, tracker: {on['trackerOwn']}, "
+          f"overview's tracker: {on['overviewTrackerOwn']}")
+    if not rubber:
+        print("  note: this shell binds its tracker's update when it makes it, so there is "
+              "no rubber band here; the spring and the bump are checked")
+    animated = on["animations"]
+    if not animated:
+        print("  note: animations are off in this shell, so every switch is at once; "
+              "checked that nothing animates, bumps or stretches")
+
+    # On the first of two desktops (the second is the empty one GNOME adds).
+    on = settle()
+    first = keyboard_switch("Right") if on["active"] == 0 and on["count"] == 2 else None
+    after = settle()
+    steps = [b[1] - a[1] for a, b in zip(first["samples"], first["samples"][1:])] if first else []
+    check("Ctrl+Alt+Right slides to the next desktop on the spring, in 380 ms"
+          if animated else "Ctrl+Alt+Right switches at once, with animations off",
+          (not first and after["active"] == 1) if not animated else first and 370 <= first["duration"] <= 390 and min(steps) >= -1e-9
+          and 0.8 <= share(first, 140) <= 0.95 and share(first, 300) > 0.99
+          and first["samples"][-1][1] == 1 and after["active"] == 1,
+          (f"{first['duration']} ms, {share(first, 60):.2f} of the way at 60 ms, "
+           f"{share(first, 140):.2f} at 140, {share(first, 300):.3f} at 300; "
+           f"desktop {after['active']} of {after['count']}") if first
+          else f"no switch animated (desktop {on['active']} of {on['count']})")
+
+    # The last desktop: Ctrl+Alt+Right has nowhere to go.
+    hook("PressKeys", (["Control_L", "Alt_L", "Right"],), "(as)")
+    shifts = watch_bump()
+    after = settle()
+    check("Ctrl+Alt+Right on the last desktop bumps it a little to the left and back"
+          if animated else "Ctrl+Alt+Right on the last desktop does nothing, with animations off",
+          (not shifts and after["active"] == 1) if not animated else shifts and min(shifts) < -20 and min(shifts) > -0.06 * 1280
+          and after["active"] == 1 and after["count"] == 2 and not after["switching"],
+          f"shifted as far as {min(shifts) if shifts else 0:.0f} px over {len(shifts)} samples; "
+          f"then desktop {after['active']} of {after['count']}, switching {after['switching']}")
+
+    # Pulled past the last desktop with three fingers.
+    swipe("begin")
+    pulled = [swipe("update", 16) for _ in range(12)]
+    shown = [-p["shift"][0] for p in pulled if p and p["shift"]]
+    held = all(p["progress"] == 1 for p in pulled if p)
+    if rubber:
+        gains = [b - a for a, b in zip(shown, shown[1:])]
+        base = pulled[-1]["base"] if pulled[-1] else 0
+        check("pulled past the last desktop, it follows with growing resistance",
+              len(shown) == 12 and held and shown[0] > 0 and min(gains) > 0
+              and all(b < a for a, b in zip(gains, gains[1:])) and shown[-1] < 0.15 * base,
+              f"shown {shown[0]:.0f}, {shown[5]:.0f}, {shown[-1]:.0f} px for a pull of "
+              f"16, 96, 192 of 400 a desktop; progress held at the end: {held}"
+              if len(shown) == 12 else f"{pulled[-1]}")
+    else:
+        check("pulled past the last desktop, it stops there as before",
+              held and not any(shown), f"shown {shown}, progress held: {held}")
+    swipe("end")
+    back = []
+    for _ in range(40):
+        now = switch_state()
+        back.append(-now["shift"][0] if now["shift"] else 0)
+        if not now["switching"]:
+            break
+        GLib.usleep(30 * 1000)
+    after = settle()
+    if rubber:
+        check("let go, it springs back onto the last desktop",
+              back and back[0] > 0 and back[-1] == 0
+              and all(b <= a + 0.5 for a, b in zip(back, back[1:]))
+              and after["active"] == 1 and not after["switching"],
+              f"{len(back)} samples from {back[0]:.0f} px to {back[-1]:.0f}; "
+              f"desktop {after['active']}" if back else "nothing")
+    else:
+        check("let go, it stays on the last desktop", after["active"] == 1 and not after["switching"])
+
+    # Half a desktop back towards the first, and let go.
+    swipe("begin")
+    for _ in range(10):
+        swipe("update", -24)
+    swipe("end")
+    released = json.loads(hook("SampleSwitch"))
+    after = settle()
+    if released:
+        samples = released["samples"]
+        speed = (samples[0][1] - samples[1][1]) / samples[1][0]
+    check("let go part way, the slide lands on the spring, as fast as the fingers to begin with"
+          if animated else "let go part way, it lands at once, with animations off",
+          (not released and after["active"] == 0) if not animated else released and 410 <= released["duration"] <= 430 and samples[-1][1] == 0
+          and 0.7 < speed / (24 / 16 / 400) < 1.3 and after["active"] == 0,
+          f"{released['duration']} ms, starting at {speed * 1000:.2f} desktops/s against the "
+          f"fingers' {24 / 16 / 400 * 1000:.2f}; desktop {after['active']}" if released
+          else "nothing animated")
+
+    # Off again: everything the shell's, and the shell's switch and dead stop.
+    pear_up_setting("spaces-spring", "false")
+    GLib.usleep(500 * 1000)
+    off = switch_state()
+    check("off again, nothing of Pear Up's is left on the switch or the tracker",
+          not off["controllerOwn"] and not off["trackerOwn"],
+          f"controller: {off['controllerOwn']}, tracker: {off['trackerOwn']}")
+    plain = keyboard_switch("Right")
+    settle()
+    check("and Ctrl+Alt+Right is GNOME's 250 ms slide again",
+          (plain and plain["duration"] == 250) if animated else not plain, f"{plain['duration'] if plain else 'no'} ms")
+    hook("PressKeys", (["Control_L", "Alt_L", "Right"],), "(as)")
+    shifts = watch_bump(0.5)
+    swipe("begin")
+    pulled = [swipe("update", 16) for _ in range(6)]
+    swipe("end")
+    after = settle()
+    check("with no bump and no stretch at the end",
+          not shifts and not any(p["shift"][0] for p in pulled if p and p["shift"])
+          and after["active"] == 1,
+          f"bump samples {len(shifts)}, shifts {[p['shift'] for p in pulled if p]}")
+
+    # Switched on and off in quick succession, as a lock and unlock does.
+    for value in ("true", "false", "true", "false"):
+        pear_up_setting("spaces-spring", value)
+        GLib.usleep(150 * 1000)
+    GLib.usleep(400 * 1000)
+    off = switch_state()
+    check("switched on and off repeatedly, it leaves nothing behind",
+          not off["controllerOwn"] and not off["trackerOwn"] and not off["others"])
+except (GLib.Error, FileNotFoundError, KeyError, TypeError) as exc:
+    check("desktop switching could be exercised", False, str(exc).splitlines()[0])
+finally:
+    pear_up_setting("spaces-spring", "false")
+    # Back on the first desktop, with the window, so its closing leaves the
+    # one desktop the later checks expect.
+    try:
+        if switch_state()["active"] != 0:
+            hook("PressKeys", (["Control_L", "Alt_L", "Left"],), "(as)")
+            settle()
+    except GLib.Error:
+        pass
+    if spring_window:
+        spring_window.terminate()
+        spring_window.wait()
+        GLib.usleep(800 * 1000)
+
+try:
+    with open(os.path.join(ARTIFACTS, "shell.log"), encoding="utf-8", errors="replace") as handle:
+        spring_lines = [line.strip() for line in handle
+                        if f"[{UUID}]" in line and ("spring" in line or "desktop" in line
+                                                    or "stretch" in line or "bump" in line)]
+    failed = [line for line in spring_lines if "failed" in line]
+    check("nothing about desktop switching failed in the journal", not failed,
+          "; ".join(failed) or "nothing")
+except OSError as exc:
+    print(f"  note: the shell's log could not be read ({exc})")
+
 # ------------------------------------------------------- automatic brightness
 # From GNOME 49 the shell sets the backlight itself, and gnome-settings-daemon
 # sends it a target level over D-Bus whenever the light changes. The container

@@ -11,6 +11,7 @@ import { DockMagnifier } from './dockMagnifier.js';
 import { DockBounce } from './dockBounce.js';
 import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
+import { SpacesSpring, SPACES_SPRING_KEY } from './spacesSpring.js';
 import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
@@ -107,6 +108,7 @@ export default class GlobalMenuExtension extends Extension {
         this._dockBounce = null;
         this._shellTweaks = null;
         this._smoothBrightness = null;
+        this._spacesSpring = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -198,6 +200,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._shellTweaks?.sync();
             else if (key === SMOOTH_BRIGHTNESS_KEY)
                 this._smoothBrightness?.sync();
+            else if (key === SPACES_SPRING_KEY)
+                this._spacesSpring?.sync();
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -250,6 +254,12 @@ export default class GlobalMenuExtension extends Extension {
         // sets the brightness itself (GNOME 49 on).
         this._guard('smoothing automatic brightness', () => {
             this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
+        });
+
+        // Desktop switching on a spring, with a rubber band at the ends, as
+        // Spaces move on macOS.
+        this._guard('putting desktop switching on a spring', () => {
+            this._spacesSpring = new SpacesSpring(this.metadata.uuid, this._settings);
         });
 
         // GNOME can close a window from the keyboard but has nothing that
@@ -1264,6 +1274,9 @@ export default class GlobalMenuExtension extends Extension {
         // Stops the fade and applies where it was heading.
         this._guard('restoring automatic brightness', () => this._smoothBrightness?.destroy());
         this._smoothBrightness = null;
+
+        this._guard('taking desktop switching off its spring', () => this._spacesSpring?.destroy());
+        this._spacesSpring = null;
 
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one

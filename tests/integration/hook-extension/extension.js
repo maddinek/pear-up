@@ -22,6 +22,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import * as WorkspaceThumbnail from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
+import * as WorkspaceAnimation from 'resource:///org/gnome/shell/ui/workspaceAnimation.js';
 
 const IFACE = `
 <node>
@@ -220,6 +221,17 @@ const IFACE = `
       <arg type="s" direction="out" name="state"/>
     </method>
     <method name="GetStartupState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="GetSwitchState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="SampleSwitch">
+      <arg type="s" direction="out" name="samples"/>
+    </method>
+    <method name="SwipeTouchpad">
+      <arg type="s" direction="in" name="phase"/>
+      <arg type="d" direction="in" name="delta"/>
       <arg type="s" direction="out" name="state"/>
     </method>
     <method name="AddFakeBacklight">
@@ -1479,6 +1491,90 @@ export default class TestHookExtension extends Extension {
     // shows. Whether the two methods involved are the shell's own is read from
     // their source, which is what tells a method put back from a wrapper left
     // behind.
+    // How the desktops are moving, read from the shell's own switch: the
+    // controller, the MonitorGroups of a switch in progress (how far along,
+    // and how far their desktops are shifted beyond that), any other
+    // MonitorGroup on the stage, and which methods are own properties of the
+    // controller and of the desktop switcher's and the overview's swipe
+    // trackers — the shell sets none.
+    GetSwitchState() {
+        const anim = Main.wm._workspaceAnimation;
+        const tracker = anim?._swipeTracker;
+        const own = object => object
+            ? Object.getOwnPropertyNames(object).filter(name => typeof object[name] === 'function')
+            : null;
+        const switchData = anim?._switchData ?? null;
+        const groups = switchData?.monitors ?? [];
+        const shift = group => group._container
+            ? [group._container.translation_x, group._container.translation_y] : null;
+        const group = groups[0];
+        const proto = tracker ? Object.getPrototypeOf(tracker) : null;
+        return JSON.stringify({
+            active: global.workspace_manager.get_active_workspace_index(),
+            count: global.workspace_manager.n_workspaces,
+            switching: !!switchData,
+            gesture: !!switchData?.gestureActivated,
+            indices: group ? group.getSnapPoints().length : 0,
+            progress: group ? group.progress : null,
+            shift: group ? shift(group) : null,
+            base: group ? group.baseDistance : null,
+            others: Main.uiGroup.get_children()
+                .filter(a => a instanceof WorkspaceAnimation.MonitorGroup && !groups.includes(a))
+                .map(shift),
+            controllerOwn: own(anim),
+            trackerOwn: own(tracker),
+            overviewTrackerOwn: own(Main.overview._overview?.controls?._workspacesDisplay?._swipeTracker),
+            // From GNOME 49 the tracker reaches its update through the instance.
+            updateThroughInstance: typeof proto?._updateTouchpadGesture === 'function' &&
+                proto?._updateGesture?.length === 2,
+            animations: St.Settings.get().enable_animations,
+        });
+    }
+
+    // Pauses the switch the shell is animating and reads its curve, by
+    // setting its timeline to each 20 ms in turn, then lets it finish.
+    SampleSwitch() {
+        const group = Main.wm._workspaceAnimation?._switchData?.monitors?.[0];
+        const transition = group?.get_transition('progress');
+        if (!transition)
+            return JSON.stringify(null);
+        transition.pause();
+        const duration = transition.get_duration();
+        const samples = [];
+        const seek = ms => {
+            transition.advance(ms);
+            transition.emit('new-frame', ms);
+        };
+        for (let ms = 0; ms <= duration; ms += 20) {
+            seek(ms);
+            samples.push([ms, group.progress]);
+        }
+        seek(duration);
+        samples.push([duration, group.progress]);
+        transition.start();
+        return JSON.stringify({ duration, samples });
+    }
+
+    // A three-finger touchpad swipe, fed to the desktop switcher's tracker as
+    // the touchpad feeds it: begin, updates 16 ms apart in the units the
+    // touchpad reports (400 to a desktop), end.
+    SwipeTouchpad(phase, delta) {
+        const gesture = Main.wm._workspaceAnimation?._swipeTracker?._touchpadGesture;
+        if (!gesture)
+            return JSON.stringify(null);
+        if (phase === 'begin') {
+            this._swipeTime = global.get_current_time();
+            const monitor = Main.layoutManager.primaryMonitor;
+            gesture.emit('begin', this._swipeTime,
+                monitor.x + monitor.width / 2, monitor.y + monitor.height / 2);
+        } else if (phase === 'update') {
+            gesture.emit('update', this._swipeTime += 16, delta, 400);
+        } else {
+            gesture.emit('end', this._swipeTime += 16, 400);
+        }
+        return this.GetSwitchState();
+    }
+
     GetWorkspaceState() {
         const manager = global.workspace_manager;
         const strip = Main.overview._overview?.controls?._thumbnailsBox ?? null;

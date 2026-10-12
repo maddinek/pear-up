@@ -25,6 +25,17 @@ it back when they are switched off.
   banners are not in the corner, and leaves GNOME's drop where those methods
   are missing.
 
+- **Springy Desktop Switching** (General ▸ Desktop, off by default). Desktops
+  move the way Spaces do on macOS: a keyboard switch, and the slide after a
+  three- or four-finger swipe is let go, land on a critically damped spring in
+  about 0.4 s instead of GNOME's 250 ms ease, the release starting at the
+  fingers' own speed; pulled past the first or last desktop they follow with
+  growing resistance and spring back; and the switch shortcut on the last (or
+  first) desktop gives a small bump that way. With dynamic workspaces the last
+  desktop is the empty one GNOME keeps. Only the desktop switcher's own swipe
+  tracker is changed, on that instance, so the overview's swipe is untouched.
+  The rubber band needs GNOME 49 or later; 45 to 48 get the spring and the bump.
+
 - **An Appearance page, starting with type and the accent.** macOS-Like Type
   sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
   own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns
