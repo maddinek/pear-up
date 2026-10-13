@@ -280,11 +280,15 @@ const BROWSER_SCROLL_SPEEDS = [
 const BROWSER_SCROLL_SPEED_DEFAULT = 0;
 
 // Firefox runs its own glide after a flick, from GTK's scroll-stop, with
-// prefs for everything (modules/libpref/init/StaticPrefList.yaml). macOS's
-// glide, as WebKit reproduces it (MomentumEventDispatcher.cpp), loses 2.5% of
-// its speed every 8 ms, a time constant of 316 ms, and stops below half a
-// pixel a 60 Hz frame; Firefox's default loses 0.2% a millisecond (500 ms) and
-// coasts on for seconds. "macOS Momentum in Firefox" writes these prefs, and
+// prefs for everything (modules/libpref/init/StaticPrefList.yaml). Measured on
+// a MacBook Air (AppKit momentum events), macOS's glide starts at 1.1 to 1.45
+// times the fingers' last speed, holds or even rises for about 120 ms, then
+// slows with a time constant of about 0.3 s: some 0.6 to 0.7 times the lift
+// speed in all, ending within a second or so. Firefox's glide is a plain
+// exponential from the lift speed; with 0.15% lost a millisecond (667 ms) it
+// covers the same distance, and stopping below 0.1 px/ms ends it in about the
+// same time. Its default, 0.2% (500 ms) to 0.01 px/ms, glides less and for
+// seconds. "macOS Momentum in Firefox" writes these prefs, and
 // Firefox's pixel scale for touchpads set as the browsers' is, into user.js in
 // each Firefox profile, between two comment lines that are Pear Up's. What a
 // pref was in prefs.js before goes into a comment, and back when switched off;
@@ -296,8 +300,8 @@ const FIREFOX_WAS = '// Pear Up: was ';
 const FIREFOX_MULTIPLIER = 'apz.gtk.pangesture.pixel_delta_mode_multiplier';
 const FIREFOX_PREFS = [
     ['apz.gtk.kinetic_scroll.enabled', 'true'],
-    ['apz.fling_friction', '"0.0032"'],
-    ['apz.fling_stopped_threshold', '"0.03"'],
+    ['apz.fling_friction', '"0.0015"'],
+    ['apz.fling_stopped_threshold', '"0.1"'],
     ['apz.fling_min_velocity_threshold', '"0.2"'],
     ['apz.overscroll.enabled', 'true'],
 ];
@@ -2166,7 +2170,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     _buildFirefoxMomentumRow(group, home = GLib.get_home_dir(), level = null) {
         const levelNow = () => level ?? this._scrollLevel();
         const subtitle = 'Firefox glides on after a flick for twice as long as a Mac and moves the page further ' +
-            'than other apps. This sets its glide to macOS’s, which slows by 2.5% every 8 ms, and its ' +
+            'than other apps. This sets its glide to macOS’s distance and length, and its ' +
             'scroll under the fingers to a Mac’s. GNOME’s apps and Chromium glide by themselves. ' +
             'Takes effect when Firefox is restarted.';
         const row = new Adw.SwitchRow({ title: 'macOS Momentum in Firefox', subtitle });

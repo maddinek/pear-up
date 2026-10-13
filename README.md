@@ -225,10 +225,10 @@ too. It writes two lines (or the one key) and takes only those out again; a file
 Electron apps read no flags file and get the feature with Electron 45.
 
 **macOS momentum in Firefox.** Firefox runs its own glide after a flick, and by default it slows by
-0.2% a millisecond, coasting on for seconds where a Mac stops within about one. macOS Momentum in
-Firefox writes a block into `user.js` of each Firefox profile (Flathub's or not): the glide slowing
-by 2.5% every 8 ms and stopping below half a pixel a frame, as WebKit's copy of macOS's momentum
-does, rubber-banding at the ends, and Firefox's touchpad scale set to a Mac's for the plugin's speed.
+0.2% a millisecond down to 0.01 px/ms, coasting on for seconds where a Mac stops within about one. macOS Momentum in
+Firefox writes a block into `user.js` of each Firefox profile (Flathub's or not): a glide that
+covers what a MacBook Air's does (measured: about 0.65 times the lift speed, ending within a second
+or so), rubber-banding at the ends, and Firefox's touchpad scale set to a Mac's for the plugin's speed.
 What those prefs were in `prefs.js` is kept in the block and put back when it is switched off, which
 waits until Firefox is not running. GNOME's apps and Chromium glide by themselves; their glide is
 shaped by the plugin's curve.
