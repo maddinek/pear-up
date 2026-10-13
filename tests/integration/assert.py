@@ -21,6 +21,7 @@ import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib
 
+from dock_bounce import BounceChecks
 from dock_magnification import DockChecks
 
 UUID = sys.argv[1]
@@ -721,6 +722,160 @@ except FileNotFoundError:
 except GLib.Error as exc:
     check("Cmd+Q could be exercised", False, exc.message.splitlines()[0])
 
+# ------------------------------------------- opening and closing like macOS
+# The shell's animations, sampled as they run at a quarter speed. Stock GNOME
+# pops a window up from a sliver at its bottom edge; with Open and Close Like
+# macOS on, it grows from nine tenths around its centre, the same in both
+# directions, and shrinks back to nine tenths as it fades out. A window closed
+# while it is still opening has to be finished all the same, and switching the
+# setting off has to give the shell its own method back. All of it with a
+# stand-in for Magic Lamp in place, which keeps the method it finds when it is
+# enabled and calls that, so a patch that went round it would never be reached.
+def window_animations():
+    return json.loads(hook("GetWindowAnimations"))
+
+
+def open_and_close_test_window(close_at_once=False):
+    hook("WatchWindowAnimations", (TEST_WINDOW_CLASS, 4.0), "(sd)")
+    process = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(200 if close_at_once else 40):
+        if test_windows() >= 1:
+            break
+        GLib.usleep((10 if close_at_once else 100) * 1000)
+    if not close_at_once:
+        GLib.usleep(2000 * 1000)
+    hook("CloseWindows", (TEST_WINDOW_CLASS,), "(s)")
+    GLib.usleep(2500 * 1000)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+    return window_animations()
+
+
+def moving(samples):
+    return [s for s in samples if "sx" in s and 0 < s["opacity"] < 255]
+
+
+def opening(samples):
+    """The samples of a window that has just been mapped, up to the one where
+    it first stands at full size and opacity; the same window's closing comes
+    later in the same series."""
+    for index, s in enumerate(samples):
+        if "sx" in s and s["opacity"] == 255 and s["sx"] == 1 and s["sy"] == 1:
+            return samples[:index + 1]
+    return samples
+
+
+def uniform(samples):
+    return all(abs(s["sx"] - s["sy"]) < 0.01 for s in samples)
+
+
+def centred(samples):
+    return all(abs(s["px"] - 0.5) < 0.01 and abs(s["py"] - 0.5) < 0.01 for s in samples)
+
+
+def span(samples):
+    return round(samples[-1]["t"] - samples[0]["t"]) if samples else 0
+
+
+def describe_samples(samples):
+    return ", ".join(f"{s['sx']:.2f}x{s['sy']:.2f}@{s['opacity']}" for s in samples[:6])
+
+
+print()
+print("  window open and close:")
+try:
+    stock = open_and_close_test_window()
+    check("the test window was mapped and destroyed", stock["open"] and stock["close"],
+          f"{len(stock['open'])} mapped, {len(stock['close'])} destroyed")
+    stock_open = moving(opening(stock["open"][0])) if stock["open"] else []
+    # GNOME 45 run headless here maps the window without animating it at all,
+    # Pear Up or not; there is no shape to check there, only what is left over.
+    animates = bool(stock_open) or any(
+        "sx" in sample and sample["opacity"] < 255
+        for series in stock["open"] for sample in series[1:])
+    hook("StandInLikeMagicLamp", (True,), "(b)")
+    if not animates:
+        print("  note: this shell did not animate the test window at all, "
+              "so only what is left behind is checked")
+        pear_up_setting("macos-window-animations", "true")
+        GLib.usleep(300 * 1000)
+    else:
+        check("stock GNOME pops a window up from a sliver (setting off)",
+              stock_open and (min(s["sx"] for s in stock_open) < 0.5 or not uniform(stock_open)),
+              describe_samples(stock_open))
+
+        pear_up_setting("macos-window-animations", "true")
+        GLib.usleep(300 * 1000)
+        state = window_animations()
+        check("the window manager's _shouldAnimateActor is wrapped while it is on, over Magic Lamp's",
+              state["shouldAnimateActor"] == "wrapper", state["shouldAnimateActor"])
+
+        mac = open_and_close_test_window()
+        opened = opening(mac["open"][0]) if mac["open"] else []
+        closed = mac["close"][0] if mac["close"] else []
+        grow = moving(opened)
+        shrink = moving(closed)
+        check("a window opens growing from nine tenths, evenly, around its centre",
+              len(grow) >= 3 and uniform(grow) and centred(grow)
+              and min(s["sx"] for s in grow) >= 0.89,
+              f"{len(grow)} samples over {span(grow)} ms: {describe_samples(grow)}")
+        # Settled: a sample well after the opening and before the closing began
+        # (the closing sets its own pivot a frame before the window first fades).
+        whole = mac["open"][0] if mac["open"] else []
+        settled = []
+        for sample in whole[len(opened):]:
+            if "sx" not in sample or sample["opacity"] < 255:
+                break
+            settled.append(sample)
+        last = settled[len(settled) // 2:][:1] or [{}]
+        check("it ends at full size and opacity, with the shell's pivot back",
+              last[0].get("sx") == 1 and last[0].get("opacity") == 255
+              and last[0].get("px") == 0 and last[0].get("py") == 0, json.dumps(last[0]))
+        check("a window closes fading and shrinking to nine tenths, around its centre",
+              len(shrink) >= 3 and uniform(shrink) and centred(shrink)
+              and min(s["sx"] for s in shrink) >= 0.89 and max(s["sx"] for s in shrink) <= 1
+              and any(s.get("gone") for s in closed),
+              f"{len(shrink)} samples over {span(shrink)} ms: {describe_samples(shrink)}")
+        print(f"  note: at a quarter speed the opening moved for {span(grow)} ms "
+              f"(stock {span(stock_open)} ms), the closing for {span(shrink)} ms")
+
+    rushed = open_and_close_test_window(close_at_once=True)
+    check("a window closed while it opens is finished, nothing left behind",
+          rushed["mapping"] == 0 and rushed["destroying"] == 0 and rushed["ownEase"] == 0
+          and test_windows() == 0,
+          f"mapping={rushed['mapping']} destroying={rushed['destroying']} "
+          f"ownEase={rushed['ownEase']} windows={test_windows()}")
+
+    pear_up_setting("macos-window-animations", "false")
+    GLib.usleep(300 * 1000)
+    state = window_animations()
+    check("switched off, Magic Lamp's _shouldAnimateActor is on top again",
+          state["shouldAnimateActor"] not in ("wrapper", "the shell's") and state["ownEase"] == 0,
+          f"{state['shouldAnimateActor']!r}, ownEase={state['ownEase']}")
+    hook("StandInLikeMagicLamp", (False,), "(b)")
+    pear_up_setting("macos-window-animations", "true")
+    GLib.usleep(300 * 1000)
+    pear_up_setting("macos-window-animations", "false")
+    GLib.usleep(300 * 1000)
+    state = window_animations()
+    check("on and off again alone, the shell's own method shows through, nothing on the instance",
+          state["shouldAnimateActor"] == "the shell's" and not state["shouldAnimateActorOwn"],
+          f"{state['shouldAnimateActor']!r}, own={state['shouldAnimateActorOwn']}")
+except FileNotFoundError:
+    print("  note: gjs missing, cannot open a window")
+except GLib.Error as exc:
+    check("window animations could be exercised", False, exc.message.splitlines()[0])
+finally:
+    try:
+        hook("WatchWindowAnimations", ("", 1.0), "(sd)")
+        hook("StandInLikeMagicLamp", (False,), "(b)")
+    except GLib.Error:
+        pass
+    pear_up_setting("macos-window-animations", "false")
+
 # ------------------------------------------------ indicators that arrive late
 # The status area is spaced by a pass over the panel at start-up and after each
 # rebuild, so an indicator added in between kept the theme's padding until the
@@ -950,6 +1105,106 @@ if state:
         check("notifications and the volume bubble could be exercised", False,
               exc.message.splitlines()[0])
 
+    # Banners that slide in from the right edge and back out, as on macOS.
+    # Off by default; on, a banner should never move up or down, only along x,
+    # and leave nothing of itself behind once it is gone.
+    def banner_trace(ms, action):
+        hook("TraceBanner", (ms,), "(u)")
+        hook(action)
+        GLib.usleep((ms + 300) * 1000)
+        trace = json.loads(hook("GetBannerTrace"))
+        return trace, [s for s in trace["samples"] if s["shown"]]
+
+    # Until no banner is up and none is waiting: an expired banner makes way
+    # for the next in the queue, which would otherwise be the one traced.
+    def settle_banner():
+        for _ in range(6):
+            try:
+                if not hook("ExpireTestNotification"):
+                    return
+            except GLib.Error:
+                return
+            GLib.usleep(1200 * 1000)
+
+    try:
+        settle_banner()
+        idle = banner_state()
+        check("banners slide off by default, with the shell's own methods in place",
+              pear_up_value("banners-slide-from-right") == "false"
+              and idle["showIsShells"] and idle["hideIsShells"],
+              f"show is the shell's: {idle['showIsShells']}, hide: {idle['hideIsShells']}")
+
+        pear_up_setting("banners-slide-from-right", "true")
+        GLib.usleep(500 * 1000)
+        trace, shown = banner_trace(1200, "ShowTestNotification")
+        if not shown:
+            print("  note: no banner was drawn here, so how it slides is not checked")
+        elif not trace["animations"]:
+            check("with animations off, a banner is simply there, in place",
+                  all(s["tx"] == 0 and s["y"] == 0 for s in shown),
+                  f"{[(s['tx'], s['y']) for s in shown[:5]]}")
+        else:
+            xs = [s["tx"] for s in shown]
+            moving = [s for s in shown if s["tx"] > 0]
+            check("switched on, a banner comes in from beyond the right edge, along x only",
+                  moving and moving[0]["tx"] >= 0.5 * moving[0]["width"]
+                  and all(s["y"] == 0 for s in shown)
+                  and all(b <= a for a, b in zip(xs, xs[1:])) and xs[-1] == 0,
+                  f"x {[round(x) for x in xs[:12]]}…; y {sorted({s['y'] for s in shown})}")
+            check("and with no overshoot, and in about a third of a second",
+                  min(xs) == 0 and len(moving) >= 3
+                  and 150 <= (moving[-1]["t"] - shown[0]["t"]) / trace["slowDown"] <= 600,
+                  f"moving for {moving[-1]['t'] - shown[0]['t']:.0f} ms over {len(moving)} samples"
+                  if moving else "never moved")
+            placed = banner_state()
+            check("and it ends against the right edge, under the bar",
+                  placed["shown"] and abs(right_edge(placed["box"]) - right_edge(placed["workArea"])) <= 2
+                  and placed["box"][1] >= placed["panelBottom"] - 1,
+                  f"banner={placed['box']} work area={placed['workArea']}")
+
+            trace, shown = banner_trace(1000, "ExpireTestNotification")
+            xs = [s["tx"] for s in shown]
+            gone = banner_state()
+            check("when its time is up it slides back out to the right, without fading, "
+                  "and is put back in place once gone",
+                  len(xs) >= 3 and all(b >= a for a, b in zip(xs, xs[1:]))
+                  and xs[-1] >= 0.8 * shown[-1]["width"]
+                  and all(s["y"] == 0 and s["opacity"] == 255 for s in shown)
+                  and not gone["shown"] and gone["translationX"] == 0 and gone["trayClip"],
+                  f"x {[round(x) for x in xs]}; then shown={gone['shown']} x={gone['translationX']} "
+                  f"tray clipped to itself={gone['trayClip']}")
+        check("nothing of the slide is left on the banner between calls",
+              not any(s["ownEase"] for s in trace["samples"]) and not banner_state()["ownEase"])
+        settle_banner()
+
+        # Only from the corner: centred by someone else, banners drop as GNOME's do.
+        pear_up_setting("notifications-top-right", "false")
+        GLib.usleep(500 * 1000)
+        trace, shown = banner_trace(800, "ShowTestNotification")
+        if shown and trace["animations"]:
+            check("with banners not in the corner, they drop from the top as GNOME's do",
+                  all(s["tx"] == 0 for s in shown) and any(s["y"] < 0 for s in shown),
+                  f"x {sorted({s['tx'] for s in shown})}; y from {min(s['y'] for s in shown)}")
+        settle_banner()
+        pear_up_setting("notifications-top-right", "true")
+
+        pear_up_setting("banners-slide-from-right", "false")
+        GLib.usleep(500 * 1000)
+        off = banner_state()
+        check("switched off, the shell's own methods are back",
+              off["showIsShells"] and off["hideIsShells"] and off["translationX"] == 0
+              and off["trayClip"])
+        trace, shown = banner_trace(800, "ShowTestNotification")
+        if shown and trace["animations"]:
+            check("and banners drop from the top again",
+                  all(s["tx"] == 0 for s in shown) and any(s["y"] < 0 for s in shown))
+        settle_banner()
+    except GLib.Error as exc:
+        check("sliding banners could be exercised", False, exc.message.splitlines()[0])
+    finally:
+        pear_up_gsettings("reset", "org.gnome.shell.extensions.pear-up", "banners-slide-from-right")
+        pear_up_gsettings("reset", "org.gnome.shell.extensions.pear-up", "notifications-top-right")
+
 # ------------------------------------------------------------------ desktops
 # Switched with the keyboard, the way GNOME's own bindings do it, so the popup
 # is made by the window manager exactly as it would be: Cmd+PageDown, then back.
@@ -1025,6 +1280,237 @@ if state:
             desktop_window.terminate()
             desktop_window.wait()
             GLib.usleep(800 * 1000)
+
+# ------------------------------------------------------- desktop switching
+# Springy Desktop Switching (spaces-spring), read from the shell's own switch:
+# the controller's progress curve, sampled by pausing it and setting its time;
+# the desktops' shift beyond their progress while they are pulled past the end;
+# the bump, a one-desktop switch the shell's way. Keys go through the virtual
+# keyboard, so the shell's own keybinding reaches Pear Up's handler; the
+# touchpad is the tracker's touchpad gesture, fed as libinput feeds it.
+def switch_state():
+    return json.loads(hook("GetSwitchState"))
+
+
+def swipe(phase, delta=0.0):
+    return json.loads(hook("SwipeTouchpad", (phase, delta), "(sd)"))
+
+
+def settle(timeout=3.0):
+    for _ in range(int(timeout / 0.05)):
+        now = switch_state()
+        if not now["switching"] and not now["others"]:
+            return now
+        GLib.usleep(50 * 1000)
+    return switch_state()
+
+
+def keyboard_switch(key):
+    """Ctrl+Alt+<key>; the switch's curve, or None if nothing animated."""
+    hook("PressKeys", (["Control_L", "Alt_L", key],), "(as)")
+    for _ in range(40):
+        sampled = json.loads(hook("SampleSwitch"))
+        if sampled:
+            return sampled
+        GLib.usleep(10 * 1000)
+    return None
+
+
+def share(sampled, ms):
+    """How far along the switch is at ms, from its first to its last sample."""
+    first, last = sampled["samples"][0][1], sampled["samples"][-1][1]
+    at = min(sampled["samples"], key=lambda s: abs(s[0] - ms))[1]
+    return (at - first) / (last - first) if last != first else 1.0
+
+
+def watch_bump(seconds=0.8):
+    shifts = []
+    for _ in range(int(seconds / 0.03)):
+        now = switch_state()
+        if now["switching"] and not now["gesture"] and now["indices"] == 1 and now["shift"]:
+            shifts.append(now["shift"][0])
+        GLib.usleep(30 * 1000)
+    return shifts
+
+
+SPRING_OWN = {"animateSwitch", "_prepareWorkspaceSwitch"}
+RUBBER_OWN = {"confirmSwipe", "_reset", "_updateGesture", "_endGesture"}
+
+print()
+print("  desktop switching:")
+spring_window = None
+try:
+    pear_up_setting("spaces-spring", "false")
+    GLib.usleep(500 * 1000)
+    off = switch_state()
+    check("off by default, the desktop switch and swipe are the shell's own",
+          pear_up_value("spaces-spring") == "false" and not off["controllerOwn"]
+          and not off["trackerOwn"],
+          f"own on the controller: {off['controllerOwn']}, on the tracker: {off['trackerOwn']}")
+
+    spring_window = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(20):
+        GLib.usleep(500 * 1000)
+        if test_windows() >= 1:
+            break
+    hook("FocusFirstWindow")
+    GLib.usleep(1000 * 1000)
+
+    pear_up_setting("spaces-spring", "true")
+    GLib.usleep(500 * 1000)
+    on = switch_state()
+    rubber = on["updateThroughInstance"]
+    check("on, the switch is Pear Up's, and the overview's swipe is still the shell's",
+          SPRING_OWN <= set(on["controllerOwn"]) and on["overviewTrackerOwn"] == []
+          and (RUBBER_OWN <= set(on["trackerOwn"]) if rubber else not on["trackerOwn"]),
+          f"controller: {on['controllerOwn']}, tracker: {on['trackerOwn']}, "
+          f"overview's tracker: {on['overviewTrackerOwn']}")
+    if not rubber:
+        print("  note: this shell binds its tracker's update when it makes it, so there is "
+              "no rubber band here; the spring and the bump are checked")
+    animated = on["animations"]
+    if not animated:
+        print("  note: animations are off in this shell, so every switch is at once; "
+              "checked that nothing animates, bumps or stretches")
+
+    # On the first of two desktops (the second is the empty one GNOME adds).
+    on = settle()
+    first = keyboard_switch("Right") if on["active"] == 0 and on["count"] == 2 else None
+    after = settle()
+    steps = [b[1] - a[1] for a, b in zip(first["samples"], first["samples"][1:])] if first else []
+    check("Ctrl+Alt+Right slides to the next desktop on the spring, in 380 ms"
+          if animated else "Ctrl+Alt+Right switches at once, with animations off",
+          (not first and after["active"] == 1) if not animated else first and 370 <= first["duration"] <= 390 and min(steps) >= -1e-9
+          and 0.8 <= share(first, 140) <= 0.95 and share(first, 300) > 0.99
+          and first["samples"][-1][1] == 1 and after["active"] == 1,
+          (f"{first['duration']} ms, {share(first, 60):.2f} of the way at 60 ms, "
+           f"{share(first, 140):.2f} at 140, {share(first, 300):.3f} at 300; "
+           f"desktop {after['active']} of {after['count']}") if first
+          else f"no switch animated (desktop {on['active']} of {on['count']})")
+
+    # The last desktop: Ctrl+Alt+Right has nowhere to go.
+    hook("PressKeys", (["Control_L", "Alt_L", "Right"],), "(as)")
+    shifts = watch_bump()
+    after = settle()
+    check("Ctrl+Alt+Right on the last desktop bumps it a little to the left and back"
+          if animated else "Ctrl+Alt+Right on the last desktop does nothing, with animations off",
+          (not shifts and after["active"] == 1) if not animated else shifts and min(shifts) < -20 and min(shifts) > -0.06 * 1280
+          and after["active"] == 1 and after["count"] == 2 and not after["switching"],
+          f"shifted as far as {min(shifts) if shifts else 0:.0f} px over {len(shifts)} samples; "
+          f"then desktop {after['active']} of {after['count']}, switching {after['switching']}")
+
+    # Pulled past the last desktop with three fingers.
+    swipe("begin")
+    pulled = [swipe("update", 16) for _ in range(12)]
+    shown = [-p["shift"][0] for p in pulled if p and p["shift"]]
+    held = all(p["progress"] == 1 for p in pulled if p)
+    if rubber:
+        gains = [b - a for a, b in zip(shown, shown[1:])]
+        base = pulled[-1]["base"] if pulled[-1] else 0
+        check("pulled past the last desktop, it follows with growing resistance",
+              len(shown) == 12 and held and shown[0] > 0 and min(gains) > 0
+              and all(b < a for a, b in zip(gains, gains[1:])) and shown[-1] < 0.15 * base,
+              f"shown {shown[0]:.0f}, {shown[5]:.0f}, {shown[-1]:.0f} px for a pull of "
+              f"16, 96, 192 of 400 a desktop; progress held at the end: {held}"
+              if len(shown) == 12 else f"{pulled[-1]}")
+    else:
+        check("pulled past the last desktop, it stops there as before",
+              held and not any(shown), f"shown {shown}, progress held: {held}")
+    swipe("end")
+    back = []
+    for _ in range(40):
+        now = switch_state()
+        back.append(-now["shift"][0] if now["shift"] else 0)
+        if not now["switching"]:
+            break
+        GLib.usleep(30 * 1000)
+    after = settle()
+    if rubber:
+        check("let go, it springs back onto the last desktop",
+              back and back[0] > 0 and back[-1] == 0
+              and all(b <= a + 0.5 for a, b in zip(back, back[1:]))
+              and after["active"] == 1 and not after["switching"],
+              f"{len(back)} samples from {back[0]:.0f} px to {back[-1]:.0f}; "
+              f"desktop {after['active']}" if back else "nothing")
+    else:
+        check("let go, it stays on the last desktop", after["active"] == 1 and not after["switching"])
+
+    # Half a desktop back towards the first, and let go.
+    swipe("begin")
+    for _ in range(10):
+        swipe("update", -24)
+    swipe("end")
+    released = json.loads(hook("SampleSwitch"))
+    after = settle()
+    if released:
+        samples = released["samples"]
+        speed = (samples[0][1] - samples[1][1]) / samples[1][0]
+    check("let go part way, the slide lands on the spring, as fast as the fingers to begin with"
+          if animated else "let go part way, it lands at once, with animations off",
+          (not released and after["active"] == 0) if not animated else released and 410 <= released["duration"] <= 430 and samples[-1][1] == 0
+          and 0.7 < speed / (24 / 16 / 400) < 1.3 and after["active"] == 0,
+          f"{released['duration']} ms, starting at {speed * 1000:.2f} desktops/s against the "
+          f"fingers' {24 / 16 / 400 * 1000:.2f}; desktop {after['active']}" if released
+          else "nothing animated")
+
+    # Off again: everything the shell's, and the shell's switch and dead stop.
+    pear_up_setting("spaces-spring", "false")
+    GLib.usleep(500 * 1000)
+    off = switch_state()
+    check("off again, nothing of Pear Up's is left on the switch or the tracker",
+          not off["controllerOwn"] and not off["trackerOwn"],
+          f"controller: {off['controllerOwn']}, tracker: {off['trackerOwn']}")
+    plain = keyboard_switch("Right")
+    settle()
+    check("and Ctrl+Alt+Right is GNOME's 250 ms slide again",
+          (plain and plain["duration"] == 250) if animated else not plain, f"{plain['duration'] if plain else 'no'} ms")
+    hook("PressKeys", (["Control_L", "Alt_L", "Right"],), "(as)")
+    shifts = watch_bump(0.5)
+    swipe("begin")
+    pulled = [swipe("update", 16) for _ in range(6)]
+    swipe("end")
+    after = settle()
+    check("with no bump and no stretch at the end",
+          not shifts and not any(p["shift"][0] for p in pulled if p and p["shift"])
+          and after["active"] == 1,
+          f"bump samples {len(shifts)}, shifts {[p['shift'] for p in pulled if p]}")
+
+    # Switched on and off in quick succession, as a lock and unlock does.
+    for value in ("true", "false", "true", "false"):
+        pear_up_setting("spaces-spring", value)
+        GLib.usleep(150 * 1000)
+    GLib.usleep(400 * 1000)
+    off = switch_state()
+    check("switched on and off repeatedly, it leaves nothing behind",
+          not off["controllerOwn"] and not off["trackerOwn"] and not off["others"])
+except (GLib.Error, FileNotFoundError, KeyError, TypeError) as exc:
+    check("desktop switching could be exercised", False, str(exc).splitlines()[0])
+finally:
+    pear_up_setting("spaces-spring", "false")
+    # Back on the first desktop, with the window, so its closing leaves the
+    # one desktop the later checks expect.
+    try:
+        if switch_state()["active"] != 0:
+            hook("PressKeys", (["Control_L", "Alt_L", "Left"],), "(as)")
+            settle()
+    except GLib.Error:
+        pass
+    if spring_window:
+        spring_window.terminate()
+        spring_window.wait()
+        GLib.usleep(800 * 1000)
+
+try:
+    with open(os.path.join(ARTIFACTS, "shell.log"), encoding="utf-8", errors="replace") as handle:
+        spring_lines = [line.strip() for line in handle
+                        if f"[{UUID}]" in line and ("spring" in line or "desktop" in line
+                                                    or "stretch" in line or "bump" in line)]
+    failed = [line for line in spring_lines if "failed" in line]
+    check("nothing about desktop switching failed in the journal", not failed,
+          "; ".join(failed) or "nothing")
+except OSError as exc:
+    print(f"  note: the shell's log could not be read ({exc})")
 
 # ------------------------------------------------------- automatic brightness
 # From GNOME 49 the shell sets the backlight itself, and gnome-settings-daemon
@@ -1226,6 +1712,92 @@ elif bright:
 # Whether the checks after disabling have a stand-in screen to read.
 smoothing = bool(bright and bright["manager"])
 
+# ------------------------------------------------- Steam's window buttons
+# A made-up Steam in the user's data directory: switched on, the extension
+# patches it, patches it again after a "Steam update" rewrites a stylesheet,
+# rewrites the rules when GNOME's layout changes, and gives Steam's files back
+# when switched off.
+print("\n== Steam: Buttons on the Left ==")
+
+
+def steam_buttons():
+    import shutil
+    import time
+
+    steam = os.path.join(os.environ.get("HOME", "/root"), ".local/share/Steam")
+    css = os.path.join(steam, "steamui/css")
+    os.makedirs(css, exist_ok=True)
+    library = ".title-area{display:flex}\n" + "".join(f".x{i}{{color:red}}\n" for i in range(40))
+    recording = "._3rMEP{position:absolute}\n" + "".join(f".y{i}{{color:blue}}\n" for i in range(20))
+    with open(os.path.join(css, "library.css"), "w") as f:
+        f.write(library)
+    with open(os.path.join(css, "gamerecording.css"), "w") as f:
+        f.write(recording)
+    with open(os.path.join(steam, "steamui/chunk~test.js"), "w") as f:
+        f.write('x={TopBar:"tb",OSX:"o",WindowControls:"wc",DragArea:"d",TitleBarControls:"c",TitleBar:"t"}')
+
+    def read(name):
+        try:
+            with open(os.path.join(css, name)) as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+
+    rules = os.path.join(steam, "steamui/pear-up/window-buttons.css")
+    header = "/* Pear Up: Steam window buttons */"
+
+    def wait_for(condition, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if condition():
+                return True
+            time.sleep(0.2)
+        return condition()
+
+    wm = ["gsettings", "set", "org.gnome.desktop.wm.preferences", "button-layout"]
+    subprocess.run([*wm, "close,minimize,maximize:appmenu"], check=False)
+    pear_up_setting("steam-buttons-left", "true")
+    check("Steam's stylesheets are patched when the switch goes on",
+          wait_for(lambda: (read("library.css") or "").startswith(header)
+                   and (read("gamerecording.css") or "").startswith(header)))
+    check("the patch has the original's size", len(read("library.css") or "") == len(library))
+    check("the originals are kept", read("library.pear-up-original.css") == library
+          and read("gamerecording.pear-up-original.css") == recording)
+    check("the rules use the main window's classes",
+          wait_for(lambda: os.path.exists(rules) and ".t > .wc {" in open(rules).read()))
+
+    updated = library + ".new{color:green}\n"
+    with open(os.path.join(css, "library.css"), "w") as f:
+        f.write(updated)
+    check("a Steam update is patched again",
+          wait_for(lambda: (read("library.css") or "").startswith(header)
+                   and read("library.pear-up-original.css") == updated))
+
+    subprocess.run([*wm, "appmenu:minimize,maximize,close"], check=False)
+    check("a layout with the buttons on the right empties the rules",
+          wait_for(lambda: os.path.exists(rules) and "{" not in open(rules).read()))
+    subprocess.run([*wm, "close,minimize,maximize:appmenu"], check=False)
+    check("and one with them on the left fills them again",
+          wait_for(lambda: os.path.exists(rules) and "closeButton" in open(rules).read()))
+
+    pear_up_setting("steam-buttons-left", "false")
+    check("switched off, Steam's files are given back exactly",
+          wait_for(lambda: read("library.css") == updated and read("gamerecording.css") == recording))
+    check("and nothing of Pear Up's is left",
+          read("library.pear-up-original.css") is None and read("gamerecording.pear-up-original.css") is None
+          and not os.path.exists(os.path.dirname(rules)))
+
+    with open(os.path.join(css, "library.css"), "w") as f:
+        f.write(library)
+    time.sleep(4)
+    check("switched off, a Steam update is left alone", read("library.css") == library)
+
+    subprocess.run(["gsettings", "reset", "org.gnome.desktop.wm.preferences", "button-layout"], check=False)
+    shutil.rmtree(steam, ignore_errors=True)
+
+
+steam_buttons()
+
 # ------------------------------------------------------------ screenshot
 # Recorded rather than screenshotted. A headless mutter only composites while
 # something consumes its output, and the shell's screenshot API returns an empty
@@ -1286,6 +1858,145 @@ if state and os.environ.get("PEAR_UP_SCREENSHOT", "1") != "0":
     print(f"  note: screenshot {size // 1024} KiB" if size else
           "  note: no screenshot on this release")
 
+# ------------------------------------------------- the screenshot thumbnail
+# Shots are taken the way Print takes one, through the shell's own
+# captureScreenshot, so the file is saved and the notification posted exactly
+# as they would be.
+def thumbnail_state():
+    return json.loads(hook("GetScreenshotThumbnailState"))
+
+
+def take_screenshot(wait_ms):
+    hook("TakeTestScreenshot")
+    GLib.usleep(wait_ms * 1000)
+    return thumbnail_state()
+
+
+def wait_thumbnail_gone(timeout_s):
+    for _ in range(int(timeout_s * 10)):
+        shot = thumbnail_state()
+        if not shot["cards"]:
+            return shot, True
+        GLib.usleep(100 * 1000)
+    return shot, False
+
+
+thumbnail_ran = False
+# GNOME 45 shows a banner however the notification is marked.
+try:
+    SHELL_MAJOR = int(subprocess.run(["gnome-shell", "--version"], capture_output=True, text=True,
+                                     check=False).stdout.split()[-1].split(".")[0])
+except (ValueError, IndexError):
+    SHELL_MAJOR = 0
+print()
+print("  the screenshot thumbnail:")
+if state:
+    try:
+        shot = take_screenshot(1500)
+        last = shot["last"] or {}
+        # GNOME 45's captureScreenshot saves the file but returns nothing.
+        if last.get("pending") or "error" in last:
+            print(f"  note: no screenshot could be taken here ({last}), so the thumbnail is not exercised")
+        else:
+            thumbnail_ran = True
+            check("off by default, a screenshot shows no thumbnail",
+                  pear_up_value("screenshot-thumbnail") == "false" and not shot["cards"],
+                  f"{len(shot['cards'])} cards")
+            # The shell's own banner for that one. A headless shell has no
+            # user activity, and the tray keeps a banner up until there is
+            # some, so it is cleared rather than waited out.
+            hook("ClearScreenshotNotifications")
+            GLib.usleep(600 * 1000)
+
+            pear_up_setting("screenshot-thumbnail", "true")
+            GLib.usleep(300 * 1000)
+            hook("TakeTestScreenshot")
+            first = None
+            for _ in range(150):
+                cards = thumbnail_state()["cards"]
+                if cards:
+                    first = cards[0]
+                    break
+                GLib.usleep(10 * 1000)
+            GLib.usleep(900 * 1000)
+            shot = thumbnail_state()
+            cards = shot["cards"]
+            card = cards[0] if cards else None
+            work = shot["workArea"]
+            check("on, a screenshot shows one thumbnail", len(cards) == 1, f"{len(cards)} cards")
+            if card:
+                check("it starts from the whole screen and shrinks into place",
+                      first and (first["scale"][0] > 1.2 or not shot["animations"]),
+                      f"first seen at scale {first and first['scale']}, animations {shot['animations']}")
+                x, y, width, height = card["box"]
+                check("it sits in the bottom right corner of the work area, 18px in",
+                      abs((x + width) - (work[0] + work[2] - 18)) <= 2
+                      and abs((y + height) - (work[1] + work[3] - 18)) <= 2,
+                      f"card={card['box']} work area={work}")
+                check("it is a card about 220px across, with rounded corners",
+                      max(card["width"], card["height"]) == 220 and card["rounded"]
+                      and card["scale"] == [1, 1] and card["opacity"] == 255,
+                      f"{card['width']}x{card['height']} rounded={card['rounded']} scale={card['scale']}")
+                check("it knows the file the shell saved",
+                      card["file"] and os.path.exists(card["file"])
+                      and card["file"] == (shot["last"].get("path") or card["file"]),
+                      f"{card['file']} vs {shot['last'].get('path')}")
+                held_back = SHELL_MAJOR >= 46
+                if not held_back:
+                    print(f"  note: GNOME {SHELL_MAJOR} shows its banner regardless")
+                check("GNOME's banner is held back while it shows, the notification kept",
+                      not held_back or
+                      not shot["bannerIsScreenshot"]
+                      and any(n["acknowledged"] for n in shot["notifications"]),
+                      f"banner: {shot['bannerTitle']}, notifications: {shot['notifications']}")
+                gone, went = wait_thumbnail_gone(6)
+                check("it slides away on its own after about five seconds", went)
+                check("and takes the held-back notification with it",
+                      not held_back or not gone["notifications"], f"{gone['notifications']}")
+
+            # Resting on it keeps it.
+            shot = take_screenshot(900)
+            if shot["cards"]:
+                x, y, width, height = shot["cards"][0]["box"]
+                # Moved onto it from beside it, so it sees the pointer arrive.
+                hook("MovePointer", (x - 40, y + height / 2), "(dd)")
+                GLib.usleep(200 * 1000)
+                hook("MovePointer", (x + width / 2, y + height / 2), "(dd)")
+                GLib.usleep(500 * 1000)
+                over = thumbnail_state()["cards"]
+                GLib.usleep(6000 * 1000)
+                held = thumbnail_state()
+                check("the pointer resting on it keeps it past five seconds", len(held["cards"]) == 1,
+                      f"{len(held['cards'])} cards, hover was {over and over[0]['hover']}")
+                hook("MovePointer", (10, y + height / 2), "(dd)")
+                _, went = wait_thumbnail_gone(7)
+                check("and it goes once the pointer leaves", went)
+            else:
+                check("a second screenshot shows a thumbnail too", False)
+
+            # Dragged to the right, it goes at once; a second shot replaces the first.
+            take_screenshot(300)
+            shot = take_screenshot(900)
+            check("a new screenshot replaces the thumbnail before it", len(shot["cards"]) == 1,
+                  f"{len(shot['cards'])} cards")
+            hook("DragThumbnail", (160.0,), "(d)")
+            _, went = wait_thumbnail_gone(1.5)
+            check("dragged to the right, it goes at once", went)
+
+            # With the banner allowed, both show.
+            pear_up_setting("screenshot-thumbnail-hide-banner", "false")
+            GLib.usleep(300 * 1000)
+            shot = take_screenshot(900)
+            check("with Hide the Screenshot Banner off, GNOME's banner shows beside it",
+                  len(shot["cards"]) == 1 and (shot["bannerIsScreenshot"] or SHELL_MAJOR < 46),
+                  f"{len(shot['cards'])} cards, banner: {shot['bannerTitle']}")
+            pear_up_gsettings("reset", "org.gnome.shell.extensions.pear-up",
+                              "screenshot-thumbnail-hide-banner")
+            hook("DragThumbnail", (160.0,), "(d)")
+            wait_thumbnail_gone(1.5)
+    except GLib.Error as exc:
+        check("the screenshot thumbnail could be exercised", False, exc.message.splitlines()[0])
+
 # ------------------------------------------------------- dock magnification
 # Last, because it switches Dash to Dock on: everything above runs against the
 # stock shell, as it always has.
@@ -1297,12 +2008,31 @@ try:
 except GLib.Error as exc:
     check("dock magnification could be exercised", False, exc.message.splitlines()[0])
 
+print()
+print("  dock bounce:")
+bounce = BounceChecks(dock)
+bounce_ready = False
+if dock.ready:
+    try:
+        bounce.run()
+        bounce_ready = bounce.ready
+    except GLib.Error as exc:
+        check("the dock bounce could be exercised", False, exc.message.splitlines()[0])
+
 # ------------------------------------------------------------ clean teardown
 # Disabled with the dock still magnified, so there is something to undo.
 try:
     dock.hover_before_disable()
 except GLib.Error as exc:
     check("the dock could be hovered before disabling", False, exc.message.splitlines()[0])
+
+# And an icon in the air, under the magnified dock, for the bounce to undo.
+if bounce_ready:
+    try:
+        bounce_ready = bounce.bounce_before_disable()
+    except GLib.Error as exc:
+        check("an icon could be bounced before disabling", False, exc.message.splitlines()[0])
+        bounce_ready = False
 
 # Part-way through a fade, so that disabling has one to stop.
 fading_at_disable = None
@@ -1315,9 +2045,25 @@ if smoothing:
     except GLib.Error as exc:
         check("a fade could be started before disabling", False, exc.message.splitlines()[0])
 
+thumbnail_at_disable = False
+if thumbnail_ran:
+    try:
+        thumbnail_at_disable = bool(take_screenshot(900)["cards"])
+    except GLib.Error:
+        pass
+
 call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
      "DisableExtension", (UUID,), "(s)")
 GLib.usleep(2 * 1000 * 1000)
+
+if thumbnail_at_disable:
+    try:
+        left = thumbnail_state()
+        check("disabling takes a showing screenshot thumbnail away, and its notification",
+              not left["cards"] and (SHELL_MAJOR < 46 or not left["notifications"]),
+              f"{len(left['cards'])} cards, {left['notifications']}")
+    except GLib.Error as exc:
+        check("the thumbnail could be checked after disabling", False, exc.message.splitlines()[0])
 
 after = extension_info()
 check("extension reports itself disabled", after.get("state") != 1,
@@ -1440,6 +2186,8 @@ if state:
 
 if dock.ready:
     dock.check_left_nothing("Pear Up is disabled")
+if bounce_ready:
+    bounce.check_left_nothing("Pear Up is disabled")
 
 # GNOME shows no switch popup with a single desktop, so a window makes a second,
 # now that nothing else here could be disturbed by one. It stays for the second
@@ -1492,6 +2240,10 @@ if state:
         if moved["active"] != desktops["active"]:
             switch_desktop("Page_Up")
         check("notifications go to the right again", banner_state()["alignment"] == END)
+        if thumbnail_ran:
+            again_shot = take_screenshot(900)
+            check("a screenshot shows one thumbnail again, not one per enable",
+                  len(again_shot["cards"]) == 1, f"{len(again_shot['cards'])} cards")
         if smoothing:
             again_bright = brightness_state()
             hook("ClearBrightnessWrites")
@@ -1507,6 +2259,10 @@ if state:
         call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
              "DisableExtension", (UUID,), "(s)")
         GLib.usleep(2 * 1000 * 1000)
+        if thumbnail_ran:
+            pear_up_gsettings("reset", "org.gnome.shell.extensions.pear-up", "screenshot-thumbnail")
+            left_over = thumbnail_state()["cards"]
+            check("and no thumbnail is left behind", not left_over, f"{left_over}")
         desktops = workspace_state()
         check("disabled again, the shell's own methods are back, with nothing left wrapped",
               desktops["popupDisplayIsShells"] and desktops["stripRuleIsShells"]

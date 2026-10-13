@@ -14,6 +14,78 @@ it back when they are switched off.
 
 ### Added
 
+- **Notifications Slide In from the Right.** A new switch under Notifications
+  at the Top Right, off by default: a banner comes in from beyond the right
+  edge of the screen (an ease-out over about a third of a second, with no
+  bounce) and, when its time is up or it is closed, slides back out to the
+  right, as on macOS, instead of dropping from the top. It wraps the message
+  tray's `_updateShowingNotification` and `_hideNotification` only for the
+  length of each call, so the shell's own state handling is untouched; it
+  follows the animation switch and slow-down factor, does nothing while the
+  banners are not in the corner, and leaves GNOME's drop where those methods
+  are missing.
+
+- **Springy Desktop Switching** (General ▸ Desktop, off by default). Desktops
+  move the way Spaces do on macOS: a keyboard switch, and the slide after a
+  three- or four-finger swipe is let go, land on a critically damped spring in
+  about 0.4 s instead of GNOME's 250 ms ease, the release starting at the
+  fingers' own speed; pulled past the first or last desktop they follow with
+  growing resistance and spring back; and the switch shortcut on the last (or
+  first) desktop gives a small bump that way. With dynamic workspaces the last
+  desktop is the empty one GNOME keeps. Only the desktop switcher's own swipe
+  tracker is changed, on that instance, so the overview's swipe is untouched.
+  The rubber band needs GNOME 49 or later; 45 to 48 get the spring and the bump.
+
+- **Window Keys on the Keyboard page.** Cmd+M Minimizes adds Super+M to the
+  minimize shortcut and takes it from the message tray, which keeps its other
+  keys; Cmd+D Shows the Desktop adds Super+D (macOS uses Cmd+F3 or F11, and F3 is
+  a media key on a Framework). Restore GNOME Window Keys refills maximize,
+  restore and the tile-left and tile-right keys from GNOME's defaults when
+  another extension, Tiling Shell for one, has emptied them, and leaves keys
+  that hold something alone. A value that is already right reads as on, and
+  switching off puts back what was displaced. Cmd+M left the macOS Window
+  Shortcuts set for it: both added Super+M to minimize, so switching either off
+  took it from the other, and the set never took it from the message tray.
+  Cmd+M Minimizes reads on only once the tray has given it up.
+
+- **Windows that open and close like macOS** (Windows page, Animation, *Open and
+  Close Like macOS*, key `macos-window-animations`, off by default). A new
+  window fades in while growing from nine tenths of its size around its centre
+  (230 ms, ease-out cubic), and a closing one fades while shrinking back to nine
+  tenths (190 ms), where GNOME pops a window up from a sliver at its bottom edge.
+  It restyles the shell's own animation rather than replacing it: the window
+  manager's `_shouldAnimateActor` is wrapped on `Main.wm` — on the instance,
+  so it sits in one chain with Magic Lamp's wrapper whichever was enabled first —
+  and when the shell is about to animate a normal window or a dialog of its own
+  opening or closing, that window's next `ease()` gets other values. The shell
+  still decides whether to animate, keeps its books and finishes the window
+  through its own `onStopped`, so a window closed mid-animation is finished as
+  without Pear Up. Attached dialogs keep GNOME's unfold, which is close to a
+  macOS sheet; menus and tooltips are never touched; minimizing stays Magic
+  Lamp's. The slow-down factor and Reduce Animation apply as to the shell's own.
+  Burn My Windows, if it has an effect for a window, takes precedence.
+  Integration tests sample the animation at a quarter speed on GNOME 48 and 50
+  (GNOME 45 does not animate windows headless), with a stand-in for Magic Lamp,
+  and check that nothing is left behind; the preview takes a frame sequence of
+  both and of GNOME's own opening.
+
+- **Steam: Buttons on the Left** (Windows page, off by default, shown when Steam is installed).
+  Steam's client draws its own title bar with the buttons on the right whatever GNOME's layout says.
+  The switch patches `steamui/css/library.css` and `gamerecording.css` the way Adwaita for Steam
+  does — one line importing the original, kept beside it byte for byte, then Pear Up's rules, padded
+  to the original's size so Steam's size check passes — and the rules follow GNOME's button layout.
+  The extension watches the directory and patches again after a Steam update; off puts Steam's files
+  back exactly. Steps aside where Adwaita for Steam is installed.
+
+- **Smooth Browser Scrolling.** A switch and a speed in the Trackpad group
+  write Chromium's own touchpad scale
+  (`WaylandUnscaledTouchpadScrolling:scroll_scaling_factor`, 2.5 by default,
+  which matches GTK) into the flags file of each Flatpak Brave, Chromium and
+  Chrome, which otherwise multiply touchpad scrolling by 12 on Wayland and
+  move the page in jumps of tens of pixels a frame. Only Pear Up's two lines
+  are written and taken out; a file with an `--enable-features` of its own is
+  left alone and named.
+
 - **An Appearance page, starting with type and the accent.** macOS-Like Type
   sets the interface, document and window-title fonts to Adwaita Sans — GNOME's
   own fork of Inter, shipped from GNOME 48 — at 11, bold for titles, and turns
@@ -123,6 +195,18 @@ it back when they are switched off.
   Dock and changes none of Dash to Dock's settings, and clicks and
   drag-and-drop still reach Dash to Dock's own icons. It magnifies Dash to
   Dock's icons, so the group appears only when Dash to Dock is installed.
+
+- **Dock bounce**: an app's dock icon hops away from the screen edge while the
+  app starts, until its first window appears (at most ten seconds), and three
+  times when a window of an app in the background asks for attention, landing
+  early once the app is brought forward — leftwards for a dock on the right,
+  upwards for one at the bottom. Each hop takes 0.6 s and rises one icon's
+  size, at least 16 px, rising and falling like a thrown ball; it is slowed with the
+  shell's own animations and skipped when animations are off. Two switches in
+  a new Bounce group on the Dock page, `dock-bounce-on-launch` and
+  `dock-bounce-on-attention`, both off by default. Drawn over Dash to Dock like
+  magnification, which lifts its magnified copy instead while the pointer is on
+  the dock; the running dot stays put, as on macOS.
 
 - **A Glass group on the Dock page, for a frosted-glass dock.** The floating,
   frosted pill macOS has is [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/)
@@ -257,6 +341,19 @@ it back when they are switched off.
   levels step as GNOME's do until the unlock; a fade under way when the
   screen locks goes straight to where it was heading. On by default, in the
   Desktop group.
+
+- **Floating Thumbnail after a screenshot, on the Keyboard page.** As on
+  macOS, the shot shrinks from where it was taken — the whole screen, the
+  selection or the window — into a 220px card with rounded corners in the
+  bottom right corner, left of a dock on the right edge (or above one along
+  the bottom), stays five seconds, longer while the pointer rests on it, and
+  slides off to the right. Clicking opens the file in its default app;
+  dragging or swiping it right puts it away at once; a new shot replaces it.
+  It follows the shell's own "Screenshot captured" notification, so Print,
+  Cmd+Shift+3/4 and window shots all show it and screencasts do not. Hide the
+  Screenshot Banner (on) keeps GNOME's banner out of sight meanwhile, from
+  GNOME 46; the notification stays in the list until the card goes. Off by
+  default; the arrival and leaving follow the shell's animation settings.
 
 - **macOS-Like Scroll Acceleration, in a Trackpad group on the Keyboard
   page.** libinput scrolls by the same amount for every millimetre two
@@ -543,6 +640,13 @@ it back when they are switched off.
   readouts with Pear Up on and off.
 
 ### Fixed
+
+- **Slow scrolls step evenly with scroll acceleration on.** The plugin rounded
+  both fingers' shifted positions alike, so libinput's average moved in whole
+  units and, at the slow gain, one frame scrolled twice as far as the next.
+  The second finger now makes up the first one's rounding, which keeps their
+  sum within half a unit and halves the step (frame-to-frame variation in a
+  replay with sensor noise: 0.36 → 0.21, libinput alone 0.16).
 
 - **Log Out is always there to click, and the power items stay current.** The
   pear menu greyed Log Out out on a machine with one account, and only in some

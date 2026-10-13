@@ -284,7 +284,9 @@ in_theme() {
 }
 
 # Stand-ins for the dock favourites: the name and icon of this machine's own
-# entry, Exec=true, so the dock looks the same and launches nothing.
+# entry, Exec=true, so the dock looks the same and launches nothing. With
+# startup notification, so a click leaves the app starting, which is what the
+# dock bounce shot bounces on.
 stage_favourites() {
     mkdir -p "$H/apps" "$H/app-icons"
     local app_dirs=() extra_icon_dirs=() d id dir entry name icon found
@@ -319,7 +321,7 @@ stage_favourites() {
                 icon="/host/app-icons/${id%.desktop}.${found##*.}"
             fi
         fi
-        printf '[Desktop Entry]\nType=Application\nName=%s\nExec=true\nIcon=%s\n' \
+        printf '[Desktop Entry]\nType=Application\nName=%s\nExec=true\nStartupNotify=true\nIcon=%s\n' \
             "$name" "$icon" >"$H/apps/$id"
     done
 

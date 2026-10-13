@@ -8,8 +8,13 @@ import { MenuManager } from './menuManager.js';
 import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
 import { DockMagnifier } from './dockMagnifier.js';
+import { DockBounce } from './dockBounce.js';
 import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
+import { SpacesSpring, SPACES_SPRING_KEY } from './spacesSpring.js';
+import { ScreenshotThumbnail, SCREENSHOT_THUMBNAIL_KEY } from './screenshotThumbnail.js';
+import { WindowAnimations, WINDOW_ANIMATIONS_KEY } from './windowAnimations.js';
+import { SteamButtonsKeeper, STEAM_BUTTONS_KEY } from './steamButtons.js';
 import { childSignals, quitApp } from './util.js';
 
 // Panel layout differs from macOS in a few fixed ways; each of these is a
@@ -70,6 +75,12 @@ const DOCK_MAGNIFICATION_KEYS = [
     'dock-magnification-size',
 ];
 
+// Read live: the bouncer is built while either is on, and follows each switch.
+const DOCK_BOUNCE_KEYS = [
+    'dock-bounce-on-launch',
+    'dock-bounce-on-attention',
+];
+
 // What the Quick Settings system indicator shows where there is no battery.
 // With one, the same icon is the battery, and that is not for hiding.
 const POWER_GLYPH = 'system-shutdown-symbolic';
@@ -97,8 +108,13 @@ export default class GlobalMenuExtension extends Extension {
         this._logoButton = null;
         this._searchButton = null;
         this._dockMagnifier = null;
+        this._dockBounce = null;
         this._shellTweaks = null;
         this._smoothBrightness = null;
+        this._spacesSpring = null;
+        this._screenshotThumbnail = null;
+        this._windowAnimations = null;
+        this._steamButtons = null;
         this._overviewHidden = false;
         this._clockMoved = false;
         this._clockSessionBackup = null;
@@ -182,12 +198,22 @@ export default class GlobalMenuExtension extends Extension {
                 this._queueMenuSync();
             else if (DOCK_MAGNIFICATION_KEYS.includes(key))
                 this._guard('updating dock magnification', () => this._syncDockMagnifier());
+            else if (DOCK_BOUNCE_KEYS.includes(key))
+                this._guard('updating the dock bounce', () => this._syncDockBounce());
             else if (key === 'dock-focus-highlight')
                 this._guard('updating the dock highlight', () => this._syncDockFocusHighlight());
             else if (SHELL_TWEAK_KEYS.includes(key))
                 this._shellTweaks?.sync();
             else if (key === SMOOTH_BRIGHTNESS_KEY)
                 this._smoothBrightness?.sync();
+            else if (key === SPACES_SPRING_KEY)
+                this._spacesSpring?.sync();
+            else if (key === SCREENSHOT_THUMBNAIL_KEY)
+                this._guard('updating the screenshot thumbnail', () => this._screenshotThumbnail?.sync());
+            else if (key === WINDOW_ANIMATIONS_KEY)
+                this._windowAnimations?.sync();
+            else if (key === STEAM_BUTTONS_KEY)
+                this._guard('updating Steam\'s window buttons', () => this._steamButtons?.sync());
         });
 
         global.display.connectObject('notify::focus-window', () => {
@@ -226,6 +252,7 @@ export default class GlobalMenuExtension extends Extension {
         // Dash to Dock is someone else's code, reached through its private
         // members; a failure there must not take the menu bar down with it.
         this._guard('setting up dock magnification', () => this._syncDockMagnifier());
+        this._guard('setting up the dock bounce', () => this._syncDockBounce());
         this._guard('styling the dock highlight', () => this._syncDockFocusHighlight());
 
         // Notifications, the volume bubble and the rest of what is not the bar.
@@ -239,6 +266,28 @@ export default class GlobalMenuExtension extends Extension {
         // sets the brightness itself (GNOME 49 on).
         this._guard('smoothing automatic brightness', () => {
             this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
+        });
+
+        // Desktop switching on a spring, with a rubber band at the ends, as
+        // Spaces move on macOS.
+        this._guard('putting desktop switching on a spring', () => {
+            this._spacesSpring = new SpacesSpring(this.metadata.uuid, this._settings);
+        });
+
+        // The floating thumbnail after a screenshot, bottom right.
+        this._guard('watching for screenshots', () => {
+            this._screenshotThumbnail = new ScreenshotThumbnail(this.metadata.uuid, this._settings);
+        });
+
+        // Windows that open and close as they do on macOS, off by default.
+        this._guard('restyling window animations', () => {
+            this._windowAnimations = new WindowAnimations(this.metadata.uuid, this._settings);
+        });
+
+        // Steam's own title bar, patched to follow GNOME's button layout, and
+        // patched again when a Steam update writes its stylesheets afresh.
+        this._guard('watching Steam\'s window buttons', () => {
+            this._steamButtons = new SteamButtonsKeeper(this.metadata.uuid, this._settings);
         });
 
         // GNOME can close a window from the keyboard but has nothing that
@@ -998,6 +1047,30 @@ export default class GlobalMenuExtension extends Extension {
         magnifier?.destroy();
     }
 
+    // Like the magnifier, the bouncer finds Dash to Dock's docks by itself and
+    // does nothing while there are none.
+    _syncDockBounce() {
+        if (!this._settings)
+            return;
+
+        const modes = {
+            onLaunch: this._settings.get_boolean('dock-bounce-on-launch'),
+            onAttention: this._settings.get_boolean('dock-bounce-on-attention'),
+        };
+        if (!modes.onLaunch && !modes.onAttention)
+            this._dropDockBounce();
+        else if (this._dockBounce)
+            this._dockBounce.setModes(modes);
+        else
+            this._dockBounce = new DockBounce(modes);
+    }
+
+    _dropDockBounce() {
+        const bounce = this._dockBounce;
+        this._dockBounce = null;
+        bounce?.destroy();
+    }
+
     // Dash to Dock's own stylesheet puts a grey backdrop behind the focused
     // app's icon; the macOS Dock marks it with the running dot alone. The rule
     // that removes it is in stylesheet.css, keyed off a class on the UI group:
@@ -1220,6 +1293,8 @@ export default class GlobalMenuExtension extends Extension {
         // Gives Dash to Dock's icons their opacity back and removes the overlay
         // drawn above them, whether or not the pointer is on the dock.
         this._guard('removing dock magnification', () => this._dropDockMagnifier());
+        // Lands every bouncing icon at once and gives it its opacity back.
+        this._guard('removing the dock bounce', () => this._dropDockBounce());
 
         this._guard('restoring the shell tweaks', () => this._shellTweaks?.destroy());
         this._shellTweaks = null;
@@ -1227,6 +1302,21 @@ export default class GlobalMenuExtension extends Extension {
         // Stops the fade and applies where it was heading.
         this._guard('restoring automatic brightness', () => this._smoothBrightness?.destroy());
         this._smoothBrightness = null;
+
+        this._guard('taking desktop switching off its spring', () => this._spacesSpring?.destroy());
+        this._spacesSpring = null;
+
+        // Takes away a thumbnail still showing, and the notification it held back.
+        this._guard('removing the screenshot thumbnail', () => this._screenshotThumbnail?.destroy());
+        this._screenshotThumbnail = null;
+
+        // Animations already running finish as they began.
+        this._guard('restoring window animations', () => this._windowAnimations?.destroy());
+        this._windowAnimations = null;
+
+        // Stops watching; the patch itself stays, as it does over a screen lock.
+        this._guard('unwatching Steam\'s window buttons', () => this._steamButtons?.destroy());
+        this._steamButtons = null;
 
         // Each step is guarded separately: these touch actors this extension
         // does not own, and extensions are torn down in reverse order, so one

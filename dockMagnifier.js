@@ -44,6 +44,7 @@ import GLib from 'gi://GLib';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { childSignals } from './util.js';
+import { bounceRise } from './dockBounce.js';
 
 const DOCK_ACTOR_NAME = 'dashtodockContainer';
 
@@ -187,9 +188,9 @@ export class DockMagnifier {
     }
 
     // The overlay itself comes and goes as a child of the UI group too, and is
-    // not a reason to look for docks.
+    // not a reason to look for docks; nor is the bounce overlay (dockBounce.js).
     _onUiGroupChanged(child) {
-        if (child?.name !== OVERLAY_NAME)
+        if (!child?.name?.startsWith('pearup-dock-'))
             this._queueScan();
     }
 
@@ -624,6 +625,18 @@ class DockMagnification {
             centerY = this._side === St.Side.BOTTOM
                 ? y + height - height * scale / 2
                 : y + height * scale / 2;
+        }
+
+        // An app that is launching or asking for attention hops away from the
+        // edge (dockBounce.js); its magnified copy hops with it, by its own
+        // now larger size.
+        const lift = bounceRise(item.slot.child?.app,
+            (this._vertical ? width : height) * scale);
+        if (lift > 0) {
+            if (this._vertical)
+                centerX += this._side === St.Side.RIGHT ? -lift : lift;
+            else
+                centerY += this._side === St.Side.BOTTOM ? -lift : lift;
         }
 
         // Placed by translation rather than position throughout: a transform

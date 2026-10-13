@@ -259,6 +259,13 @@ def shot(fn):
     return fn
 
 
+def opt_in_shot(fn):
+    """A shot taken only when PREVIEW_SHOTS names it: a frame sequence of an
+    animation, say, which is slow and only wanted by whoever is changing it."""
+    fn.opt_in = True
+    return shot(fn)
+
+
 @shot
 def desktop():
     """1 + 2 + 3: an app in front, its menus in the bar, window buttons, dock."""
@@ -361,6 +368,61 @@ def notification():
     clear_notifications()
 
 
+@opt_in_shot
+def notification_slide():
+    """Opt-in: frames of a banner sliding in from the right and back out, with
+    Pear Up's banners-slide-from-right on and the shell slowed down (in the
+    container only) so that a picture every second or so catches it moving."""
+    slow = 40
+    focus_app(FRONT_APP)
+    clear_notifications()
+    settings = f"pv.Main.extensionManager.lookup('{PEAR_UP}').stateObj.getSettings()"
+    jsfn(f"{settings}.set_boolean('banners-slide-from-right', true); return true;")
+    jsfn(f"pv.St.Settings.get().slow_down_factor = {slow}; return true;")
+    wait(0.5)
+    state = """
+        const tray = pv.Main.messageTray, bin = tray._bannerBin;
+        const monitor = pv.Main.layoutManager.primaryMonitor;
+        return {shown: bin.get_n_children() > 0 && tray.visible, tx: bin.translation_x,
+                y: bin.y, width: bin.width, height: bin.height,
+                animations: pv.St.Settings.get().enable_animations,
+                monitor: [monitor.x, monitor.y, monitor.width, monitor.height],
+                panel: box(pv.Main.layoutManager.panelBox)};"""
+    try:
+        call("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+             "org.freedesktop.Notifications", "Notify",
+             ("Files", 0, "org.gnome.Nautilus", "Copy finished",
+              "3 files were copied to Documents.", [],
+              {"desktop-entry": GLib.Variant("s", "org.gnome.Nautilus")}, 0),
+             "(susssasa{sv}i)")
+
+        def frames(prefix, done, limit=14):
+            region = None
+            for i in range(limit):
+                st = jsfn(state)
+                if region is None and st["width"] > 0:
+                    mx, my, mw, mh = st["monitor"]
+                    w = st["width"] + 120
+                    region = [mx + mw - w, my, w, st["panel"][3] + st["height"] + 40]
+                print(f"  {prefix} {i:02d}: shown={st['shown']} x={st['tx']:.0f} y={st['y']:.0f}"
+                      f" animations={st['animations']}")
+                capture(f"07-{prefix}-{i:02d}-x{round(st['tx'])}", {"corner": region}, keep_full=False)
+                if done(st):
+                    return
+
+        frames("slide-in", lambda st: st["shown"] and st["tx"] == 0)
+        jsfn("""
+            const tray = pv.Main.messageTray;
+            tray._notificationExpired = true;
+            tray._updateState();
+            return true;""")
+        frames("slide-out", lambda st: not st["shown"], limit=24)
+    finally:
+        jsfn("pv.St.Settings.get().slow_down_factor = 1; return true;")
+        jsfn(f"{settings}.reset('banners-slide-from-right'); return true;")
+        clear_notifications()
+
+
 @shot
 def app_name_menu():
     """Extra: the bold app-name menu (Files), opened by a real click."""
@@ -388,6 +450,355 @@ def dock_hover():
     pointer().move(x + w / 2, y + h / 2, settle=1.2)
     capture("06-dock-hover", {"dock": pad(dock_rect(), 60)})
     pointer().park()
+
+
+def _bounce_frames(prefix, app_index, hover):
+    """Click a dock favourite (it launches nothing, so it is starting only
+    briefly, and its icon lands after the hop in the air) and photograph the
+    dock while it bounces. Animations run slowed down twelve times, inside this
+    container only, so several captures land in one hop; each frame's lift is
+    read back from the overlay just before it is taken."""
+    app = jsfn(f"""
+        const dock = pv.Main.layoutManager.uiGroup.get_children()
+            .find(a => a.name === 'dashtodockContainer' && a.visible);
+        const items = dock?.dash?._box.get_children().filter(i => i.child?.app) ?? [];
+        const item = items[Math.min({app_index}, items.length - 1)];
+        if (!item) return null;
+        return {{id: item.child.app.get_id(), slot: box(item), icon: box(item.child.icon.icon)}};""")
+    if not app:
+        print("  !! no dock favourite to bounce")
+        return
+    x, y, w, h = app["slot"]
+    if hover:
+        pointer().move(x + w / 2, y + h / 2, settle=1.2)
+    jsfn(f"""
+        const dock = pv.Main.layoutManager.uiGroup.get_children()
+            .find(a => a.name === 'dashtodockContainer' && a.visible);
+        const item = dock.dash._box.get_children().find(i => i.child?.app?.get_id() === '{app["id"]}');
+        item.child.activate(1);
+        return true;""")
+    started = time.monotonic()
+    region = pad(dock_rect(), 80)
+    for frame in range(18):
+        lift = jsfn("""
+            const overlay = pv.Main.layoutManager.uiGroup.get_children()
+                .find(a => a.name === 'pearup-dock-bounce');
+            const clone = overlay?.get_children().find(c => c.opacity > 0);
+            const copies = pv.Main.layoutManager.uiGroup.get_children()
+                .find(a => a.name === 'pearup-dock-magnifier');
+            return {clone: clone ? box(clone) : null, magnified: !!copies};""")
+        name = f"{prefix}-{frame:02d}"
+        capture(name, {"dock": region}, keep_full=False)
+        print(f"    t={time.monotonic() - started:.2f}s clone={lift['clone']} "
+              f"icon={app['icon']} magnified={lift['magnified']}")
+    if hover:
+        pointer().park()
+
+
+@shot
+def dock_bounce():
+    """Extra: a dock icon bouncing as its app starts (Pear Up's dock bounce),
+    plain and under magnification, as a frame sequence."""
+    focus_app(FRONT_APP)
+    if not dock_rect():
+        print("  !! no dock")
+        return
+    jsfn(f"""
+        const settings = pv.Main.extensionManager.lookup('{PEAR_UP}')?.stateObj?.getSettings();
+        if (!settings) return false;
+        settings.set_boolean('dock-bounce-on-launch', true);
+        pv.St.Settings.get().slow_down_factor = 12;
+        return true;""")
+    wait(0.5)
+    try:
+        _bounce_frames("07-dock-bounce", 1, hover=False)
+        wait(1.0)
+        _bounce_frames("07b-dock-bounce-magnified", 2, hover=True)
+    finally:
+        jsfn(f"""
+            pv.St.Settings.get().slow_down_factor = 1;
+            pv.Main.extensionManager.lookup('{PEAR_UP}')?.stateObj?.getSettings()
+                ?.reset('dock-bounce-on-launch');
+            return true;""")
+
+
+# ---------------------------------------------------------------- desktop switching
+# Spaces Spring: a branch that has it gets frames of its animations, each taken
+# from the animation paused and set to a chosen moment, so a slow software-
+# rendered capture cannot blur or skip them, plus the numbers behind them in
+# spaces-trace.json. The keyboard switch and the bump go through real key
+# presses (the RemoteDesktop keyboard); the pull past the end is the swipe
+# tracker fed touchpad updates, the way the touchpad feeds it.
+SPACES_KEY = "spaces-spring"
+EXT = f"pv.Main.extensionManager.lookup('{PEAR_UP}')?.stateObj"
+SPACES_JS = """
+const ext = %s;
+const anim = pv.Main.wm._workspaceAnimation;
+const groups = () => anim._switchData?.monitors ?? [];
+const seek = (t, ms) => { t.advance(ms); t.emit('new-frame', ms); };
+const ws = () => global.workspace_manager.get_active_workspace_index();
+const shift = () => { const g = groups()[0]; return g ? {progress: +g.progress.toFixed(4),
+    tx: +g._container.translation_x.toFixed(1)} : null; };
+""" % EXT
+
+
+def spaces(body):
+    return jsfn(SPACES_JS + body)
+
+
+def press(*keysyms):
+    p = pointer()
+    for sym in keysyms:
+        call(p.RD, p.rd, f"{p.RD}.Session", "NotifyKeyboardKeysym", (sym, True), "(ub)")
+    for sym in reversed(keysyms):
+        call(p.RD, p.rd, f"{p.RD}.Session", "NotifyKeyboardKeysym", (sym, False), "(ub)")
+
+
+CTRL, ALT, LEFT, RIGHT = 0xffe3, 0xffe9, 0xff51, 0xff53
+
+
+@shot
+def desktop_switch():
+    """07: switching desktops on Spaces Spring's spring: a keyboard switch part
+    way, the desktops pulled past the last one and springing back, the bump."""
+    if not spaces(f"return !!ext?._settings?.settings_schema?.has_key('{SPACES_KEY}');"):
+        print("  (this branch has no Spaces Spring)")
+        return
+    was_on = spaces(f"const on = ext._settings.get_boolean('{SPACES_KEY}'); "
+                    f"ext._settings.set_boolean('{SPACES_KEY}', true); return on;")
+    focus_app(FRONT_APP)
+    spaces("global.workspace_manager.get_workspace_by_index(0).activate(global.get_current_time()); return 1;")
+    wait(1.0)
+    trace = {"state": spaces("return ext._spacesSpring.state;")}
+    WINDOWS_JS = ("return global.get_window_actors().map(a => [a.meta_window.get_title(), "
+                  "a.meta_window.get_workspace()?.index(), a.visible, a.meta_window.minimized]);")
+    trace["windowsAtStart"] = spaces(WINDOWS_JS)
+    W = jsfn("return pv.Main.layoutManager.primaryMonitor.width;")
+    H = jsfn("return pv.Main.layoutManager.primaryMonitor.height;")
+    edge = {"edge": [W - 360, 0, 360, H]}
+
+    # The keyboard switch, Ctrl+Alt+Right, paused the moment it starts.
+    press(CTRL, ALT, RIGHT)
+    info = spaces("""
+        const t = groups()[0]?.get_transition('progress');
+        if (!t) return null;
+        t.pause();
+        const T = t.get_duration();
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(t, ms); samples.push([ms, shift().progress]); }
+        seek(t, 60);
+        return {duration: T, samples, to: ws()};""")
+    trace["keyboard"] = info
+    if info:
+        for ms in (60, 140):
+            spaces(f"const t = groups()[0].get_transition('progress'); seek(t, {ms}); return 1;")
+            capture(f"07-spaces-switch-{ms}ms", keep_full=True)
+        spaces("groups().forEach(g => g.get_transition('progress')?.start()); return 1;")
+    else:
+        print("  !! the keyboard switch did not animate")
+    wait(1.2)
+
+    # On the last desktop: a swipe pulled past it, step by step.
+    pull = spaces("""
+        const tr = anim._swipeTracker;
+        let time = global.get_current_time();
+        const last = global.workspace_manager.n_workspaces - 1;
+        global.workspace_manager.get_workspace_by_index(last).activate(time);
+        return last;""")
+    wait(1.0)
+    trace["pull"] = spaces("""
+        const tr = anim._swipeTracker;
+        let time = global.get_current_time();
+        tr._touchpadGesture.emit('begin', time, 700, 500);
+        const steps = [];
+        for (let i = 1; i <= 16; i++) {
+            tr._touchpadGesture.emit('update', time += 16, 16, 400);
+            steps.push([i * 16, shift()?.tx, +ext._spacesSpring.state.stretch.toFixed(3)]);
+        }
+        return {last: ws(), steps};""")
+    capture("07-spaces-pull", edge)
+    trace["springBack"] = spaces("""
+        const tr = anim._swipeTracker;
+        tr._touchpadGesture.emit('end', global.get_current_time() + 16, 400);
+        const sb = ext._spacesSpring._springBack;
+        groups().forEach(g => g.get_transition('progress')?.pause());
+        if (!sb) return null;
+        sb.timeline.pause();
+        const T = sb.timeline.get_duration();
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(sb.timeline, ms); samples.push([ms, shift().tx]); }
+        seek(sb.timeline, 80);
+        return {duration: T, samples};""")
+    if trace["springBack"]:
+        capture("07-spaces-spring-back-80ms", edge, keep_full=False)
+        spaces("""
+            ext._spacesSpring._springBack?.timeline.start();
+            groups().forEach(g => g.get_transition('progress')?.start()); return 1;""")
+    else:
+        print("  !! no spring back")
+    wait(1.2)
+
+    # A swipe back towards the first desktop let go half way: the release.
+    trace["release"] = spaces("""
+        const tr = anim._swipeTracker;
+        let time = global.get_current_time();
+        tr._touchpadGesture.emit('begin', time, 700, 500);
+        for (let i = 0; i < 10; i++) tr._touchpadGesture.emit('update', time += 16, -24, 400);
+        tr._touchpadGesture.emit('end', time + 16, 400);
+        const t = groups()[0]?.get_transition('progress');
+        if (!t) return null;
+        t.pause();
+        const T = t.get_duration();
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(t, ms); samples.push([ms, shift().progress]); }
+        seek(t, T); t.start();
+        return {duration: T, samples};""")
+    wait(1.2)
+
+    # The bump: Ctrl+Alt+Left on the first desktop.
+    spaces("global.workspace_manager.get_workspace_by_index(0).activate(global.get_current_time()); return 1;")
+    wait(1.0)
+    focus_app(FRONT_APP)
+    trace["windowsAtBump"] = spaces(WINDOWS_JS)
+    press(CTRL, ALT, LEFT)
+    trace["bump"] = spaces("""
+        const b = ext._spacesSpring._bump;
+        if (!b) return null;
+        b.timeline.pause();
+        const T = b.timeline.get_duration();
+        const tx = () => +b.groups[0]._container.translation_x.toFixed(1);
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(b.timeline, ms); samples.push([ms, tx()]); }
+        seek(b.timeline, 50);
+        return {duration: T, samples, ws: ws()};""")
+    if trace["bump"]:
+        capture("07-spaces-bump-50ms", {"edge": [0, 0, 360, H]}, keep_full=False)
+        spaces("ext._spacesSpring._bump?.timeline.start(); return 1;")
+    else:
+        print("  !! no bump")
+    wait(1.0)
+
+    # The same keyboard switch with the switch off, for comparison: GNOME's own.
+    spaces(f"ext._settings.set_boolean('{SPACES_KEY}', false); return 1;")
+    spaces("global.workspace_manager.get_workspace_by_index(0).activate(global.get_current_time()); return 1;")
+    wait(1.0)
+    press(CTRL, ALT, RIGHT)
+    trace["keyboardOff"] = spaces("""
+        const t = groups()[0]?.get_transition('progress');
+        if (!t) return null;
+        t.pause();
+        const T = t.get_duration();
+        const samples = [];
+        for (let ms = 0; ms <= T; ms += 20) { seek(t, ms); samples.push([ms, shift().progress]); }
+        seek(t, T); t.start();
+        return {duration: T, samples};""")
+    wait(1.0)
+
+    with open(os.path.join(OUT, "spaces-trace.json"), "w") as handle:
+        json.dump(trace, handle, indent=1)
+    print("  spaces-trace.json")
+    if was_on:
+        spaces(f"ext._settings.set_boolean('{SPACES_KEY}', true); return 1;")
+
+
+def thumbnail_cards():
+    return jsfn("""
+        return pv.Main.layoutManager.uiGroup.get_children()
+            .filter(a => a.name === 'pearup-screenshot-thumbnail')
+            .map(a => ({box: box(a), hover: a.hover, scale: a.scale_x, tx: a.translation_x}));""")
+
+
+def pear_up_setting(key, value):
+    """Sets one of Pear Up's keys inside the container, or says it has none."""
+    return jsfn(f"""
+        const ext = pv.Main.extensionManager.lookup('{PEAR_UP}');
+        const settings = ext?.stateObj?.getSettings?.();
+        if (!settings?.settings_schema?.has_key('{key}')) return false;
+        settings.set_boolean('{key}', {'true' if value else 'false'});
+        return true;""")
+
+
+def take_screenshot(kind):
+    """The shell's own captureScreenshot, as Print (the whole screen) or the
+    window shortcut (the focused window) call it."""
+    texture = ("(await new pv.Shell.Screenshot().screenshot_stage_to_content())[0].get_texture()"
+               if kind == "screen" else
+               "global.display.get_focus_window().get_compositor_private()"
+               ".paint_to_content(null).get_texture()")
+    jsfn(f"""
+        (async () => {{
+            const m = await import('resource:///org/gnome/shell/ui/screenshot.js');
+            await m.captureScreenshot({texture}, null, 1, null);
+        }})().catch(e => console.error('preview screenshot failed', e));
+        return true;""")
+
+
+@shot
+def screenshot_thumbnail():
+    """Extra: the floating screenshot thumbnail, a frame sequence of it arriving
+    (the shell slowed down 8x, in here only) and leaving."""
+    if not pear_up_setting("screenshot-thumbnail", True):
+        print("  (this checkout has no screenshot thumbnail)")
+        return
+    focus_app(FRONT_APP)
+    clear_notifications()
+    width, height = js("[global.stage.width, global.stage.height]")
+    corner = [width - 560, height - 380, 560, 380]
+    dock = dock_rect()
+    if dock and dock[0] > width / 2:
+        corner = [dock[0] + dock[2] - 620, height - 380, 620, 380]
+
+    js("pv.St.Settings.get().slow_down_factor = 8, true")
+    try:
+        for kind in ("screen", "window"):
+            if kind == "window" and not jsfn("return !!global.display.get_focus_window();"):
+                print("  (no window in front, so no window shot)")
+                continue
+            take_screenshot(kind)
+            # Arriving: 300 ms at 8x, about 2.4 s, photographed as it goes.
+            for frame in range(5):
+                capture(f"20-thumbnail-{kind}-arrive-{frame}", {"corner": corner})
+            capture(f"20-thumbnail-{kind}-rest", {"corner": corner, "card": pad(
+                (thumbnail_cards() or [{}])[0].get("box"), 40)})
+            # Put away, so the next one starts clean.
+            jsfn("""
+                for (const a of pv.Main.layoutManager.uiGroup.get_children())
+                    if (a.name === 'pearup-screenshot-thumbnail') a.destroy();
+                return true;""")
+            clear_notifications()
+            wait(0.5)
+    finally:
+        js("pv.St.Settings.get().slow_down_factor = 1, true")
+
+    # At normal speed: resting on it keeps it, and it slides away to the right.
+    take_screenshot("screen")
+    cards = []
+    for _ in range(30):
+        wait(0.1)
+        cards = thumbnail_cards()
+        if cards:
+            break
+    wait(0.5)
+    cards = thumbnail_cards()
+    if cards:
+        x, y, w, h = cards[0]["box"]
+        pointer().move(x + w / 2, y + h / 2, settle=0.5)
+        hovered = thumbnail_cards()
+        wait(5.5)
+        kept = thumbnail_cards()
+        print(f"  pointer on it: hover={hovered and hovered[0]['hover']}; "
+              f"6 s later {len(kept)} card(s)")
+        # Not park(): that spot is on the card.
+        pointer().move(width / 3, height / 2, settle=0.3)
+        wait(4.4)
+        js("pv.St.Settings.get().slow_down_factor = 8, true")
+        for frame in range(4):
+            capture(f"20-thumbnail-leave-{frame}", {"corner": corner}, keep_full=False)
+        js("pv.St.Settings.get().slow_down_factor = 1, true")
+    wait(3.0)
+    print(f"  after it left: {len(thumbnail_cards())} card(s)")
+    pear_up_setting("screenshot-thumbnail", False)
+    clear_notifications()
 
 
 # ---------------------------------------------------------------- preferences
@@ -507,6 +918,105 @@ def prefs():
     wait(1.0)
 
 
+# ------------------------------------------------- opening and closing windows
+# Pear Up's Open and Close Like macOS, at a twenty-fifth of the speed so a
+# picture can be taken several times while a window opens and again while it
+# closes, then GNOME's own opening for comparison. Each frame is cropped around
+# the window, with room for the shadow, and its scale and opacity are printed.
+ANIMATION_SLOW_DOWN = 25
+ANIMATED_APP = "org.gnome.TextEditor.desktop"
+
+
+def _animated_actor_js(body):
+    """Runs body with `actor` the window being animated: the new window, once
+    _open_animated_window has seen it, kept until it is destroyed."""
+    return jsfn(f"""
+        const actor = globalThis.pvAnimated ?? null;
+        {body}""")
+
+
+def _animation_frames(prefix, label, done_js, crop, limit=10):
+    for index in range(1, limit + 1):
+        state = _animated_actor_js(f"""
+            if (!actor) return null;
+            const [px, py] = actor.get_pivot_point();
+            return {{sx: actor.scale_x, sy: actor.scale_y, px, py, opacity: actor.opacity,
+                     done: {done_js}}};""")
+        if state is None:
+            print(f"  {label} {index}: the window is gone")
+            return
+        name = f"{prefix}-{index}"
+        capture(name, {"window": crop}, keep_full=False)
+        print(f"  {label} {index}: scale {state['sx']:.3f} x {state['sy']:.3f}, "
+              f"pivot {state['px']:.2f},{state['py']:.2f}, opacity {state['opacity']}")
+        if state["done"]:
+            return
+
+
+def _open_animated_window():
+    jsfn(f"""
+        const app = pv.Shell.AppSystem.get_default().lookup_app('{ANIMATED_APP}');
+        globalThis.pvKnownWindows = app?.get_windows?.() ?? [];
+        globalThis.pvAnimated = null;
+        app?.open_new_window(-1);
+        return true;""")
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        rect = jsfn(f"""
+            const app = pv.Shell.AppSystem.get_default().lookup_app('{ANIMATED_APP}');
+            const actor = (app?.get_windows?.() ?? [])
+                .filter(w => !globalThis.pvKnownWindows.includes(w))
+                .map(w => w.get_compositor_private())
+                .find(a => a && a.visible);
+            if (!actor) return null;
+            if (globalThis.pvAnimated !== actor) {{
+                globalThis.pvAnimated = actor;
+                actor.connect('destroy', () => {{
+                    if (globalThis.pvAnimated === actor) globalThis.pvAnimated = null;
+                }});
+            }}
+            const r = actor.meta_window.get_frame_rect();
+            return [r.x, r.y, r.width, r.height];""")
+        if rect:
+            return rect
+        time.sleep(0.02)
+    return None
+
+
+@shot
+def window_open_close():
+    settings = ("pv.Main.extensionManager.lookup('%s').stateObj.getSettings()" % PEAR_UP)
+    js(f"{settings}.set_boolean('macos-window-animations', true); "
+       f"pv.St.Settings.get().slow_down_factor = {ANIMATION_SLOW_DOWN}; true")
+    try:
+        rect = _open_animated_window()
+        if not rect:
+            print("  !! no new window appeared")
+            return
+        crop = pad(rect, 80)
+        _animation_frames("20-macos-open", "opening",
+                          "actor.opacity === 255 && actor.scale_x === 1", crop)
+        time.sleep(0.5)
+        capture("20-macos-open-settled", {"window": crop}, keep_full=False)
+        _animated_actor_js("actor?.meta_window.delete(global.get_current_time()); return true;")
+        time.sleep(0.05)
+        _animation_frames("21-macos-close", "closing", "false", crop)
+        time.sleep(1.0)
+
+        js(f"{settings}.set_boolean('macos-window-animations', false); true")
+        rect = _open_animated_window()
+        if rect:
+            crop = pad(rect, 80)
+            _animation_frames("22-stock-open", "stock opening",
+                              "actor.opacity === 255 && actor.scale_x === 1", crop, limit=4)
+            js("pv.St.Settings.get().slow_down_factor = 1; true")
+            _animated_actor_js("actor?.meta_window.delete(global.get_current_time()); return true;")
+            time.sleep(1.0)
+    finally:
+        js(f"{settings}.reset('macos-window-animations'); "
+           "pv.St.Settings.get().slow_down_factor = 1; delete globalThis.pvKnownWindows; delete globalThis.pvAnimated; true")
+
+
 # ---------------------------------------------------------------- facts
 def facts():
     info = jsfn("""
@@ -567,7 +1077,7 @@ def main():
     facts()
     pointer()  # parked over the wallpaper before the first picture
     for fn in SHOTS:
-        if ONLY and fn.__name__ not in ONLY:
+        if (ONLY or getattr(fn, "opt_in", False)) and fn.__name__ not in ONLY:
             continue
         print(f"== {fn.__name__}")
         try:

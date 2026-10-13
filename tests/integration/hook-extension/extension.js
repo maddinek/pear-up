@@ -17,10 +17,14 @@ import St from 'gi://St';
 import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
+import * as WindowManager from 'resource:///org/gnome/shell/ui/windowManager.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as Screenshot from 'resource:///org/gnome/shell/ui/screenshot.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
 import * as WorkspaceThumbnail from 'resource:///org/gnome/shell/ui/workspaceThumbnail.js';
+import * as WorkspaceAnimation from 'resource:///org/gnome/shell/ui/workspaceAnimation.js';
 
 const IFACE = `
 <node>
@@ -95,6 +99,22 @@ const IFACE = `
     <method name="GetDockState">
       <arg type="s" direction="out" name="state"/>
     </method>
+    <method name="ActivateDockApp">
+      <arg type="s" direction="in" name="appId"/>
+      <arg type="b" direction="out" name="activated"/>
+    </method>
+    <method name="LaunchApp">
+      <arg type="s" direction="in" name="appId"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="DemandAttention">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="s" direction="out" name="how"/>
+    </method>
+    <method name="FocusWindowOf">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="b" direction="out" name="focused"/>
+    </method>
     <method name="OpenDockMenu">
       <arg type="s" direction="in" name="appId"/>
       <arg type="b" direction="out" name="opened"/>
@@ -110,6 +130,22 @@ const IFACE = `
     <method name="PressKeys">
       <arg type="as" direction="in" name="keys"/>
       <arg type="b" direction="out" name="pressed"/>
+    </method>
+    <method name="WatchWindowAnimations">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="d" direction="in" name="slowDown"/>
+      <arg type="b" direction="out" name="watching"/>
+    </method>
+    <method name="GetWindowAnimations">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="StandInLikeMagicLamp">
+      <arg type="b" direction="in" name="on"/>
+      <arg type="b" direction="out" name="done"/>
+    </method>
+    <method name="CloseWindows">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="i" direction="out" name="closed"/>
     </method>
     <method name="CountWindows">
       <arg type="s" direction="in" name="wmClass"/>
@@ -174,8 +210,31 @@ const IFACE = `
       <arg type="i" direction="in" name="align"/>
       <arg type="b" direction="out" name="set"/>
     </method>
+    <method name="TakeTestScreenshot">
+      <arg type="b" direction="out" name="started"/>
+    </method>
+    <method name="GetScreenshotThumbnailState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="ClearScreenshotNotifications">
+      <arg type="b" direction="out" name="cleared"/>
+    </method>
+    <method name="DragThumbnail">
+      <arg type="d" direction="in" name="dx"/>
+      <arg type="b" direction="out" name="started"/>
+    </method>
     <method name="GetBannerState">
       <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="ExpireTestNotification">
+      <arg type="b" direction="out" name="expired"/>
+    </method>
+    <method name="TraceBanner">
+      <arg type="u" direction="in" name="ms"/>
+      <arg type="b" direction="out" name="started"/>
+    </method>
+    <method name="GetBannerTrace">
+      <arg type="s" direction="out" name="trace"/>
     </method>
     <method name="ShowTestOsd">
       <arg type="b" direction="out" name="shown"/>
@@ -193,6 +252,17 @@ const IFACE = `
       <arg type="s" direction="out" name="state"/>
     </method>
     <method name="GetStartupState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="GetSwitchState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="SampleSwitch">
+      <arg type="s" direction="out" name="samples"/>
+    </method>
+    <method name="SwipeTouchpad">
+      <arg type="s" direction="in" name="phase"/>
+      <arg type="d" direction="in" name="delta"/>
       <arg type="s" direction="out" name="state"/>
     </method>
     <method name="AddFakeBacklight">
@@ -424,6 +494,7 @@ function childAddedSignal(actor) {
 // The overlay Pear Up draws magnified dock icons into. Found by name, the same
 // way Looking Glass would find it.
 const MAGNIFIER_NAME = 'pearup-dock-magnifier';
+const BOUNCE_NAME = 'pearup-dock-bounce';
 
 // The weight the theme actually resolved for an actor's text, as a Pango
 // weight (400 regular, 700 bold) — what is drawn, rather than what a
@@ -459,6 +530,19 @@ function screenGeometry(index) {
     };
 }
 
+// The notifications of the shell's screenshot source: one shared source from
+// GNOME 49, one per shot before. Its iconName getter says null on GNOME 50, so
+// the icon itself is read.
+function screenshotNotifications() {
+    return (Main.messageTray.getSources?.() ?? [])
+        .filter(source => {
+            const icon = source.icon ?? source.gicon;
+            const name = icon instanceof Gio.ThemedIcon ? icon.get_names()[0] : source.iconName;
+            return ['screenshooter-symbolic', 'screenshot-recorded-symbolic'].includes(name);
+        })
+        .flatMap(source => [...(source.notifications ?? [])]);
+}
+
 export default class TestHookExtension extends Extension {
     enable() {
         watchStartup();
@@ -467,8 +551,11 @@ export default class TestHookExtension extends Extension {
     }
 
     disable() {
+        this._stopWatchingAnimations();
+        this.StandInLikeMagicLamp(false);
         this.LogoutCalls();
         this.ReleaseLeftEdge();
+        this._stopBannerTrace();
         this._pointer = null;
         this._keyboard = null;
         this._export?.unexport();
@@ -904,6 +991,115 @@ export default class TestHookExtension extends Extension {
         return true;
     }
 
+    // Samples the scale, pivot and opacity of the windows of one class from the
+    // moment the compositor maps or destroys them, every few milliseconds,
+    // until the animation is over. The slow-down factor stretches the
+    // shell's animations so there are enough samples to tell them apart;
+    // 1 puts it back.
+    WatchWindowAnimations(wmClass, slowDown) {
+        this._stopWatchingAnimations();
+        St.Settings.get().slow_down_factor = slowDown;
+        if (!wmClass)
+            return false;
+        this._animations = { open: [], close: [] };
+        const watch = (kind, actor) => {
+            if (actor.meta_window?.get_wm_class() !== wmClass)
+                return;
+            const samples = [];
+            this._animations[kind].push(samples);
+            const start = GLib.get_monotonic_time();
+            let gone = false;
+            let sourceId = 0;
+            const destroyId = actor.connect('destroy', () => {
+                gone = true;
+            });
+            const stop = () => {
+                this._animationSources.delete(sourceId);
+                return GLib.SOURCE_REMOVE;
+            };
+            const sample = () => {
+                if (gone) {
+                    samples.push({ t: (GLib.get_monotonic_time() - start) / 1000, gone: true });
+                    return stop();
+                }
+                const [px, py] = actor.get_pivot_point();
+                samples.push({
+                    t: (GLib.get_monotonic_time() - start) / 1000,
+                    sx: actor.scale_x, sy: actor.scale_y, px, py,
+                    opacity: actor.opacity,
+                    ownEase: Object.hasOwn(actor, 'ease'),
+                });
+                if (samples.length < 400)
+                    return GLib.SOURCE_CONTINUE;
+                actor.disconnect(destroyId);
+                return stop();
+            };
+            sample();
+            sourceId = GLib.timeout_add(GLib.PRIORITY_HIGH, 8, sample);
+            this._animationSources.add(sourceId);
+        };
+        this._animationSignals = [
+            global.window_manager.connect('map', (_wm, actor) => watch('open', actor)),
+            global.window_manager.connect('destroy', (_wm, actor) => watch('close', actor)),
+        ];
+        return true;
+    }
+
+    _stopWatchingAnimations() {
+        for (const id of this._animationSignals ?? [])
+            global.window_manager.disconnect(id);
+        this._animationSignals = [];
+        for (const id of this._animationSources ?? [])
+            GLib.source_remove(id);
+        this._animationSources = new Set();
+    }
+
+    // What was sampled, and whether anything is left behind: windows the shell
+    // still counts as mapping or being destroyed, window actors with an ease()
+    // of their own, and whether the shell's _shouldAnimateActor is its own.
+    GetWindowAnimations() {
+        const own = Main.wm._shouldAnimateActor;
+        return JSON.stringify({
+            ...(this._animations ?? { open: [], close: [] }),
+            mapping: Main.wm._mapping?.size ?? null,
+            destroying: Main.wm._destroying?.size ?? null,
+            ownEase: global.get_window_actors().filter(actor => Object.hasOwn(actor, 'ease')).length,
+            shouldAnimateActor: own === WindowManager.WindowManager.prototype._shouldAnimateActor
+                ? 'the shell\'s' : own?.name ?? null,
+            shouldAnimateActorOwn: Object.hasOwn(Main.wm, '_shouldAnimateActor'),
+            animations: St.Settings.get().enable_animations,
+        });
+    }
+
+    // Wraps the window manager's _shouldAnimateActor the way Magic Lamp does
+    // when it is enabled: the method found then is kept and called, and its
+    // own goes on the instance. Off puts back what was kept, as Magic Lamp's
+    // disable() does.
+    StandInLikeMagicLamp(on) {
+        if (on && !this._lampKept) {
+            const kept = Main.wm._shouldAnimateActor;
+            this._lampKept = { kept, own: Object.hasOwn(Main.wm, '_shouldAnimateActor') };
+            Main.wm._shouldAnimateActor = function (actor, types) {
+                return kept.call(Main.wm, actor, types);
+            };
+        } else if (!on && this._lampKept) {
+            if (this._lampKept.own)
+                Main.wm._shouldAnimateActor = this._lampKept.kept;
+            else
+                delete Main.wm._shouldAnimateActor;
+            this._lampKept = null;
+        }
+        return true;
+    }
+
+    CloseWindows(wmClass) {
+        const windows = global.display.list_all_windows()
+            .filter(window => window.get_wm_class() === wmClass);
+        for (const window of windows)
+            window.delete(global.get_current_time());
+        return windows.length;
+    }
+
     CountWindows(wmClass) {
         return global.get_window_actors()
             .filter(actor => actor.meta_window?.get_wm_class() === wmClass).length;
@@ -922,6 +1118,52 @@ export default class TestHookExtension extends Extension {
                 return item.child;
         }
         return null;
+    }
+
+    // A click on a dock icon, as Dash to Dock handles one: a stopped app is
+    // launched, through the shell, with startup notification.
+    ActivateDockApp(appId) {
+        const icon = this._dockAppIcon(appId);
+        if (typeof icon?.activate !== 'function')
+            return false;
+        icon.activate(1);
+        return true;
+    }
+
+    // Launches an app the way the overview does, whether or not it is in the
+    // dock. Answers with its state right after, as a Shell.AppState number.
+    LaunchApp(appId) {
+        const app = Shell.AppSystem.get_default().lookup_app(appId);
+        if (!app)
+            return 'missing';
+        app.activate();
+        return String(app.state);
+    }
+
+    // A window asking for attention, as mutter marks one: only a window that
+    // is covered or elsewhere can, so where mutter declines the signal is sent
+    // the way mutter would have sent it.
+    DemandAttention(wmClass) {
+        const window = global.get_window_actors()
+            .map(actor => actor.meta_window)
+            .find(win => win?.get_wm_class() === wmClass);
+        if (!window)
+            return 'missing';
+        window.set_demands_attention();
+        if (window.demands_attention)
+            return 'mutter';
+        global.display.emit('window-demands-attention', window);
+        return 'emitted';
+    }
+
+    FocusWindowOf(wmClass) {
+        const window = global.get_window_actors()
+            .map(actor => actor.meta_window)
+            .find(win => win?.get_wm_class() === wmClass);
+        if (!window)
+            return false;
+        window.activate(global.get_current_time());
+        return true;
     }
 
     OpenDockMenu(appId) {
@@ -1130,6 +1372,12 @@ export default class TestHookExtension extends Extension {
                         slot: stageBox(slot),
                         icon: icon ? stageBox(icon) : null,
                         opacity: icon ? base.opacity : slot.opacity,
+                        // The St.Icon's own opacity, which the bounce hides.
+                        iconOpacity: icon ? icon.opacity : null,
+                        // Dash to Dock's urgent wiggle turns the icon's bin,
+                        // which skews the box read for the icon.
+                        iconRotation: icon ? icon.get_parent()?.rotation_angle_z ?? 0 : null,
+                        appState: slot.child?.app?.state ?? null,
                         siblingOpacities: siblings.map(child => child.opacity),
                         focused: slot.child?.focused ?? null,
                         // The backdrop Dash to Dock draws behind a focused
@@ -1178,11 +1426,28 @@ export default class TestHookExtension extends Extension {
                 })),
             }));
 
+        const bounces = children
+            .filter(actor => actor.name === BOUNCE_NAME)
+            .map(overlay => ({
+                previousSibling: overlay.get_previous_sibling()?.name ?? null,
+                children: overlay.get_children().map(child => ({
+                    type: child instanceof Clutter.Clone ? 'clone' : 'other',
+                    source: child.source instanceof St.Icon ? 'icon' : null,
+                    box: stageBox(child),
+                    opacity: child.opacity,
+                    visible: child.visible,
+                })),
+            }));
+
         const [x, y] = global.get_pointer();
         return JSON.stringify({
             pointer: [x, y],
             docks,
             overlays,
+            bounces,
+            // The shell's own answer, which also says no on software
+            // rendering in some releases (GNOME 45 in this container).
+            animations: St.Settings.get().enable_animations,
             // For a failure message: what is there when no dock is found.
             uiGroup: children.map(actor => actor.name || actor.constructor.name),
         });
@@ -1238,6 +1503,98 @@ export default class TestHookExtension extends Extension {
         return holder.moves;
     }
 
+    // A screenshot taken the way the shell's own Print and Cmd+Shift+3 take
+    // one: the stage, through screenshot.js's captureScreenshot, which saves
+    // the file and posts the "Screenshot captured" notification. The result
+    // lands in lastScreenshot for GetScreenshotThumbnailState.
+    TakeTestScreenshot() {
+        this._lastScreenshot = { pending: true };
+        (async () => {
+            try {
+                const shooter = new Shell.Screenshot();
+                const [content] = await shooter.screenshot_stage_to_content();
+                const file = await Screenshot.captureScreenshot(content.get_texture(), null, 1, null);
+                this._lastScreenshot = { path: file?.get_path() ?? null };
+            } catch (e) {
+                this._lastScreenshot = { error: `${e}` };
+            }
+        })();
+        return true;
+    }
+
+    GetScreenshotThumbnailState() {
+        const cards = Main.layoutManager.uiGroup.get_children()
+            .filter(actor => actor.name === 'pearup-screenshot-thumbnail')
+            .map(actor => ({
+                box: stageBox(actor),
+                width: actor.width,
+                height: actor.height,
+                translationX: actor.translation_x,
+                scale: [actor.scale_x, actor.scale_y],
+                opacity: actor.opacity,
+                reactive: actor.reactive,
+                hover: actor.hover,
+                file: actor._pearUpFile ?? null,
+                rounded: actor.get_first_child()?.get_effects?.().length > 0,
+            }));
+        const tray = Main.messageTray;
+        const notifications = screenshotNotifications()
+            .map(notification => ({
+                title: notification.title,
+                acknowledged: notification.acknowledged,
+            }));
+        return JSON.stringify({
+            cards,
+            last: this._lastScreenshot ?? null,
+            animations: St.Settings.get().enable_animations,
+            bannerShown: (tray._bannerBin?.get_n_children?.() ?? 0) > 0,
+            bannerTitle: tray._notification?.title ?? null,
+            bannerIsScreenshot: screenshotNotifications().includes(tray._notification),
+            notifications,
+            ...screenGeometry(Main.layoutManager.primaryIndex),
+        });
+    }
+
+    ClearScreenshotNotifications() {
+        for (const notification of screenshotNotifications())
+            notification.destroy();
+        return true;
+    }
+
+    // Presses on the first thumbnail, moves right by dx in small steps and lets
+    // go, as a hand dragging it away would.
+    DragThumbnail(dx) {
+        const card = Main.layoutManager.uiGroup.get_children()
+            .find(actor => actor.name === 'pearup-screenshot-thumbnail');
+        if (!card)
+            return false;
+        if (!this._pointer) {
+            const seat = Clutter.get_default_backend().get_default_seat();
+            this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+        }
+        const [x, y, width, height] = stageBox(card);
+        const startX = x + width / 2;
+        const startY = y + height / 2;
+        const pointer = this._pointer;
+        const steps = 10;
+        let step = -1;
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            const now = GLib.get_monotonic_time();
+            if (step < 0) {
+                pointer.notify_absolute_motion(now, startX, startY);
+                pointer.notify_button(now, Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+            } else if (step < steps) {
+                pointer.notify_absolute_motion(now, startX + dx * (step + 1) / steps, startY);
+            } else {
+                pointer.notify_button(now, Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+                return GLib.SOURCE_REMOVE;
+            }
+            step++;
+            return GLib.SOURCE_CONTINUE;
+        });
+        return true;
+    }
+
     // A notification from the shell itself, so its banner shows wherever the
     // message tray puts banners. Transient: it goes away on its own.
     ShowTestNotification() {
@@ -1256,12 +1613,79 @@ export default class TestHookExtension extends Extension {
         const tray = Main.messageTray;
         const bin = tray._bannerBin;
         const shown = (bin?.get_n_children?.() ?? 0) > 0;
+        const source = name => MessageTray.MessageTray.prototype[name]?.toString() ?? '';
         return JSON.stringify({
             alignment: tray.bannerAlignment,
             shown,
             box: shown ? stageBox(bin) : null,
+            translationX: bin?.translation_x ?? null,
+            // The tray clips to the work area; only while a banner slides does
+            // it clip to the monitor instead.
+            trayClip: tray.clip_to_allocation && !tray.has_clip,
+            // An ease() of its own on the bin would outlive the call it was for.
+            ownEase: bin ? Object.hasOwn(bin, 'ease') : null,
+            // The shell's state names, on every release from 45 to 50, and in no
+            // wrapper.
+            showIsShells: source('_updateShowingNotification').includes('State.SHOWING'),
+            hideIsShells: source('_hideNotification').includes('State.HIDING'),
             ...screenGeometry(Main.layoutManager.primaryIndex),
         });
+    }
+
+    // What the shell does when a banner's time is up and nobody is pointing
+    // at it: hidden with its animation, kept in the list.
+    ExpireTestNotification() {
+        const tray = Main.messageTray;
+        if (!tray._notification)
+            return false;
+        tray._notificationExpired = true;
+        tray._updateState();
+        return true;
+    }
+
+    // The banner bin, every 16 ms for `ms`, to see how it moves: a D-Bus round
+    // trip per sample would be too slow for an animation a third of a second
+    // long.
+    TraceBanner(ms) {
+        this._stopBannerTrace();
+        const bin = Main.messageTray._bannerBin;
+        const start = GLib.get_monotonic_time();
+        const settings = St.Settings.get();
+        this._bannerTrace = {
+            animations: settings.enable_animations,
+            slowDown: settings.slow_down_factor,
+            samples: [],
+        };
+        const sample = () => {
+            const t = (GLib.get_monotonic_time() - start) / 1000;
+            this._bannerTrace.samples.push({
+                t,
+                shown: bin.get_n_children() > 0 && Main.messageTray.visible,
+                tx: bin.translation_x,
+                y: bin.y,
+                scale: bin.scale_x,
+                opacity: bin.opacity,
+                width: bin.width,
+                ownEase: Object.hasOwn(bin, 'ease'),
+            });
+            if (t < ms)
+                return GLib.SOURCE_CONTINUE;
+            this._bannerTraceId = 0;
+            return GLib.SOURCE_REMOVE;
+        };
+        sample();
+        this._bannerTraceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, sample);
+        return true;
+    }
+
+    GetBannerTrace() {
+        return JSON.stringify(this._bannerTrace ?? null);
+    }
+
+    _stopBannerTrace() {
+        if (this._bannerTraceId)
+            GLib.source_remove(this._bannerTraceId);
+        this._bannerTraceId = 0;
     }
 
     // The volume bubble, as a volume key brings it up, on every monitor.
@@ -1314,6 +1738,90 @@ export default class TestHookExtension extends Extension {
     // shows. Whether the two methods involved are the shell's own is read from
     // their source, which is what tells a method put back from a wrapper left
     // behind.
+    // How the desktops are moving, read from the shell's own switch: the
+    // controller, the MonitorGroups of a switch in progress (how far along,
+    // and how far their desktops are shifted beyond that), any other
+    // MonitorGroup on the stage, and which methods are own properties of the
+    // controller and of the desktop switcher's and the overview's swipe
+    // trackers — the shell sets none.
+    GetSwitchState() {
+        const anim = Main.wm._workspaceAnimation;
+        const tracker = anim?._swipeTracker;
+        const own = object => object
+            ? Object.getOwnPropertyNames(object).filter(name => typeof object[name] === 'function')
+            : null;
+        const switchData = anim?._switchData ?? null;
+        const groups = switchData?.monitors ?? [];
+        const shift = group => group._container
+            ? [group._container.translation_x, group._container.translation_y] : null;
+        const group = groups[0];
+        const proto = tracker ? Object.getPrototypeOf(tracker) : null;
+        return JSON.stringify({
+            active: global.workspace_manager.get_active_workspace_index(),
+            count: global.workspace_manager.n_workspaces,
+            switching: !!switchData,
+            gesture: !!switchData?.gestureActivated,
+            indices: group ? group.getSnapPoints().length : 0,
+            progress: group ? group.progress : null,
+            shift: group ? shift(group) : null,
+            base: group ? group.baseDistance : null,
+            others: Main.uiGroup.get_children()
+                .filter(a => a instanceof WorkspaceAnimation.MonitorGroup && !groups.includes(a))
+                .map(shift),
+            controllerOwn: own(anim),
+            trackerOwn: own(tracker),
+            overviewTrackerOwn: own(Main.overview._overview?.controls?._workspacesDisplay?._swipeTracker),
+            // From GNOME 49 the tracker reaches its update through the instance.
+            updateThroughInstance: typeof proto?._updateTouchpadGesture === 'function' &&
+                proto?._updateGesture?.length === 2,
+            animations: St.Settings.get().enable_animations,
+        });
+    }
+
+    // Pauses the switch the shell is animating and reads its curve, by
+    // setting its timeline to each 20 ms in turn, then lets it finish.
+    SampleSwitch() {
+        const group = Main.wm._workspaceAnimation?._switchData?.monitors?.[0];
+        const transition = group?.get_transition('progress');
+        if (!transition)
+            return JSON.stringify(null);
+        transition.pause();
+        const duration = transition.get_duration();
+        const samples = [];
+        const seek = ms => {
+            transition.advance(ms);
+            transition.emit('new-frame', ms);
+        };
+        for (let ms = 0; ms <= duration; ms += 20) {
+            seek(ms);
+            samples.push([ms, group.progress]);
+        }
+        seek(duration);
+        samples.push([duration, group.progress]);
+        transition.start();
+        return JSON.stringify({ duration, samples });
+    }
+
+    // A three-finger touchpad swipe, fed to the desktop switcher's tracker as
+    // the touchpad feeds it: begin, updates 16 ms apart in the units the
+    // touchpad reports (400 to a desktop), end.
+    SwipeTouchpad(phase, delta) {
+        const gesture = Main.wm._workspaceAnimation?._swipeTracker?._touchpadGesture;
+        if (!gesture)
+            return JSON.stringify(null);
+        if (phase === 'begin') {
+            this._swipeTime = global.get_current_time();
+            const monitor = Main.layoutManager.primaryMonitor;
+            gesture.emit('begin', this._swipeTime,
+                monitor.x + monitor.width / 2, monitor.y + monitor.height / 2);
+        } else if (phase === 'update') {
+            gesture.emit('update', this._swipeTime += 16, delta, 400);
+        } else {
+            gesture.emit('end', this._swipeTime += 16, 400);
+        }
+        return this.GetSwitchState();
+    }
+
     GetWorkspaceState() {
         const manager = global.workspace_manager;
         const strip = Main.overview._overview?.controls?._thumbnailsBox ?? null;

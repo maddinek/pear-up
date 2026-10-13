@@ -206,6 +206,44 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
     }
 }
 
+// Bouncing is Pear Up's own as well, and offered on the Dock page only when
+// there is a Dash to Dock to bounce.
+{
+    const dockPage = pages.find(page => page.title === 'Dock');
+    const rows = ['Bounce While Opening', 'Bounce for Attention'].map(title => dockPage &&
+        findWidget(dockPage, widget => widget instanceof Adw.SwitchRow && widget.title === title));
+    const keys = ['dock-bounce-on-launch', 'dock-bounce-on-attention'];
+
+    if (!preferences._dashToDockSettings()) {
+        if (rows.some(Boolean))
+            problems.push('the Dock page offers bouncing although Dash to Dock is not installed');
+    } else if (GLib.getenv('PREFS_SMOKE_DOCK')) {
+        if (!rows.every(Boolean)) {
+            problems.push(`Dash to Dock is installed but the Dock page lacks a bounce switch (${rows.map(Boolean)})`);
+        } else {
+            const settings = preferences.getSettings();
+            const problemsBefore = problems.length;
+            const expect = (label, got, wanted) => {
+                if (got !== wanted)
+                    problems.push(`bounce: ${label} is ${got}, expected ${wanted}`);
+            };
+            rows.forEach((row, index) => {
+                const key = keys[index];
+                expect(`${key} switch at first`, row.active, false);
+                row.active = true;
+                expect(`${key} after switching on`, settings.get_boolean(key), true);
+                row.active = false;
+                expect(`${key} after switching off`, settings.get_boolean(key), false);
+                settings.set_boolean(key, true);
+                expect(`${key} switch after an outside change`, row.active, true);
+                settings.reset(key);
+            });
+            if (problems.length === problemsBefore)
+                print('  bounce: both switches write their keys and follow outside changes');
+        }
+    }
+}
+
 // The focused-app backdrop is Pear Up's own setting too, offered beside the
 // running indicator whenever there is a Dash to Dock to draw it — including one
 // too old for the single dot, which leaves that group with this row alone.
@@ -706,6 +744,168 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
     }
 }
 
+// The Window Keys group: Cmd+M and Cmd+D are shortcut sets, the tiling keys a
+// switch that refills only what is empty. Each is driven through a second
+// preferences object after the first, as after the window was reopened, and
+// must hand the user's own values back. Settings live in memory here.
+{
+    const WM = 'org.gnome.desktop.wm.keybindings';
+    const MUTTER = 'org.gnome.mutter.keybindings';
+    const SHELL = 'org.gnome.shell.keybindings';
+    const wm = preferences._settingsForSchema(WM);
+    const mutter = preferences._settingsForSchema(MUTTER);
+    const shell = preferences._settingsForSchema(SHELL);
+    const pearUp = preferences.getSettings();
+    const problemsBefore = problems.length;
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`window keys: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+
+    if (!wm || !mutter || !shell || !preferences._schemaHasKey(shell, 'toggle-message-tray') ||
+        !preferences._schemaHasKey(mutter, 'toggle-tiled-left')) {
+        print('  window keys: skipped, the GNOME keybinding schemas are not complete here');
+    } else {
+        const kept = [];
+        const rowOf = (type, title) => {
+            const page = new Preferences(metadata)._buildKeyboardPage();
+            kept.push(page);
+            return findWidget(page, widget => widget instanceof type && widget.title === title);
+        };
+        const reset = () => {
+            for (const [settings, key] of [[wm, 'minimize'], [wm, 'show-desktop'], [wm, 'maximize'],
+                [wm, 'unmaximize'], [mutter, 'toggle-tiled-left'], [mutter, 'toggle-tiled-right'],
+                [shell, 'toggle-message-tray']])
+                settings.reset(key);
+            pearUp.reset('displaced-keybindings');
+            pearUp.reset('displaced-settings');
+        };
+
+        // Cmd+M: minimize gains it, the tray loses only it, and off puts both back.
+        reset();
+        wm.set_strv('minimize', ['<Super>h']);
+        shell.set_strv('toggle-message-tray', ['<Super>v', '<Super>m', '<Super>n']);
+        let row = rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes');
+        expect('Cmd+M row before', row.enable_expansion, false);
+        row.enable_expansion = true;
+        expect('minimize on', wm.get_strv('minimize'), ['<Super>h', '<Super>m']);
+        expect('tray on', shell.get_strv('toggle-message-tray'), ['<Super>v', '<Super>n']);
+        row = rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes');
+        expect('Cmd+M row reopened', row.enable_expansion, true);
+        row.enable_expansion = false;
+        expect('minimize off', wm.get_strv('minimize'), ['<Super>h']);
+        expect('tray off', shell.get_strv('toggle-message-tray'), ['<Super>v', '<Super>m', '<Super>n']);
+        expect('keybinding notes after Cmd+M', pearUp.get_string('displaced-keybindings'), '{}');
+
+        // Already set by hand, as on framy: reads on, off goes back to GNOME's own.
+        reset();
+        wm.set_strv('minimize', ['<Super>h', '<Super>m']);
+        shell.set_strv('toggle-message-tray', ['<Super>v']);
+        row = rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes');
+        expect('Cmd+M row set by hand', row.enable_expansion, true);
+        row.enable_expansion = false;
+        expect('minimize off after hand-set', wm.get_strv('minimize'), ['<Super>h']);
+        expect('tray off after hand-set', shell.get_strv('toggle-message-tray').includes('<Super>m'), true);
+
+        // Super+M in minimize while the tray still holds it, as the old window
+        // set left it: Cmd+M does not minimize yet, so the row reads off, and
+        // switching it on takes Super+M from the tray without adding it twice.
+        reset();
+        wm.set_strv('minimize', ['<Super>h', '<Super>m']);
+        shell.set_strv('toggle-message-tray', ['<Super>v', '<Super>m']);
+        row = rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes');
+        expect('Cmd+M row while the tray holds it', row.enable_expansion, false);
+        row.enable_expansion = true;
+        expect('minimize on over the old set', wm.get_strv('minimize'), ['<Super>h', '<Super>m']);
+        expect('tray on over the old set', shell.get_strv('toggle-message-tray'), ['<Super>v']);
+
+        // Cmd+M has one owner. The macOS Window Shortcuts set no longer lists
+        // it, and switching that set off leaves Cmd+M Minimizes and its Super+M
+        // alone; switching Cmd+M off then leaves the set on.
+        const WINDOW_SET = 'macOS Window Shortcuts';
+        const media = preferences._settingsForSchema('org.gnome.settings-daemon.plugins.media-keys');
+        const windowSetKeys = [[wm, 'close'], [wm, 'toggle-fullscreen'],
+            [shell, 'toggle-overview'], [pearUp, 'quit-app']];
+        if (media && preferences._schemaHasKey(media, 'screensaver'))
+            windowSetKeys.push([media, 'screensaver']);
+        reset();
+        for (const [settings, key] of windowSetKeys)
+            settings.reset(key);
+        row = rowOf(Adw.ExpanderRow, WINDOW_SET);
+        const listed = [];
+        findWidget(row, widget => {
+            if (widget instanceof Adw.ActionRow && widget !== row)
+                listed.push(`${widget.title} ${widget.subtitle}`);
+            return false;
+        });
+        expect('window set lists Cmd+M', listed.some(title => /Cmd\+M|Super\+M/i.test(title)), false);
+        row.enable_expansion = true;
+        expect('minimize after the window set alone', wm.get_strv('minimize').includes('<Super>m'), false);
+        rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes').enable_expansion = true;
+        expect('minimize with both on', wm.get_strv('minimize').filter(a => a === '<Super>m').length, 1);
+        rowOf(Adw.ExpanderRow, WINDOW_SET).enable_expansion = false;
+        expect('minimize after the window set goes off', wm.get_strv('minimize').includes('<Super>m'), true);
+        expect('Cmd+M row after the window set goes off',
+            rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes').enable_expansion, true);
+        expect('tray after the window set goes off',
+            shell.get_strv('toggle-message-tray').includes('<Super>m'), false);
+        rowOf(Adw.ExpanderRow, WINDOW_SET).enable_expansion = true;
+        rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes').enable_expansion = false;
+        expect('minimize after Cmd+M goes off', wm.get_strv('minimize').includes('<Super>m'), false);
+        expect('window set after Cmd+M goes off', rowOf(Adw.ExpanderRow, WINDOW_SET).enable_expansion, true);
+        rowOf(Adw.ExpanderRow, WINDOW_SET).enable_expansion = false;
+        for (const [settings, key] of windowSetKeys)
+            settings.reset(key);
+
+        // Cmd+D
+        reset();
+        wm.set_strv('show-desktop', []);
+        row = rowOf(Adw.ExpanderRow, 'Cmd+D Shows the Desktop');
+        expect('Cmd+D row before', row.enable_expansion, false);
+        row.enable_expansion = true;
+        expect('show-desktop on', wm.get_strv('show-desktop'), ['<Super>d']);
+        rowOf(Adw.ExpanderRow, 'Cmd+D Shows the Desktop').enable_expansion = false;
+        expect('show-desktop off', wm.get_strv('show-desktop'), []);
+        wm.set_strv('show-desktop', ['<Super>d']);
+        expect('Cmd+D row set by hand', rowOf(Adw.ExpanderRow, 'Cmd+D Shows the Desktop').enable_expansion, true);
+
+        // Tiling keys: emptied ones refilled, a key the user filled is not touched.
+        const TILING = 'Restore GNOME Window Keys';
+        const state = () => [wm.get_strv('maximize'), wm.get_strv('unmaximize'),
+            mutter.get_strv('toggle-tiled-left'), mutter.get_strv('toggle-tiled-right')];
+        reset();
+        wm.set_strv('maximize', []);
+        wm.set_strv('unmaximize', []);
+        mutter.set_strv('toggle-tiled-left', []);
+        mutter.set_strv('toggle-tiled-right', ['<Super>Right', '<Alt>r']);
+        row = rowOf(Adw.SwitchRow, TILING);
+        expect('tiling switch while emptied', row.active, false);
+        row.active = true;
+        expect('tiling keys refilled', state(), [['<Super>Up'], ['<Super>Down', '<Alt>F5'],
+            ['<Super>Left'], ['<Super>Right', '<Alt>r']]);
+        row = rowOf(Adw.SwitchRow, TILING);
+        expect('tiling switch reopened', row.active, true);
+        row.active = false;
+        expect('tiling keys handed back', state(), [[], [], [], ['<Super>Right', '<Alt>r']]);
+        expect('settings notes after tiling', pearUp.get_string('displaced-settings'), '{}');
+
+        // Filled by hand already reads on and is left alone when switched off.
+        wm.set_strv('maximize', ['<Super>Up']);
+        wm.set_strv('unmaximize', ['<Super>Down', '<Alt>F5']);
+        mutter.set_strv('toggle-tiled-left', ['<Super>Left']);
+        mutter.set_strv('toggle-tiled-right', ['<Super>Right']);
+        row = rowOf(Adw.SwitchRow, TILING);
+        expect('tiling switch set by hand', row.active, true);
+        row.active = false;
+        expect('tiling keys set by hand stay', state(), [['<Super>Up'], ['<Super>Down', '<Alt>F5'],
+            ['<Super>Left'], ['<Super>Right']]);
+
+        reset();
+        if (problems.length === problemsBefore)
+            print('  window keys: Cmd+M, Cmd+D and the tiling keys set, read back and restore; Cmd+M has one owner');
+    }
+}
+
 // The Windows page drives GNOME's window settings, the user's gtk.css files and
 // two other extensions. As with Appearance, the checks that matter are what is
 // written and what is handed back; run here the settings land in the in-memory
@@ -1173,6 +1373,30 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     reset();
     if (problems.length === problemsBefore)
         print('  small window buttons: the block goes in and out of both files, touching nothing else');
+}
+
+// Opening and closing like macOS is Pear Up's own key, off by default, and the
+// switch writes it and follows it.
+{
+    const pearUp = preferences.getSettings();
+    const problemsBefore = problems.length;
+    const expect = windowsExpecter('window animations');
+    const TITLE = 'Open and Close Like macOS';
+    const KEY = 'macos-window-animations';
+    const row = windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE);
+    if (!row) {
+        problems.push(`window animations: the Windows page has no "${TITLE}" switch`);
+    } else {
+        expect('the default', pearUp.get_default_value(KEY).unpack(), false);
+        expect('the switch at first', row.active, false);
+        row.active = true;
+        expect(`${KEY} after switching on`, pearUp.get_boolean(KEY), true);
+        pearUp.set_boolean(KEY, false);
+        expect('the switch after an outside change', row.active, false);
+    }
+    pearUp.reset(KEY);
+    if (problems.length === problemsBefore)
+        print('  window animations: off by default, the switch writes and follows its key');
 }
 
 // The extensions the Windows page drives, installed or not. Whether they are is
@@ -1873,6 +2097,43 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     settings.reset('desktop-app-name');
 }
 
+// Notifications Slide In from the Right: off out of the box, under the switch
+// that puts banners in the corner, and greyed out while that one is off.
+{
+    const settings = preferences.getSettings();
+    const page = pages.find(candidate => candidate.title === 'General');
+    const problemsBefore = problems.length;
+    const key = 'banners-slide-from-right';
+    const title = 'Notifications Slide In from the Right';
+    const expect = (label, got, wanted) => {
+        if (got !== wanted)
+            problems.push(`banner slide: ${label} is ${got}, expected ${wanted}`);
+    };
+    const row = page && findWidget(page, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === title);
+    const corner = page && findWidget(page, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === 'Notifications at the Top Right');
+    if (!row || !corner) {
+        problems.push(`the General page has no "${title}" switch under the corner one`);
+    } else {
+        expect('the default', settings.get_default_value(key).unpack(), false);
+        expect('the row at first', row.active, false);
+        expect('the row right under the corner switch', corner.get_next_sibling() === row, true);
+        row.active = true;
+        expect('the key after switching it on', settings.get_boolean(key), true);
+        settings.set_boolean(key, false);
+        expect('the row after an outside change', row.active, false);
+        expect('the row while banners are in the corner', row.sensitive, true);
+        settings.set_boolean('notifications-top-right', false);
+        expect('the row while banners are not in the corner', row.sensitive, false);
+        settings.reset('notifications-top-right');
+        expect('the row with the corner back', row.sensitive, true);
+        settings.reset(key);
+        if (problems.length === problemsBefore)
+            print('  banner slide: off by default, written and followed, greyed out without the corner');
+    }
+}
+
 // The Desktop group on the General page: the shell's pieces that are not the bar,
 // one switch each, all on out of the box like the bar's own tweaks. Each row has
 // to write its own key and follow it when it changes from outside.
@@ -1929,8 +2190,25 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         expect(`"${title}" after an outside change`, row.active, true);
         settings.reset(key);
     }
+    // Springy Desktop Switching is the one in the group that starts off.
+    const springTitle = 'Springy Desktop Switching';
+    const springRow = page && findWidget(page, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === springTitle);
+    if (!springRow) {
+        problems.push(`the General page has no "${springTitle}" switch`);
+    } else {
+        expect('the default of spaces-spring', settings.get_default_value('spaces-spring').unpack(), false);
+        expect(`"${springTitle}" at first`, springRow.active, false);
+        springRow.active = true;
+        expect(`spaces-spring after switching "${springTitle}" on`, settings.get_boolean('spaces-spring'), true);
+        settings.set_boolean('spaces-spring', false);
+        expect(`"${springTitle}" after an outside change`, springRow.active, false);
+        settings.reset('spaces-spring');
+    }
+
     if (problems.length === problemsBefore)
-        print(`  desktop group: ${rows.length} switches, on by default, each writing its own key; ` +
+        print(`  desktop group: ${rows.length} switches, on by default, each writing its own key, ` +
+            `and ${springTitle}, off by default; ` +
             `GNOME ${release}, so ${release >= 49 ? 'with' : 'without'} ${brightnessTitle}`);
 }
 
@@ -2058,6 +2336,80 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         if (problems.length === problemsBefore)
             print('  scroll acceleration: installs and removes only its own file, with the strength written in');
     }
+}
+
+// Browser scrolling is two lines in the flags file of each Flatpak Chromium
+// browser installed, in a home directory made up for the test: written, set to
+// another speed, taken out again with the rest of the file as it was, and a
+// file with an --enable-features of its own left alone.
+{
+    const problemsBefore = problems.length;
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`browser scrolling: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+    const home = GLib.dir_make_tmp('pear-up-browser-home-XXXXXX');
+    const read = path => GLib.file_test(path, GLib.FileTest.IS_REGULAR)
+        ? new TextDecoder().decode(GLib.file_get_contents(path)[1]) : null;
+    const write = (path, text) => {
+        GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
+        GLib.file_set_contents(path, new TextEncoder().encode(text));
+    };
+    const rowsOf = () => {
+        const group = new Adw.PreferencesGroup();
+        windowsKept.push(group);
+        return new Preferences(metadata)._buildBrowserScrollRows(group, home);
+    };
+    const comment = '# Pear Up: touchpad scrolling as far as in GNOME’s apps (Keyboard → Trackpad)';
+    const flag = factor => `--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/${factor}`;
+    const brave = `${home}/.var/app/com.brave.Browser/config/brave-flags.conf`;
+    const chromium = `${home}/.var/app/org.chromium.Chromium/config/chromium-flags.conf`;
+    const theirs = '--enable-features=VaapiVideoDecoder\n--ozone-platform=wayland\n';
+    const flatpakSystem = ['com.brave.Browser', 'org.chromium.Chromium', 'com.google.Chrome']
+        .some(app => GLib.file_test(`/var/lib/flatpak/app/${app}`, GLib.FileTest.IS_DIR));
+
+    let [row] = rowsOf();
+    let speed;
+    if (!flatpakSystem) {
+        expect('the switch with no browser, sensitive', row.sensitive, false);
+        if (!/None of/.test(row.subtitle ?? ''))
+            problems.push(`browser scrolling: no browser is not explained (${row.subtitle})`);
+    }
+
+    write(brave, '--password-store=basic\n');
+    write(chromium, theirs);
+    [row, speed] = rowsOf();
+    expect('the switch with nothing written', row.active, false);
+    expect('the switch with a browser, sensitive', row.sensitive, true);
+    expect('the speed while off, sensitive', speed.sensitive, false);
+    row.active = true;
+    expect('Brave\'s file after switching on', read(brave), `--password-store=basic\n${comment}\n${flag(2.5)}\n`);
+    expect('Chromium\'s file of its own after switching on', read(chromium), theirs);
+    if (!/Left alone: .*chromium-flags\.conf/.test(row.subtitle ?? ''))
+        problems.push(`browser scrolling: the file left alone is not named (${row.subtitle})`);
+    speed.selected = 2;
+    expect('Brave\'s file at Slowest', read(brave), `--password-store=basic\n${comment}\n${flag(1)}\n`);
+    [row, speed] = rowsOf();
+    expect('the switch reopened', row.active, true);
+    expect('the speed reopened', speed.selected, 2);
+    row.active = false;
+    expect('Brave\'s file after switching off', read(brave), '--password-store=basic\n');
+    expect('Chromium\'s file after switching off', read(chromium), theirs);
+
+    // A file Pear Up made is gone again when switched off.
+    GLib.unlink(brave);
+    GLib.unlink(chromium);
+    [row] = rowsOf();
+    row.active = true;
+    expect('Brave\'s new file', read(brave), `${comment}\n${flag(2.5)}\n`);
+    expect('Chromium\'s new file', read(chromium), `${comment}\n${flag(2.5)}\n`);
+    row.active = false;
+    expect('Brave\'s file after switching off', read(brave), null);
+    expect('Chromium\'s file after switching off', read(chromium), null);
+
+    GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(home)}`);
+    if (problems.length === problemsBefore)
+        print('  browser scrolling: writes and removes only its own two lines, leaves a file with its own features alone');
 }
 
 // The macOS keys are one file too, with a line for each of three switches,
@@ -2278,6 +2630,98 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             print('  macOS keys: three switches in one file, following the swap and keeping the key list; ' +
                 'removes only its own file; warns of framy\'s input-remapper preset without touching it');
     }
+}
+
+// The floating screenshot thumbnail, with the screenshot shortcuts on the
+// Keyboard page: off by default; its banner switch on by default and greyed
+// out while the thumbnail is off.
+{
+    const problemsBefore = problems.length;
+    const settings = preferences.getSettings();
+    const keyboard = pages.find(page => page.title === 'Keyboard');
+    const rowTitled = title => keyboard && findWidget(keyboard, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === title);
+    const thumbnail = rowTitled('Floating Thumbnail');
+    const banner = rowTitled('Hide the Screenshot Banner');
+    const expect = (label, got, wanted) => {
+        if (got !== wanted)
+            problems.push(`screenshot thumbnail: ${label} is ${got}, expected ${wanted}`);
+    };
+    if (!thumbnail || !banner) {
+        problems.push('the Keyboard page has no Floating Thumbnail and Hide the Screenshot Banner switches');
+    } else {
+        expect('the default of screenshot-thumbnail',
+            settings.get_default_value('screenshot-thumbnail').unpack(), false);
+        expect('the default of screenshot-thumbnail-hide-banner',
+            settings.get_default_value('screenshot-thumbnail-hide-banner').unpack(), true);
+        expect('"Floating Thumbnail" at first', thumbnail.active, false);
+        expect('"Hide the Screenshot Banner" while the thumbnail is off, sensitive', banner.sensitive, false);
+        thumbnail.active = true;
+        expect('screenshot-thumbnail after switching it on', settings.get_boolean('screenshot-thumbnail'), true);
+        expect('"Hide the Screenshot Banner" with the thumbnail on, sensitive', banner.sensitive, true);
+        banner.active = false;
+        expect('screenshot-thumbnail-hide-banner after switching it off',
+            settings.get_boolean('screenshot-thumbnail-hide-banner'), false);
+        settings.reset('screenshot-thumbnail');
+        settings.reset('screenshot-thumbnail-hide-banner');
+        expect('"Floating Thumbnail" after a reset', thumbnail.active, false);
+    }
+    if (problems.length === problemsBefore)
+        print('  screenshot thumbnail: off by default, its banner switch greyed out until it is on');
+}
+
+// Steam: Buttons on the Left. The row is there only where Steam is, so it is
+// checked in the run that has put a made-up Steam into the user's data
+// directory (PREFS_SMOKE_STEAM): on patches both stylesheets and keeps the
+// originals, off gives back exactly what was there.
+{
+    const TITLE = 'Steam: Buttons on the Left';
+    const steam = GLib.getenv('PREFS_SMOKE_STEAM');
+    const problemsBefore = problems.length;
+    const row = windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE);
+    if (!steam) {
+        if (row)
+            problems.push('steam buttons: the row is there with no Steam installed');
+    } else if (!row) {
+        problems.push('steam buttons: the Windows page has no Steam row with Steam installed');
+    } else {
+        const css = `${steam}/steamui/css`;
+        const read = path => GLib.file_test(path, GLib.FileTest.EXISTS)
+            ? new TextDecoder().decode(GLib.file_get_contents(path)[1]) : null;
+        const library = read(`${css}/library.css`);
+        const recording = read(`${css}/gamerecording.css`);
+        const pearUp = preferences.getSettings();
+        const expect = windowsExpecter('steam buttons');
+
+        const wm = preferences._settingsForSchema('org.gnome.desktop.wm.preferences');
+        wm.set_string('button-layout', BUTTON_LAYOUT_LEFT);
+        expect('the switch before', row.active, false);
+        row.active = true;
+        expect('the setting after switching on', pearUp.get_boolean('steam-buttons-left'), true);
+        expect('library.css patched', read(`${css}/library.css`)?.startsWith('/* Pear Up: Steam window buttons */'), true);
+        expect('the patch the original\'s size', read(`${css}/library.css`)?.length, library.length);
+        expect('the original kept', read(`${css}/library.pear-up-original.css`), library);
+        expect('the rules written', read(`${steam}/steamui/pear-up/window-buttons.css`)?.includes('closeButton'), true);
+        expect('the switch on a fresh page',
+            windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE).active, true);
+        row.active = false;
+        expect('the setting after switching off', pearUp.get_boolean('steam-buttons-left'), false);
+        expect('library.css given back', read(`${css}/library.css`), library);
+        expect('gamerecording.css given back', read(`${css}/gamerecording.css`), recording);
+        expect('no original left', read(`${css}/library.pear-up-original.css`), null);
+        expect('no rules left', GLib.file_test(`${steam}/steamui/pear-up`, GLib.FileTest.EXISTS), false);
+
+        // Adwaita for Steam's patch greys the row out and is never touched.
+        const adwaita = `/* Adwaita-for-Steam */\n${library.slice(23)}`;
+        GLib.file_set_contents(`${css}/library.css`, adwaita);
+        const greyed = windowsSwitch(windowsPageOf(new Preferences(metadata)), TITLE);
+        expect('the row with Adwaita for Steam', [greyed.active, greyed.sensitive], [false, false]);
+        GLib.file_set_contents(`${css}/library.css`, library);
+        wm.reset('button-layout');
+    }
+    if (steam && problems.length === problemsBefore)
+        print('  steam buttons: patches both stylesheets keeping the originals, gives them back exactly, ' +
+            'and leaves Adwaita for Steam alone');
 }
 
 if (problems.length > 0) {

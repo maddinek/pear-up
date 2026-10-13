@@ -32,7 +32,11 @@
       "get_default_backend",
       "Actor",
       "Clone",
-      "Timeline"
+      "Timeline",
+      "ContentGravity",
+      "ScalingFilter",
+      "ScrollDirection",
+      "AnimationMode"
     ],
     "Meta": [
       "WindowType",
@@ -48,13 +52,19 @@
       "IconTheme",
       "Widget",
       "Side",
-      "Settings"
+      "Settings",
+      "ImageContent"
     ],
     "Shell": [
       "AppSystem",
       "WindowTracker",
       "AppUsage",
-      "ActionMode"
+      "ActionMode",
+      "AppState",
+      "GLSLEffect"
+    ],
+    "Graphene": [
+      "Point3D"
     ],
     "GObject": [
       "signal_lookup"
@@ -67,7 +77,8 @@
       "FileCreateFlags",
       "Icon",
       "Settings",
-      "SettingsSchemaSource"
+      "SettingsSchemaSource",
+      "app_info_launch_default_for_uri"
     ],
     "GLib": [
       "idle_add",
@@ -86,7 +97,9 @@
       "PRIORITY_DEFAULT",
       "SOURCE_CONTINUE",
       "USEC_PER_SEC",
-      "Source"
+      "Source",
+      "UserDirectory",
+      "get_user_special_dir"
     ]
   },
 
@@ -121,7 +134,8 @@
       "get_frame_rect",
       "unmaximize",
       "maximize",
-      "is_skip_taskbar"
+      "is_skip_taskbar",
+      "has_focus"
     ],
     "Clutter.VirtualInputDevice": [
       "notify_keyval"
@@ -142,7 +156,13 @@
       "get_preferred_width",
       "get_preferred_height",
       "get_first_child",
-      "get_constraints"
+      "get_constraints",
+      "get_previous_sibling",
+      "apply_transform_to_point",
+      "set_size",
+      "set_content_scaling_filters",
+      "add_effect",
+      "remove_transition"
     ],
     "Clutter.Timeline": [
       "start",
@@ -159,6 +179,11 @@
     ],
     "Shell.Global": [
       "get_pointer"
+    ],
+    "Shell.GLSLEffect": [
+      "add_glsl_snippet",
+      "get_uniform_location",
+      "set_uniform_float"
     ],
     "Shell.AppUsage": [
       "get_most_used"
@@ -214,7 +239,14 @@
       "icon_name"
     ],
     "St.Settings": [
-      "enable_animations"
+      "enable_animations",
+      "slow_down_factor"
+    ],
+    "Shell.App": [
+      "state"
+    ],
+    "Shell.WindowTracker": [
+      "focus_app"
     ]
   },
 
@@ -229,6 +261,10 @@
 
   "shellInternals": [
     "_updatePanel",
+    "_shouldAnimateActor",
+    "_mapWindow",
+    "_destroyWindow",
+    "is_attached_dialog",
     "addKeybinding",
     "removeKeybinding",
     "_rightBox",
@@ -288,6 +324,8 @@
     "xdndHandler",
     "bannerAlignment",
     "_bannerBin",
+    "_updateShowingNotification",
+    "_hideNotification",
     "osdWindowManager",
     "_osdWindows",
     "MonitorConstraint",
@@ -302,7 +340,35 @@
     "runStartupAnimation",
     "startup-complete",
     "_stateAdjustment",
-    "ControlsState"
+    "ControlsState",
+    "_workspaceAnimation",
+    "animateSwitch",
+    "_switchData",
+    "_prepareWorkspaceSwitch",
+    "_finishWorkspaceSwitch",
+    "_swipeTracker",
+    "_touchpadGesture",
+    "confirmSwipe",
+    "_getBounds",
+    "_snapPoints",
+    "_initialProgress",
+    "_endGesture",
+    "_container",
+    "baseDistance",
+    "MonitorGroup",
+    "setCustomKeybindingHandler",
+    "_showWorkspaceSwitcher",
+    "switch-to-workspace-left",
+    "source-added",
+    "getSources",
+    "notification-added",
+    "NotificationDestroyedReason",
+    "screenshotUI",
+    "_getSelectedGeometry",
+    "_windowButton",
+    "_windowSelectors",
+    "addTopChrome",
+    "captureScreenshot"
   ],
 
   "shellInternalsWith": {

@@ -11,6 +11,13 @@ import PangoCairo from 'gi://PangoCairo';
 
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 import * as Config from 'resource:///org/gnome/Shell/Extensions/js/misc/config.js';
+import {
+    STEAM_BUTTONS_KEY,
+    applySteamButtons,
+    restoreSteamButtons,
+    steamRoots,
+    steamState,
+} from './steamButtons.js';
 
 // The dock itself is Dash to Dock; these pages only drive its settings so the
 // whole macOS-style desktop can be configured from one window.
@@ -208,6 +215,33 @@ const SCROLL_STRENGTHS = [
 ];
 const SCROLL_STRENGTH_DEFAULT = 1;
 
+// Chromium on Wayland multiplies touchpad scrolling by 12 — the 10-per-wheel-
+// click convention turned into its 120 — so a browser moves the page about
+// five times as far per millimetre as GNOME's own apps do, in steps of tens of
+// pixels a frame: jumpy rather than smooth. Chromium's own switch for that,
+// the WaylandUnscaledTouchpadScrolling feature (Chromium 155 and later), takes
+// the scale as its scroll_scaling_factor; 2.5 is Chromium's default and
+// matches GTK. It is a command-line flag, which the Flatpak builds read from a
+// flags file in their own config directory (cobalt's "<name>-flags.conf"). The
+// file is all the state there is: Pear Up's two lines, the comment and the
+// flag, are what is installed, and only they are ever written or removed. A
+// file that already has an --enable-features of its own is left alone, as
+// Chromium only reads the last one. Electron apps read no such file, and
+// before Electron 45 (Chromium 156) do not have the feature at all.
+const BROWSER_SCROLL_COMMENT = '# Pear Up: touchpad scrolling as far as in GNOME’s apps (Keyboard → Trackpad)';
+const BROWSER_SCROLL_FLAG = /^--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor\/([0-9.]+)$/m;
+const BROWSER_SCROLL_BROWSERS = [
+    { name: 'Brave', app: 'com.brave.Browser', file: 'brave-flags.conf' },
+    { name: 'Chromium', app: 'org.chromium.Chromium', file: 'chromium-flags.conf' },
+    { name: 'Google Chrome', app: 'com.google.Chrome', file: 'chrome-flags.conf' },
+];
+const BROWSER_SCROLL_SPEEDS = [
+    { title: 'As in GNOME’s Apps', factor: 2.5 },
+    { title: 'Slower', factor: 1.5 },
+    { title: 'Slowest', factor: 1 },
+];
+const BROWSER_SCROLL_SPEED_DEFAULT = 0;
+
 // The keys macOS uses inside apps — Option+←/→ by word, Ctrl+←/→ to the next
 // desktop, Cmd+C and its kind — are libinput/10-pear-up-macos-keys.lua. Apps
 // read their own keys, so no GNOME shortcut changes what those do: they have to
@@ -263,7 +297,6 @@ const MACOS_SCREENSHOT_SHORTCUTS = [
 const MACOS_WINDOW_SHORTCUTS = [
     [PEAR_UP_SCHEMA, 'quit-app', '<Super>q', 'Quit the app, every window (Cmd+Q)'],
     ['org.gnome.desktop.wm.keybindings', 'close', '<Super>w', 'Close the window (Cmd+W)'],
-    ['org.gnome.desktop.wm.keybindings', 'minimize', '<Super>m', 'Minimize (Cmd+M)'],
     ['org.gnome.desktop.wm.keybindings', 'toggle-fullscreen', '<Super><Control>f', 'Full screen (Ctrl+Cmd+F)'],
     ['org.gnome.shell.keybindings', 'toggle-overview', '<Control>Up', 'Overview, like Mission Control'],
     ['org.gnome.settings-daemon.plugins.media-keys', 'screensaver', '<Super><Control>q', 'Lock the screen (Ctrl+Cmd+Q)'],
@@ -276,6 +309,39 @@ const MACOS_WINDOW_SHORTCUTS = [
 const MACOS_SCREENSHOT_CONFLICTS = [
     [DASH_TO_DOCK_SCHEMA, 'hot-keys', () => GLib.Variant.new_boolean(false),
         'Dash to Dock stops launching apps with Cmd+number'],
+];
+
+// Cmd+M minimises and Cmd+D shows the desktop. GNOME hands Super+M to the
+// message tray, which has to give it up: two grabs on one accelerator have no
+// defined winner. Super+D is the Linux convention for the desktop; macOS uses
+// Cmd+F3 / F11, and F3 is a media key on a Framework laptop. A conflict's value
+// is given what the key holds now, so only Super+M leaves the tray's list.
+//
+// Cmd+M is this set's alone. The macOS Window Shortcuts set used to add it too,
+// without taking it from the tray, and either switch going off took it away
+// from the other.
+const MINIMIZE_SHORTCUTS = [
+    ['org.gnome.desktop.wm.keybindings', 'minimize', '<Super>m', 'Minimize the window (Cmd+M)'],
+];
+
+const MINIMIZE_CONFLICTS = [
+    ['org.gnome.shell.keybindings', 'toggle-message-tray',
+        current => GLib.Variant.new_strv(current.get_strv().filter(accel => accel !== '<Super>m')),
+        'The message tray gives up Cmd+M and keeps its other shortcuts'],
+];
+
+const SHOW_DESKTOP_SHORTCUTS = [
+    ['org.gnome.desktop.wm.keybindings', 'show-desktop', '<Super>d', 'Show the desktop (Cmd+D)'],
+];
+
+// Maximise, restore and tile left or right. Another extension (Tiling Shell is
+// one) can empty these keys and never fill them again; they are refilled from
+// GNOME's own defaults, and only the ones that are empty.
+const WINDOW_TILING_KEYS = [
+    ['org.gnome.desktop.wm.keybindings', 'maximize'],
+    ['org.gnome.desktop.wm.keybindings', 'unmaximize'],
+    ['org.gnome.mutter.keybindings', 'toggle-tiled-left'],
+    ['org.gnome.mutter.keybindings', 'toggle-tiled-right'],
 ];
 
 const MACOS_WINDOW_CONFLICTS = [
@@ -606,6 +672,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         }
 
         this._buildDockMagnificationGroup(page, settings);
+        this._buildDockBounceGroup(page, settings);
         this._buildGlassGroup(page);
 
         if (has('dock-fixed') && has('autohide') && has('intellihide')) {
@@ -919,6 +986,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         page.add(buttonsGroup);
         this._addWindowButtonsRow(buttonsGroup);
         this._addSmallButtonsRow(buttonsGroup);
+        this._addSteamButtonsRow(buttonsGroup);
 
         const openingGroup = new Adw.PreferencesGroup({
             title: 'Opening',
@@ -932,6 +1000,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         if (maximizeRow)
             page.add(openingGroup);
 
+        this._buildWindowAnimationGroup(page);
         this._buildRoundedCornersGroup(page);
         this._buildGenieGroup(page);
 
@@ -1009,6 +1078,65 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 return;
             problem = this._setWindowButtons(row.active);
             // Show what is on disk, not what was asked for.
+            refresh();
+        });
+    }
+
+    // Steam draws its own title bar and never reads GNOME's layout. The row is
+    // there when Steam is, and patches its stylesheets as steamButtons.js
+    // says; the extension keeps the patch through Steam updates. It reads on
+    // when the files are patched, and is greyed out where Adwaita for Steam
+    // has patched them, which has a window-buttons option of its own.
+    _addSteamButtonsRow(group) {
+        const roots = steamRoots();
+        if (roots.length === 0)
+            return;
+
+        const settings = this.getSettings();
+        const wm = new Gio.Settings({ schema_id: WM_PREFERENCES_SCHEMA });
+        const subtitle = 'Steam draws its own title bar and keeps its buttons on the right. This ' +
+            'patches two of its stylesheets so they follow the layout above; Steam shows it the ' +
+            'next time it starts. After a Steam update Pear Up patches it again, and switching ' +
+            'this off puts Steam\'s own files back.';
+        const row = new Adw.SwitchRow({ title: 'Steam: Buttons on the Left', subtitle });
+        row.set_subtitle_lines(0);
+        group.add(row);
+
+        let problem = null;
+        let busy = false;
+        const states = () => roots.map(root => steamState(root));
+        const refresh = () => {
+            busy = true;
+            const all = states();
+            const adwaita = all.some(state => state.adwaita);
+            row.set_active(adwaita ? false : settings.get_boolean(STEAM_BUTTONS_KEY) || all.some(state => state.on));
+            row.set_sensitive(!adwaita);
+            row.set_subtitle(problem ?? (adwaita
+                ? 'Adwaita for Steam has patched Steam already. It moves the buttons itself: ' +
+                  'install it with --windowcontrols-layout auto, which follows GNOME\'s layout.'
+                : subtitle));
+            busy = false;
+        };
+        refresh();
+
+        row.connect('notify::active', () => {
+            if (busy)
+                return;
+            const on = row.active;
+            problem = null;
+            settings.set_boolean(STEAM_BUTTONS_KEY, on);
+            for (const root of roots) {
+                try {
+                    if (on)
+                        applySteamButtons(root, wm.get_string('button-layout'));
+                    else
+                        restoreSteamButtons(root);
+                } catch (e) {
+                    problem = `Could not ${on ? 'patch' : 'restore'} ${this._tildePath(root)}: ${e.message}`;
+                    if (on)
+                        settings.set_boolean(STEAM_BUTTONS_KEY, false);
+                }
+            }
             refresh();
         });
     }
@@ -1429,6 +1557,21 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         switchRow.connect('notify::active', () => radius.row.set_sensitive(switchRow.active));
     }
 
+    // Pear Up's own, unlike the rest of the page: it restyles the shell's
+    // animations rather than setting anything of GNOME's.
+    _buildWindowAnimationGroup(page) {
+        const group = new Adw.PreferencesGroup({ title: 'Animation' });
+        page.add(group);
+        const row = new Adw.SwitchRow({
+            title: 'Open and Close Like macOS',
+            subtitle: 'Windows fade in growing slightly from their centre, and fade out shrinking, ' +
+                'instead of popping up from the bottom edge',
+        });
+        group.add(row);
+        this.getSettings().bind('macos-window-animations', row, 'active',
+            Gio.SettingsBindFlags.DEFAULT);
+    }
+
     _buildGenieGroup(page) {
         const group = new Adw.PreferencesGroup({
             title: 'Minimizing',
@@ -1482,13 +1625,64 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             conflicts: MACOS_SCREENSHOT_CONFLICTS,
         });
 
+        const settings = this.getSettings();
+        const thumbnailRow = new Adw.SwitchRow({
+            title: 'Floating Thumbnail',
+            subtitle: 'After a shot, a preview sits in the bottom right corner for a few seconds. ' +
+                'Click it to open the file, drag or swipe it right to put it away',
+        });
+        thumbnailRow.set_subtitle_lines(0);
+        shotGroup.add(thumbnailRow);
+        settings.bind('screenshot-thumbnail', thumbnailRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const bannerRow = new Adw.SwitchRow({
+            title: 'Hide the Screenshot Banner',
+            subtitle: 'GNOME’s “Screenshot captured” notification stays out of sight while the thumbnail shows',
+        });
+        bannerRow.set_subtitle_lines(0);
+        shotGroup.add(bannerRow);
+        settings.bind('screenshot-thumbnail-hide-banner', bannerRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        settings.bind('screenshot-thumbnail', bannerRow, 'sensitive', Gio.SettingsBindFlags.GET);
+
         const windowGroup = new Adw.PreferencesGroup({ title: 'Windows' });
         page.add(windowGroup);
         this._addShortcutSetRow(windowGroup, {
             title: 'macOS Window Shortcuts',
-            subtitle: 'Quit, close, minimize, full screen, lock and the overview',
+            subtitle: 'Quit, close, full screen, lock and the overview',
             shortcuts: MACOS_WINDOW_SHORTCUTS,
             conflicts: MACOS_WINDOW_CONFLICTS,
+        });
+
+        const windowKeysGroup = new Adw.PreferencesGroup({
+            title: 'Window Keys',
+            description: 'Super is Cmd on this keyboard (Alt and Cmd are swapped)',
+        });
+        page.add(windowKeysGroup);
+        this._addShortcutSetRow(windowKeysGroup, {
+            title: 'Cmd+M Minimizes',
+            subtitle: 'Takes Cmd+M from the message tray, which keeps its other shortcuts',
+            shortcuts: MINIMIZE_SHORTCUTS,
+            conflicts: MINIMIZE_CONFLICTS,
+            // Super+M in minimize alone is not Cmd+M minimizing while the tray
+            // holds it too; the old window set left it like that.
+            appliedNeedsConflicts: true,
+        });
+        this._addShortcutSetRow(windowKeysGroup, {
+            title: 'Cmd+D Shows the Desktop',
+            subtitle: 'macOS uses Cmd+F3 or F11; Super+D is the Linux habit, and F3 is a media key on a Framework',
+            shortcuts: SHOW_DESKTOP_SHORTCUTS,
+        });
+        this._addDisplacingSwitchRow(windowKeysGroup, {
+            title: 'Restore GNOME Window Keys',
+            subtitle: 'Refills Super+↑, Super+↓ and Super+←/→ for maximize, restore and tiling ' +
+                'when another extension has emptied them. Keys that hold something are left alone',
+            targets: WINDOW_TILING_KEYS.map(([schemaId, key]) => [schemaId, key, () => {
+                const settings = this._settingsForSchema(schemaId);
+                const current = settings.get_value(key);
+                return current.get_strv().length > 0
+                    ? current
+                    : settings.settings_schema.get_key(key).get_default_value();
+            }]),
         });
 
         if (this._dashToDockSettings()) {
@@ -1540,7 +1734,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     _buildTrackpadGroup(page) {
         const group = new Adw.PreferencesGroup({
             title: 'Trackpad',
-            description: 'A plugin for libinput, which GNOME loads when you log in',
+            description: 'Scroll acceleration is a plugin for libinput, which GNOME loads when you log in',
         });
         page.add(group);
 
@@ -1616,6 +1810,162 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 return;
             write(strength.gain);
         });
+
+        this._buildBrowserScrollRows(group);
+    }
+
+    // Browser scrolling: one switch and a speed, written into the flags file of
+    // every Flatpak Chromium browser that is installed. `home` is the home
+    // directory they are looked for in.
+    _buildBrowserScrollRows(group, home = GLib.get_home_dir()) {
+        const subtitle = 'Brave, Chromium and Chrome scroll about five times as far as GNOME’s apps for the same ' +
+            'movement of the fingers, in jumps instead of a glide. This sets Chromium’s own scale for touchpad ' +
+            'scrolling. Takes effect when the browser is restarted.';
+        const row = new Adw.SwitchRow({ title: 'Smooth Browser Scrolling', subtitle });
+        row.set_subtitle_lines(0);
+        group.add(row);
+
+        const speeds = Gtk.StringList.new(BROWSER_SCROLL_SPEEDS.map(speed => speed.title));
+        const speedRow = new Adw.ComboRow({
+            title: 'Browser Scroll Speed',
+            subtitle: 'How far the page moves for the same movement of the fingers',
+            model: speeds,
+        });
+        group.add(speedRow);
+
+        let problem = null;
+        let busy = false;
+        const refresh = () => {
+            if (busy)
+                return;
+            busy = true;
+            const state = this._browserScrollState(home);
+            let text = subtitle;
+            if (state.browsers.length === 0)
+                text = 'None of Brave, Chromium or Chrome is installed from Flathub.';
+            else if (state.foreign.length > 0)
+                text = `${subtitle} Left alone: ${state.foreign.map(target => this._tildePath(target.path)).join(', ')}, ` +
+                    'which already set --enable-features. Add ' +
+                    'WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/2.5 to it by hand.';
+            row.set_active(state.installed);
+            row.set_sensitive(state.installed || state.browsers.length > state.foreign.length);
+            row.set_subtitle(problem ?? text);
+            const index = BROWSER_SCROLL_SPEEDS.findIndex(speed => speed.factor === state.factor);
+            speeds.splice(BROWSER_SCROLL_SPEEDS.length, speeds.get_n_items() - BROWSER_SCROLL_SPEEDS.length,
+                state.installed && index < 0 ? [`Custom (${state.factor})`] : []);
+            speedRow.set_selected(!state.installed ? BROWSER_SCROLL_SPEED_DEFAULT
+                : index < 0 ? BROWSER_SCROLL_SPEEDS.length : index);
+            speedRow.set_sensitive(state.installed);
+            busy = false;
+        };
+        refresh();
+
+        const write = factor => {
+            problem = this._setBrowserScroll(factor, home);
+            refresh();
+        };
+        row.connect('notify::active', () => {
+            if (busy || row.active === this._browserScrollState(home).installed)
+                return;
+            const speed = BROWSER_SCROLL_SPEEDS[speedRow.selected] ?? BROWSER_SCROLL_SPEEDS[BROWSER_SCROLL_SPEED_DEFAULT];
+            write(row.active ? speed.factor : null);
+        });
+        speedRow.connect('notify::selected', () => {
+            const speed = BROWSER_SCROLL_SPEEDS[speedRow.selected];
+            if (busy || !speed || !this._browserScrollState(home).installed)
+                return;
+            write(speed.factor);
+        });
+        return [row, speedRow];
+    }
+
+    // The Flatpak browsers installed for this user or the system, each with the
+    // flags file it reads from its own config directory.
+    _browserScrollTargets(home) {
+        return BROWSER_SCROLL_BROWSERS.filter(browser => [
+            GLib.build_filenamev([home, '.var', 'app', browser.app]),
+            GLib.build_filenamev([home, '.local', 'share', 'flatpak', 'app', browser.app]),
+            GLib.build_filenamev(['/var/lib/flatpak/app', browser.app]),
+        ].some(dir => GLib.file_test(dir, GLib.FileTest.IS_DIR))).map(browser => ({
+            ...browser,
+            path: GLib.build_filenamev([home, '.var', 'app', browser.app, 'config', browser.file]),
+        }));
+    }
+
+    _readTextOrNull(path) {
+        try {
+            const [, bytes] = Gio.File.new_for_path(path).load_contents(null);
+            return new TextDecoder().decode(bytes);
+        } catch (e) {
+            if ([Gio.IOErrorEnum.NOT_FOUND, Gio.IOErrorEnum.NOT_DIRECTORY].some(code => e.matches?.(Gio.IOErrorEnum, code)))
+                return null;
+            throw e;
+        }
+    }
+
+    // Whether Pear Up's flag is in the flags files, at what factor, and which
+    // files have an --enable-features of their own and are left alone. On means
+    // the flag is in at least one file.
+    _browserScrollState(home) {
+        const browsers = this._browserScrollTargets(home);
+        const foreign = [];
+        let factor = null;
+        for (const target of browsers) {
+            let text;
+            try {
+                text = this._readTextOrNull(target.path);
+            } catch {
+                foreign.push(target);
+                continue;
+            }
+            const ours = text?.match(BROWSER_SCROLL_FLAG);
+            if (ours)
+                factor ??= Number(ours[1]);
+            else if (text && /^\s*--enable-features[=\s]/m.test(text))
+                foreign.push(target);
+        }
+        return { browsers, foreign, installed: factor !== null, factor };
+    }
+
+    // Writes Pear Up's flag with `factor` into each browser's flags file, or
+    // with null takes Pear Up's two lines out again, removing a file that is
+    // then empty. Everything else in the files stays as it was. Returns what
+    // went wrong, or null.
+    _setBrowserScroll(factor, home) {
+        const failed = [];
+        for (const target of this._browserScrollTargets(home)) {
+            try {
+                const text = this._readTextOrNull(target.path);
+                const lines = text === null ? [] : text.split('\n');
+                const isOurs = line => line === BROWSER_SCROLL_COMMENT ||
+                    new RegExp(BROWSER_SCROLL_FLAG.source).test(line);
+                const kept = lines.filter(line => !isOurs(line));
+                while (kept.length > 0 && kept[kept.length - 1] === '')
+                    kept.pop();
+                const file = Gio.File.new_for_path(target.path);
+                if (factor === null) {
+                    if (!lines.some(isOurs))
+                        continue;
+                    if (kept.length === 0) {
+                        file.delete(null);
+                        continue;
+                    }
+                } else {
+                    if (kept.some(line => /^\s*--enable-features[=\s]/.test(line)))
+                        continue;
+                    kept.push(BROWSER_SCROLL_COMMENT,
+                        `--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/${factor}`);
+                }
+                const dir = GLib.path_get_dirname(target.path);
+                if (GLib.mkdir_with_parents(dir, 0o755) !== 0)
+                    throw new Error(`${this._tildePath(dir)} cannot be created`);
+                file.replace_contents(new TextEncoder().encode(`${kept.join('\n')}\n`), null, false,
+                    Gio.FileCreateFlags.NONE, null);
+            } catch (e) {
+                failed.push(`${this._tildePath(target.path)}: ${e.message}`);
+            }
+        }
+        return failed.length ? `Could not ${factor === null ? 'change' : 'write'} ${failed.join('; ')}` : null;
     }
 
     _scrollPluginPath() {
@@ -2092,8 +2442,12 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // One switch drives a whole set of accelerators. Each is appended to
     // GNOME's existing list and removed again on the way out, so a user's own
     // bindings for the same action are never disturbed. Conflicting grabs from
-    // other extensions are stood down while the set is on.
-    _addShortcutSetRow(group, { title, subtitle, shortcuts, conflicts = [], rows = null }) {
+    // other extensions are stood down while the set is on. With
+    // `appliedNeedsConflicts` the row only reads on when they are stood down as
+    // well, for a set whose accelerator does nothing while another grab holds it.
+    _addShortcutSetRow(group, {
+        title, subtitle, shortcuts, conflicts = [], rows = null, appliedNeedsConflicts = false,
+    }) {
         // Bindings displaced by a set, kept so they can be handed back. Backed
         // by our own settings rather than memory alone, so they survive the
         // preferences process exiting between enabling a set and disabling it.
@@ -2111,8 +2465,13 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         shortcuts = shortcuts.filter(usable);
         conflicts = conflicts.filter(usable);
 
+        const conflictStoodDown = ([schemaId, key, valueWhenApplied]) => {
+            const current = this._settingsForSchema(schemaId).get_value(key);
+            return current.equal(valueWhenApplied(current));
+        };
         const isApplied = () => shortcuts.length > 0 && shortcuts.every(([schemaId, key, accel]) =>
-            this._settingsForSchema(schemaId).get_strv(key).includes(accel));
+            this._settingsForSchema(schemaId).get_strv(key).includes(accel)) &&
+            (!appliedNeedsConflicts || conflicts.every(conflictStoodDown));
 
         const detailRows = rows ?? shortcuts.map(([, , accel, description]) => ({
             title: this._describeAccelerator(accel),
@@ -2161,8 +2520,9 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 if (wanted) {
                     // Keep whatever was there so switching off restores the
                     // user's own binding rather than the schema default.
-                    displacedValues.set(`${schemaId}:${key}`, settings.get_value(key));
-                    settings.set_value(key, valueWhenApplied());
+                    const before = settings.get_value(key);
+                    displacedValues.set(`${schemaId}:${key}`, before);
+                    settings.set_value(key, valueWhenApplied(before));
                 } else {
                     const saved = displacedValues.get(`${schemaId}:${key}`);
                     if (saved)
@@ -2363,6 +2723,27 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             strengthRow.row.set_sensitive(settings.get_boolean('dock-magnification'));
         syncStrengthSensitivity();
         settings.connect('changed::dock-magnification', syncStrengthSensitivity);
+    }
+
+    // Pear Up's own settings as well, drawn over Dash to Dock like
+    // magnification, and offered here for the same reason.
+    _buildDockBounceGroup(page, settings) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Bounce',
+            description: 'Icons hop away from the screen edge, as in the macOS Dock',
+        });
+        page.add(group);
+
+        for (const [key, title, subtitle] of [
+            ['dock-bounce-on-launch', 'Bounce While Opening',
+                'An app’s icon bounces until its first window appears'],
+            ['dock-bounce-on-attention', 'Bounce for Attention',
+                'An app in the background that needs you bounces its icon three times'],
+        ]) {
+            const row = new Adw.SwitchRow({ title, subtitle });
+            group.add(row);
+            settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        }
     }
 
     // Whether the dock is dark glass or light glass when Frosted Glass is switched
@@ -2950,6 +3331,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 'Under the bar; GNOME shows them at the bottom centre'],
             ['hide-workspace-popup', 'No Popup When Switching Desktops',
                 'The desktop slides across, and nothing else shows'],
+            ['spaces-spring', 'Springy Desktop Switching',
+                'Lands softly like Spaces, and stretches and springs back at the first and last desktop'],
             ['always-show-workspace-thumbnails', 'Always Show the Desktops in the Overview',
                 'Along the top, like Mission Control; GNOME hides them until two are in use'],
             ['start-on-desktop', 'Start on the Desktop',
@@ -2958,6 +3341,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             const row = new Adw.SwitchRow({ title, subtitle });
             group.add(row);
             settings.bind(key, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+            if (key === 'notifications-top-right')
+                this._buildBannerSlideRow(group, settings);
         }
 
         // Before GNOME 49 the brightness is gnome-settings-daemon's to set, and
@@ -2970,6 +3355,19 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             group.add(row);
             settings.bind('smooth-auto-brightness', row, 'active', Gio.SettingsBindFlags.DEFAULT);
         }
+    }
+
+    // How banners come and go only means something while they are in the
+    // corner, so the row follows that switch. Off by default: it reaches
+    // further into the shell than the corner does.
+    _buildBannerSlideRow(group, settings) {
+        const row = new Adw.SwitchRow({
+            title: 'Notifications Slide In from the Right',
+            subtitle: 'And back out to the right, as on macOS; GNOME drops them from the top',
+        });
+        group.add(row);
+        settings.bind('banners-slide-from-right', row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        settings.bind('notifications-top-right', row, 'sensitive', Gio.SettingsBindFlags.GET);
     }
 
     // A visual icon picker: a grid of the bundled distro icons plus a

@@ -55,8 +55,9 @@ Just Perfection does at its defaults whenever it is enabled.
 ![A desktop with Pear Up: the app's menus in the bar, window buttons on the left, a dock on the right](assets/screenshots/desktop.jpg)
 
 **The rest of the desktop, where macOS has it.** Notifications appear in the top right corner, under
-the clock, and the bubble a volume or brightness key brings up sits there too, under the bar, rather
-than at the bottom of the screen. Switching desktops slides the desktop across with no popup, and the
+the clock (and, with a switch, slide in from the right edge and back out, as macOS banners do), and
+the bubble a volume or brightness key brings up sits there too, under the bar, rather than at the
+bottom of the screen. Switching desktops slides the desktop across with no popup, and the
 overview always shows the desktops along its top, as Mission Control shows its Spaces, where GNOME
 hides them until two are in use. And a login starts on the desktop rather than in the overview. With
 Automatic Screen Brightness on, the screen fades to each new light level over a few seconds, quicker
@@ -64,6 +65,10 @@ brightening than darkening, as on macOS, rather than jumping there; the slider, 
 and dimming when idle still act at once. That one is for GNOME 49 and later, where the shell sets the
 brightness itself. Each is a switch of its own in the Desktop group of the General page, on by default,
 and switching one off gives back what GNOME does.
+**Springy Desktop Switching**, in the same group and off by default, moves the desktops the way Spaces
+move: a keyboard switch and the slide after a swipe land on a spring in about 0.4 s, pulled past the
+first or last desktop they stretch with resistance and spring back, and the switch shortcut there gives
+a small bump (the stretch needs GNOME 49 or later).
 [Just Perfection](https://extensions.gnome.org/extension/3843/just-perfection/) is no longer needed
 for the macOS layout: none of this wants it, and neither does Dash to Dock's own switch for starting
 without the overview. Left installed at its defaults, Just Perfection does not get in the way.
@@ -85,7 +90,15 @@ the shell, as the Extensions app does. The small buttons are CSS, kept in a mark
 `~/.config/gtk-4.0/gtk.css` and `~/.config/gtk-3.0/gtk.css` — one reaches libadwaita apps, the other GTK 3
 apps and the Electron ones, such as Claude, ChatGPT and Cursor, that draw GTK 3 title buttons — which
 apps read when they next start. Everything outside the block is left exactly as it is, and rules of your
-own that already shrink the buttons are never removed.
+own that already shrink the buttons are never removed. Optionally, windows open and close as on macOS:
+a new one fades in while growing slightly from its centre, a closing one fades while shrinking, where
+GNOME pops them up from the bottom edge — the shell's own animations restyled, no extra extension
+needed, off by default. Steam draws its own title bar and ignores GNOME's
+layout; Steam: Buttons on the Left (off by default, shown when Steam is installed) patches two of its
+client stylesheets, keeping the originals beside them, so its buttons follow the layout too from Steam's
+next start. A Steam update undoes it and Pear Up patches it again; switching it off gives Steam its own
+files back. Where [Adwaita for Steam](https://github.com/tkashkin/Adwaita-for-Steam) is installed the row
+steps aside, as that theme moves the buttons itself.
 
 **macOS type, accent, icons and cursor.** One switch sets the interface, document and window-title
 fonts to Adwaita Sans — GNOME's own fork of Inter, shipped from GNOME 48, or Inter itself where that
@@ -106,7 +119,8 @@ the macOS Dock marks it with its dot alone; a switch brings it back. Magnificati
 macOS Dock: the icon under the pointer grows while its neighbours grow less and move apart. It is off
 until you switch it on, and a slider then runs from weak to strong. Pear Up draws it on top of Dash
 to Dock without changing any of Dash to Dock's settings, and clicks and drag-and-drop still go to
-Dash to Dock's own icons.
+Dash to Dock's own icons. Icons can also bounce as on macOS: away from the screen edge while their app
+starts, and three times when an app in the background asks for attention; each has its own switch.
 
 **A frosted-glass dock.** With [Blur my Shell](https://extensions.gnome.org/extension/3193/blur-my-shell/)
 installed, a Glass group on the same page turns the dock into the floating, frosted pill macOS has. One
@@ -133,15 +147,24 @@ read Cmd as the Super or Windows key.
 | `Cmd+Shift+5` | Screen recording |
 | `Cmd+Q` | Quit the app, every window of it |
 | `Cmd+W` | Close the window |
-| `Cmd+M` | Minimize |
 | `Ctrl+Cmd+F` | Full screen |
 | `Ctrl+Cmd+Q` | Lock the screen |
 | `Ctrl+↑` | Overview, like Mission Control |
 
-Screenshots land in `~/Pictures/Screenshots`, and `Print` keeps working alongside. Each accelerator is
+Screenshots land in `~/Pictures/Screenshots`, and `Print` keeps working alongside. With Floating
+Thumbnail on (off by default, in the same group), each shot shrinks from where it was taken into a small
+card in the bottom right corner, beside the dock, as on macOS: it stays five seconds, longer while the
+pointer rests on it, opens the file when clicked and goes away when dragged or swiped to the right.
+GNOME's "Screenshot captured" banner is held back while it shows (GNOME 46 on); the notification stays in
+the list until the card goes. Each accelerator is
 added next to GNOME's own rather than replacing it, so switching a set off leaves your own bindings
 untouched. Where Dash to Dock already grabs a chord — it takes `Cmd+number` and `Cmd+Q` — the switch
 stands that down and offers to move the dock shortcuts to `Cmd+F1…F9` instead.
+
+**Window Keys.** Three more switches on the Keyboard page: `Cmd+M` minimizes (it takes `Super+M` from
+the message tray and leaves the tray its other shortcuts; it is this switch's alone, not the set above's), `Cmd+D` shows the desktop, and Restore GNOME Window Keys refills
+`Super+↑`, `Super+↓` and `Super+←/→` for maximize, restore and tiling when another extension has
+emptied them. A key that is already set reads as on, and switching off puts back what was there.
 
 **macOS keys inside apps.** An app reads its own keys, so `Cmd+C` in an app, or `Option+←` in a
 text field, cannot be rebound by any GNOME shortcut: Linux apps know those as `Ctrl+C` and `Ctrl+←`,
@@ -184,6 +207,16 @@ three, a palm, the click areas at the bottom and a pad pressed down are left exa
 has them. It needs GNOME 50, whose compositor loads the user's libinput plugins, and takes effect at
 the next login; the switch says so on anything older. Switching it off removes the one file it
 installed, `~/.config/libinput/plugins/10-pear-up-scroll-acceleration.lua`.
+
+**Browsers that scroll smoothly.** Chromium on Wayland multiplies touchpad scrolling by 12, so
+Brave, Chromium and Chrome move the page about five times as far as GNOME's own apps for the same
+movement of the fingers — tens of pixels a frame, jumps instead of a glide. Smooth Browser Scrolling,
+in the same Trackpad group, sets Chromium's own scale for it
+(`--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/2.5`, Chromium 155 and
+later) in the flags file of each Flatpak browser installed (`~/.var/app/<app>/config/<name>-flags.conf`),
+with a speed to choose. It writes two lines and takes only those out again; a file that already has
+an `--enable-features` of its own is left alone and named. It takes effect when the browser restarts.
+Electron apps read no flags file and get the feature with Electron 45.
 
 **Your own menus.** Add any number of extra top-level menus whose items run shell commands or send
 keyboard shortcuts.
@@ -305,7 +338,8 @@ desktop you are using.
 **Does it still behave?** Boots a real GNOME Shell headless against a virtual monitor, loads the
 extension the way a login would, and checks what it actually did to the panel: the clock moved, and
 back in its corner after another extension moves it, notifications and the volume bubble in the top
-right corner, no popup when switching desktops, the overview's desktops always shown, the session
+right corner, no popup when switching desktops, the overview's desktops always shown, desktop switches
+on a spring with a rubber band at the ends, the session
 starting on the desktop, automatic brightness fading with no step over 5% while the slider and dimming
 act at once, the System Menu appeared with its entries, the power icon is hidden but a
 battery is not, the titles and clock are regular weight with the app name bold, an indicator added
@@ -317,7 +351,11 @@ front, and disabling it leaves nothing behind.
 With Dash to Dock installed in the same container, a virtual pointer then hovers the dock, on the right
 edge and along the bottom: the icon under it has to reach exactly the chosen size, its neighbours less
 and pushed outward, and leaving the dock, switching magnification off mid-hover or disabling Pear Up
-has to give every icon its opacity back and leave no overlay behind.
+has to give every icon its opacity back and leave no overlay behind. Launching an app from the dock
+then has to bounce its icon away from each of the four edges by its own size (16 px at least), keep bouncing while the
+app starts and land once its window appears or after ten seconds; a covered window asking for
+attention has to bounce its app three times, or less once brought forward; and under magnification
+the magnified copy has to do the bouncing, with nothing drawn twice.
 
 The menus are asserted rather than clicked. Activating them through the structure runs the same code
 a click would, without depending on pixel coordinates or animation timing, which is where interface

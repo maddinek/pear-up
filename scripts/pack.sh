@@ -35,8 +35,13 @@ EXTRA_SOURCES=(
     systemMenu.js
     searchButton.js
     dockMagnifier.js
+    dockBounce.js
     shellTweaks.js
     smoothBrightness.js
+    spacesSpring.js
+    screenshotThumbnail.js
+    windowAnimations.js
+    steamButtons.js
     recentItems.js
     forceQuit.js
     util.js

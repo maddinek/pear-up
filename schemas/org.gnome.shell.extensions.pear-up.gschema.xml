@@ -136,6 +136,11 @@
       <summary>Show notification banners in the top right corner</summary>
       <description>Under the clock, as on macOS. GNOME puts them under the clock too, centred while it is in the middle; this keeps them on the right wherever the clock is, and whatever another extension sets.</description>
     </key>
+    <key name="banners-slide-from-right" type="b">
+      <default>false</default>
+      <summary>Slide notification banners in from the right edge</summary>
+      <description>As on macOS: a banner comes in from beyond the right edge of the screen and goes back out there when its time is up or it is dismissed, instead of dropping from the top. Only while notifications are in the top right corner. Follows the shell's animation settings.</description>
+    </key>
     <key name="osd-top-right" type="b">
       <default>true</default>
       <summary>Show the volume and brightness bubble in the top right corner</summary>
@@ -145,6 +150,11 @@
       <default>true</default>
       <summary>Show no popup when switching desktops</summary>
       <description>GNOME shows the desktops for a moment whenever a shortcut switches to another one or moves a window there. macOS only slides the desktop across, which the shell still does.</description>
+    </key>
+    <key name="spaces-spring" type="b">
+      <default>false</default>
+      <summary>Switch desktops on a spring, with a rubber band at the ends</summary>
+      <description>As Spaces move on macOS: a keyboard switch, and the slide after a three- or four-finger swipe, land softly in about 0.4 seconds; pulled past the first or last desktop they stretch and spring back, and the switch shortcut there gives a small bump. With dynamic workspaces the last desktop is the empty one GNOME keeps.</description>
     </key>
     <key name="always-show-workspace-thumbnails" type="b">
       <default>true</default>
@@ -164,6 +174,37 @@
       <default>true</default>
       <summary>Fade automatic brightness changes instead of jumping</summary>
       <description>With Automatic Screen Brightness on, the screen moves to each new light level over a few seconds, brightening faster than it darkens, as on macOS. The brightness slider and keys still act at once, and so does dimming when idle.</description>
+    </key>
+
+    <!-- The floating thumbnail macOS shows after a screenshot. Off by default:
+         it is new, and it reads the shell's screenshot notification. -->
+    <key name="screenshot-thumbnail" type="b">
+      <default>false</default>
+      <summary>Show a floating thumbnail after a screenshot</summary>
+      <description>The picture shrinks into the bottom right corner, beside the dock, and stays there for five seconds, longer while the pointer rests on it. Clicking it opens the file; dragging or swiping it to the right puts it away.</description>
+    </key>
+    <key name="screenshot-thumbnail-hide-banner" type="b">
+      <default>true</default>
+      <summary>Hide GNOME's Screenshot captured banner while the thumbnail shows</summary>
+      <description>The notification stays in the list until the thumbnail goes. GNOME 46 and later; GNOME 45 always shows the banner.</description>
+    </key>
+
+    <!-- Restyles the shell's own open and close animations; see
+         windowAnimations.js. Off by default: it changes how every window
+         appears. -->
+    <key name="macos-window-animations" type="b">
+      <default>false</default>
+      <summary>Open and close windows as macOS does</summary>
+      <description>A new window fades in while growing slightly from its centre, and a closing one fades while shrinking slightly, instead of GNOME's pop up from the bottom edge. Dialogs attached to their window keep GNOME's unfold.</description>
+    </key>
+
+    <!-- Steam draws its own title bar. On, two of its stylesheets are patched
+         so its buttons follow GNOME's button layout, and patched again after a
+         Steam update; off puts Steam's own files back. See steamButtons.js. -->
+    <key name="steam-buttons-left" type="b">
+      <default>false</default>
+      <summary>Put Steam's window buttons where GNOME's layout has them</summary>
+      <description>Steam ignores GNOME's button layout. This patches its client stylesheets (keeping the originals) so close, minimize and maximize follow it, from the next start of Steam.</description>
     </key>
 
     <!-- The panel button is this extension's own, so it works with no search
@@ -240,6 +281,16 @@
       <range min="110" max="300"/>
       <summary>How large the icon under the pointer grows, in percent of its normal size</summary>
       <description>110 is a hint of movement, 300 triples the icon. Neighbours grow less the further they are from the pointer.</description>
+    </key>
+    <key name="dock-bounce-on-launch" type="b">
+      <default>false</default>
+      <summary>Bounce an app's dock icon while it starts</summary>
+      <description>The Dash to Dock icon of an app being launched hops away from the screen edge until its first window appears, as on macOS, for at most ten seconds. Pear Up draws this over Dash to Dock at runtime; none of Dash to Dock's own settings change.</description>
+    </key>
+    <key name="dock-bounce-on-attention" type="b">
+      <default>false</default>
+      <summary>Bounce an app's dock icon when it asks for attention</summary>
+      <description>When a window of an app that is not in front asks for attention, its Dash to Dock icon hops three times, as on macOS, and stops as soon as the app is brought forward.</description>
     </key>
     <!-- Off by default, as on macOS, where the dock marks the app in front with
          its running dot and nothing else. -->
