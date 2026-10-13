@@ -4,8 +4,8 @@
 --
 -- libinput scrolls by a fixed amount for every millimetre two fingers travel,
 -- about 10.5 scroll units, however slowly or quickly they go. macOS scrolls a
--- slow movement less than a quick one, so a page can be nudged a line at a time
--- and still be flung to the end. This plugin gives libinput that curve.
+-- slow movement much less than a quick one, so a page can be nudged a line at a
+-- time and still be flung to the end. This plugin gives libinput macOS's curve.
 --
 -- A libinput plugin (libinput 1.30 and later, see "Lua Plugins" in its
 -- documentation) sees each frame of events the touchpad sends before libinput
@@ -15,10 +15,22 @@
 -- two-finger scrolling follows the average movement of the fingers, so it
 -- follows the gain; nothing else in libinput is changed or reimplemented.
 --
---   finger speed      gain
---   up to 20 mm/s     SLOW_GAIN (0.35 at Pear Up's medium strength)
---   20 to 80 mm/s     rising smoothly to 1, libinput's own rate
---   80 to 200 mm/s    rising smoothly to 1.15, for a flick
+-- The curve is macOS's own. Its trackpad scrolling runs through
+-- IOHIDPointerScrollFilter (IOHIDFamily, open source): a speed from the last
+-- nine events looked up in the acceleration table the trackpad driver
+-- publishes. Played through that code with a MacBook Air's table at its default
+-- setting (HIDTrackpadScrollAcceleration 0.3125), the scroll for each
+-- millimetre of finger travel, as a share of what it is at 80 mm/s, is
+--
+--   mm/s    3    5    8    10   15   20   30   40   60   80   120  160+
+--   share  .13  .19  .37  .43  .56  .64  .76  .84  .94   1   1.06 1.08
+--
+-- which CURVE below holds. (macOS's table flattens out past 160 mm/s, where its
+-- momentum takes over; this curve stays at 1.08 there.) SPEED is how far that
+-- is at 80 mm/s, as a share of libinput's own rate: on a MacBook Air the page
+-- moves about 8.8 points per millimetre there, and GNOME's apps on a 13-inch 2x
+-- screen move 26 pixels of about the same size, so 0.34 scrolls as far as on a
+-- Mac. Pear Up's preferences write the speed chosen there into its line.
 --
 -- What is left alone:
 --   - one finger, three or more, a palm, and anything while the touchpad is
@@ -26,6 +38,10 @@
 --     makes them;
 --   - fingers in the bottom 10 mm (or 15%, if taller), where the clickpad's
 --     button areas and libinput's thumb detection are;
+--   - the first START_MM of a two-finger touch. libinput waits for a finger to
+--     move a millimetre before it decides between scrolling and a pinch, and
+--     scrolls none of that; slowed down, that millimetre would take longer to
+--     cover and a slow scroll would start late;
 --   - movement the fingers do not share. Only the common part is scaled, and
 --     only as far as the fingers move alike, so a pinch, a rotation or one
 --     finger resting while the other moves are passed through as they are;
@@ -34,6 +50,11 @@
 --     first finger is often unnamed until a second one comes, and that one
 --     gesture is libinput's own;
 --   - anything but a touchpad.
+--
+-- Momentum after the fingers lift is the apps' own (GTK, Chromium and Firefox
+-- each run one): a plugin could only fake fingers still moving, and they would
+-- run off the edge of the touchpad. The apps start their momentum from the
+-- speed the fingers had, so this curve shapes it too.
 --
 -- A finger keeps the offset it has gathered until it lifts, so that when the
 -- second finger lifts first the pointer does not jump. Fractions of a device
@@ -47,16 +68,19 @@
 -- ~/.config/libinput/plugins, where GNOME 50's compositor loads it at login.
 -- Switching it off there removes this file.
 
--- Pear Up's preferences write the strength chosen there into the next line when
--- they install this file. It is the gain for slow movement: 1 would change
--- nothing, smaller is a slower start.
-local SLOW_GAIN = 0.35
+-- The speed chosen in Pear Up's preferences: the gain at 80 mm/s, where the
+-- curve is 1. 1 is libinput's own rate there, 0.34 a MacBook's.
+local SPEED = 0.7
 
-local SLOW_SPEED = 20       -- mm/s; at or below this the gain is SLOW_GAIN
-local NORMAL_SPEED = 80     -- mm/s; here the gain is 1, libinput's own rate
-local FLICK_SPEED = 200     -- mm/s; from here the gain is FLICK_GAIN
-local FLICK_GAIN = 1.15
-local WINDOW = 50000        -- µs of movement the speed is measured over
+-- { mm/s, share of the 80 mm/s rate }, from the table above; linear between,
+-- the last value beyond the last point.
+local CURVE = {
+    { 0, 0.08 }, { 3, 0.13 }, { 5, 0.19 }, { 8, 0.37 }, { 10, 0.43 }, { 15, 0.56 },
+    { 20, 0.64 }, { 30, 0.76 }, { 40, 0.84 }, { 60, 0.94 }, { 80, 1 }, { 120, 1.06 },
+    { 160, 1.08 },
+}
+local WINDOW = 70000        -- µs the speed is measured over: macOS's nine events
+local START_MM = 1.2        -- see "What is left alone"
 local BOTTOM_MM = 10        -- the clickpad's button areas...
 local BOTTOM_SHARE = 0.15   -- ...or libinput's thumb zone, whichever is taller
 local ALIKE_FROM = 0.3      -- see together()
@@ -92,14 +116,18 @@ local function smoothstep(t)
     return t * t * (3 - 2 * t)
 end
 
--- The gain for fingers moving at `speed` mm/s.
-function M.gain(speed, slow_gain)
-    if speed <= NORMAL_SPEED then
-        local t = (speed - SLOW_SPEED) / (NORMAL_SPEED - SLOW_SPEED)
-        return slow_gain + (1 - slow_gain) * smoothstep(t)
+-- The gain for fingers moving at `speed` mm/s, at the speed setting `level`.
+function M.gain(speed, level)
+    local share = CURVE[#CURVE][2]
+    for i = 2, #CURVE do
+        local x1, y1 = CURVE[i][1], CURVE[i][2]
+        if speed <= x1 then
+            local x0, y0 = CURVE[i - 1][1], CURVE[i - 1][2]
+            share = y0 + (y1 - y0) * math.max(speed - x0, 0) / (x1 - x0)
+            break
+        end
     end
-    local t = (speed - NORMAL_SPEED) / (FLICK_SPEED - NORMAL_SPEED)
-    return 1 + (FLICK_GAIN - 1) * smoothstep(t)
+    return (level or SPEED) * share
 end
 
 -- How far two fingers that moved by (ax, ay) and (bx, by) mm moved as one,
@@ -121,7 +149,7 @@ end
 -- The state of one touchpad, from the absinfo of its two position axes.
 -- Without a resolution there are no millimetres to measure speed in, and the
 -- touchpad is left alone.
-function M.touchpad(absx, absy, slow_gain)
+function M.touchpad(absx, absy, level)
     if not absx or not absy or (absx.resolution or 0) <= 0 or (absy.resolution or 0) <= 0 then
         return nil
     end
@@ -131,7 +159,7 @@ function M.touchpad(absx, absy, slow_gain)
         xmin = absx.minimum, xmax = absx.maximum, xres = absx.resolution,
         ymin = absy.minimum, ymax = absy.maximum, yres = absy.resolution,
         bottom = absy.maximum - zone * absy.resolution,
-        slow_gain = slow_gain or SLOW_GAIN,
+        level = level or SPEED,
         -- The slot the kernel last selected. Frames only say when it changes,
         -- so until one has, which finger an event belongs to is not known and
         -- nothing is touched.
@@ -142,6 +170,8 @@ function M.touchpad(absx, absy, slow_gain)
         touches = 0,     -- counts touches, so a finger can be told from the next
         pair = nil,      -- the two touches the history belongs to
         history = {},
+        start = nil,     -- where they were when they came down together
+        started = false, -- whether they have moved START_MM since
     }
 end
 
@@ -184,7 +214,18 @@ local function accelerate(tp, a, b, a0, b0, time)
     local bx, by = last[4] - first[4], last[5] - first[5]
     local cx, cy = (ax + bx) / 2, (ay + by) / 2
     local speed = math.sqrt(cx * cx + cy * cy) / span * 1000000
-    local gain = 1 + (M.gain(speed, tp.slow_gain) - 1) * M.together(ax, ay, bx, by)
+    -- Until one finger has moved START_MM, libinput is still deciding what
+    -- the fingers do, and is left to.
+    if not tp.started then
+        local s = tp.start
+        local da = math.max(math.abs(a.x - s[1]) / tp.xres, math.abs(a.y - s[2]) / tp.yres)
+        local db = math.max(math.abs(b.x - s[3]) / tp.xres, math.abs(b.y - s[4]) / tp.yres)
+        if math.max(da, db) < START_MM then
+            return
+        end
+        tp.started = true
+    end
+    local gain = 1 + (M.gain(speed, tp.level) - 1) * M.together(ax, ay, bx, by)
 
     -- This frame's movement, shared out evenly: the scroll libinput makes is
     -- their average, and the distance and angle between them stay the same.
@@ -270,6 +311,7 @@ function M.frame(tp, frame, time)
         local pair = a.touch .. ":" .. b.touch
         if tp.pair ~= pair then
             tp.pair, tp.history = pair, {}
+            tp.start, tp.started = { a.x, a.y, b.x, b.y }, false
         end
         accelerate(tp, a, b, before[known[1]], before[known[2]], time)
     elseif tp.pair then
@@ -379,7 +421,7 @@ if libinput then
             end
         end
         local absinfos = device:absinfos()
-        local tp = M.touchpad(absinfos[ABS_MT_POSITION_X], absinfos[ABS_MT_POSITION_Y], SLOW_GAIN)
+        local tp = M.touchpad(absinfos[ABS_MT_POSITION_X], absinfos[ABS_MT_POSITION_Y], SPEED)
         if not tp then
             libinput:log_info("Pear Up scroll acceleration: " .. device:name() .. " reports no resolution, left as it is")
             return

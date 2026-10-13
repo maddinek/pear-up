@@ -34,10 +34,11 @@ rm -f "$APPS_DIR/pear-up-settings.desktop"
 update-desktop-database "$APPS_DIR" 2>/dev/null || true
 
 # The scroll acceleration plugin the preferences install, and only if it is
-# Pear Up's: it has the strength line they write and says whose it is. The
+# Pear Up's: it has the speed line they write (or the strength line of the
+# versions before) and says whose it is. The
 # compositor keeps the one it loaded until the next login.
 PLUGIN_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/libinput/plugins/10-pear-up-scroll-acceleration.lua"
-if [[ -f "$PLUGIN_PATH" ]] && grep -q '^local SLOW_GAIN = ' "$PLUGIN_PATH" && grep -q 'Pear Up' "$PLUGIN_PATH"; then
+if [[ -f "$PLUGIN_PATH" ]] && grep -q -E '^local (SPEED|SLOW_GAIN) = ' "$PLUGIN_PATH" && grep -q 'Pear Up' "$PLUGIN_PATH"; then
     rm -f "$PLUGIN_PATH"
     echo "🖱️ Removed the scroll acceleration plugin; scrolling is libinput's own again after the next login."
 fi

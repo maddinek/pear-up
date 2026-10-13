@@ -43,13 +43,25 @@ UUID="$(sed -n 's/.*"uuid"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SRC/met
 check "the extension carries the plugin for the preferences to install" \
     "$(cmp -s "$SOURCE" "$XDG_DATA_HOME/gnome-shell/extensions/$UUID/libinput/10-pear-up-scroll-acceleration.lua" && echo same || echo different)" same
 
-# An older copy at the strong setting: replaced, strength kept.
+# An older copy at the MacBook speed: replaced, speed kept.
 mkdir -p "$(dirname "$PLUGIN")"
-sed 's/^local SLOW_GAIN = .*$/local SLOW_GAIN = 0.2/' "$SOURCE" | sed 's/^local FLICK_GAIN = .*$/local FLICK_GAIN = 1.3/' > "$PLUGIN"
+sed 's/^local SPEED = .*$/local SPEED = 0.34/' "$SOURCE" | sed 's/^local START_MM = .*$/local START_MM = 2/' > "$PLUGIN"
 echo 'libinput:register({1})' > "$XDG_CONFIG_HOME/libinput/plugins/20-of-my-own.lua"
 quiet bash "$SRC/install.sh"
-check "install.sh replaces an older copy, keeping its strength" \
-    "$(cmp -s <(sed 's/^local SLOW_GAIN = .*$/local SLOW_GAIN = 0.2/' "$SOURCE") "$PLUGIN" && echo current || echo stale)" current
+check "install.sh replaces an older copy, keeping its speed" \
+    "$(cmp -s <(sed 's/^local SPEED = .*$/local SPEED = 0.34/' "$SOURCE") "$PLUGIN" && echo current || echo stale)" current
+
+# A copy from before the speed line, with the strength line of then: replaced
+# by this version's at its default speed.
+printf -- '-- Pear Up: scrolling\nlocal SLOW_GAIN = 0.35\n' > "$PLUGIN"
+quiet bash "$SRC/install.sh"
+check "install.sh replaces a copy from before the speed line with this version's" \
+    "$(cmp -s "$SOURCE" "$PLUGIN" && echo current || echo stale)" current
+printf -- '-- Pear Up: scrolling\nlocal SLOW_GAIN = 0.35\n' > "$PLUGIN"
+quiet bash "$SRC/uninstall.sh"
+check "uninstall.sh removes a copy from before the speed line" "$([[ -e $PLUGIN ]] && echo yes || echo no)" no
+quiet bash "$SRC/install.sh"
+sed 's/^local SPEED = .*$/local SPEED = 0.34/' "$SOURCE" > "$PLUGIN"
 check "and leaves the plugins of others alone" "$(cat "$XDG_CONFIG_HOME/libinput/plugins/20-of-my-own.lua")" 'libinput:register({1})'
 
 quiet bash "$SRC/uninstall.sh"

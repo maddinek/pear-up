@@ -51,18 +51,24 @@ sed -e "s|@UUID@|$EXTENSION_UUID|g" \
 update-desktop-database "$APPS_DIR" 2>/dev/null || true
 
 # The scroll acceleration plugin is installed by the preferences, not here. If
-# they have installed it, it is replaced by this version's, keeping the strength
-# it was installed with; the compositor loads the new one at the next login. A
-# file of that name that is not Pear Up's — no strength line, or no mention of
-# Pear Up — is left alone, as the preferences leave it.
+# they have installed it, it is replaced by this version's, keeping the speed it
+# was installed with; the compositor loads the new one at the next login. A copy
+# from before the speed line (its SLOW_GAIN line was the slow end of another
+# curve) gets this version's default speed. A file of that name that is not
+# Pear Up's — neither line, or no mention of Pear Up — is left alone, as the
+# preferences leave it.
 PLUGIN_NAME="10-pear-up-scroll-acceleration.lua"
 PLUGIN_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/libinput/plugins/$PLUGIN_NAME"
 if [[ -f "$PLUGIN_PATH" ]] && grep -q 'Pear Up' "$PLUGIN_PATH"; then
-    gain="$(sed -n 's/^local SLOW_GAIN = \([0-9.]*\)$/\1/p' "$PLUGIN_PATH" | head -n 1)"
-    if [[ -n "$gain" ]]; then
+    speed="$(sed -n 's/^local SPEED = \([0-9.]*\)$/\1/p' "$PLUGIN_PATH" | head -n 1)"
+    if [[ -n "$speed" ]] || grep -q '^local SLOW_GAIN = ' "$PLUGIN_PATH"; then
         echo "🖱️ Updating the scroll acceleration plugin..."
-        sed "s/^local SLOW_GAIN = [0-9.]*$/local SLOW_GAIN = $gain/" \
-            "$SOURCE_DIR/libinput/$PLUGIN_NAME" > "$PLUGIN_PATH.pear-up-new"
+        if [[ -n "$speed" ]]; then
+            sed "s/^local SPEED = [0-9.]*$/local SPEED = $speed/" \
+                "$SOURCE_DIR/libinput/$PLUGIN_NAME" > "$PLUGIN_PATH.pear-up-new"
+        else
+            cp "$SOURCE_DIR/libinput/$PLUGIN_NAME" "$PLUGIN_PATH.pear-up-new"
+        fi
         mv "$PLUGIN_PATH.pear-up-new" "$PLUGIN_PATH"
     fi
 fi

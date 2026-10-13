@@ -287,11 +287,38 @@ def replay(workdir, gesture, plugins):
         # From the root directory umockdev resolves nothing, so not from there.
         cwd=workdir, capture_output=True, text=True, timeout=seconds + 30)
     lines = []
+    TIMES.clear()
     for line in result.stdout.splitlines():
+        stamp = re.search(r'\+(\d+\.\d+)s', line)
         line = re.sub(r'\+\d+\.\d+s\s*', '', line)
         line = re.sub(r'^\s*\S+\s+', '', line)       # the device column
         lines.append(line.strip())
+        TIMES.append(float(stamp.group(1)) if stamp else None)
     return lines, result.stdout + result.stderr
+
+
+# The time debug-events printed for each line of the last replay, in seconds.
+TIMES = []
+
+
+# macOS's trackpad scrolling, per millimetre of finger travel, as a share of
+# what it is at 80 mm/s: IOHIDPointerScrollFilter (IOHIDFamily) with a MacBook
+# Air's acceleration table at its default setting. The plugin's CURVE holds the
+# same; this copy is what it is checked against.
+MAC_CURVE = [(0, 0.08), (3, 0.13), (5, 0.19), (8, 0.37), (10, 0.43), (15, 0.56), (20, 0.64), (30, 0.76),
+             (40, 0.84), (60, 0.94), (80, 1.0), (120, 1.06), (160, 1.08)]
+
+
+def mac_share(speed):
+    for (x0, y0), (x1, y1) in zip(MAC_CURVE, MAC_CURVE[1:]):
+        if speed <= x1:
+            return y0 + (y1 - y0) * (speed - x0) / (x1 - x0)
+    return MAC_CURVE[-1][1]
+
+
+def plugin_speed():
+    with open(PLUGIN) as source:
+        return float(re.search(r'^local SPEED = ([0-9.]+)$', source.read(), re.M).group(1))
 
 
 def total(lines, kind, pattern):
@@ -376,16 +403,39 @@ def main():
     plugged, plain, log = both(lambda k: two_finger_swipe(k, 15, 30))
     check('libinput saw the touchpad', any(line.startswith('DEVICE_ADDED') for line in plain), log[-1500:])
     check('the plugin was loaded and took the touchpad', 'Pear Up scroll acceleration: ' + NAME in log, log[-1500:])
-    slow, slow_plain = total(plugged, 'POINTER_SCROLL_FINGER', SCROLL), total(plain, 'POINTER_SCROLL_FINGER', SCROLL)
-    ratio = slow / slow_plain if slow_plain else 0
-    check(f'a slow scroll, 15 mm/s over 30 mm: {slow:.1f} against {slow_plain:.1f}, {ratio:.2f} of it',
-          slow_plain > 250 and 0.30 <= ratio <= 0.45)
 
-    plugged, plain, _ = both(lambda k: two_finger_swipe(k, 150, 30))
-    fast, fast_plain = total(plugged, 'POINTER_SCROLL_FINGER', SCROLL), total(plain, 'POINTER_SCROLL_FINGER', SCROLL)
-    ratio = fast / fast_plain if fast_plain else 0
-    check(f'a quick scroll, 150 mm/s over 30 mm: {fast:.1f} against {fast_plain:.1f}, {ratio:.2f} of it',
-          fast_plain > 250 and 0.90 <= ratio <= 1.20)
+    # The curve, swept: at each finger speed, the scroll libinput makes with
+    # the plugin against without it, and that against macOS's curve at the
+    # plugin's speed setting. The plugin lets the first 1.2 mm through as they
+    # are, and libinput scrolls none of the first millimetre or so either way,
+    # so a swipe scrolls a little more than the curve alone would say.
+    level = plugin_speed()
+    print(f'  speed setting {level}; scroll units per mm of finger travel:')
+    print(f'  {"mm/s":>6} {"without":>8} {"with":>8} {"share":>6} {"macOS":>6}')
+    for speed in (5, 10, 20, 40, 80, 150, 250):
+        distance = 20 if speed < 80 else 30
+        plugged, plain, _ = both(lambda k, s=speed, d=distance: two_finger_swipe(k, s, d))
+        units, units_plain = total(plugged, 'POINTER_SCROLL_FINGER', SCROLL), total(plain, 'POINTER_SCROLL_FINGER', SCROLL)
+        ratio = units / units_plain if units_plain else 0
+        want = level * mac_share(speed)
+        print(f'  {speed:6d} {units_plain / distance:8.2f} {units / distance:8.2f} {ratio:6.3f} {want:6.3f}')
+        check(f'{speed} mm/s over {distance} mm scrolls {ratio:.3f} of libinput\'s, macOS\'s curve says {want:.3f}',
+              units_plain > 150 and abs(ratio - want) <= 0.03 + 0.12 * want)
+
+    # A slow start: libinput scrolls only once a finger has moved about a
+    # millimetre, and the plugin leaves that millimetre as it is, so the
+    # scrolling starts when it would without the plugin.
+    def first_scroll(lines):
+        for line, stamp in zip(lines, TIMES):
+            if line.startswith('POINTER_SCROLL_FINGER') and stamp is not None:
+                return stamp
+        return None
+    plugged, _ = clean(lambda k: two_finger_swipe(k, 3, 6), True)
+    start = first_scroll(plugged)
+    plain, _ = clean(lambda k: two_finger_swipe(k, 3, 6), False)
+    start_plain = first_scroll(plain)
+    check(f'at 3 mm/s the scroll starts as soon as without the plugin ({start} s against {start_plain} s)',
+          start is not None and start_plain is not None and start - start_plain <= 0.05)
 
     plugged, plain, _ = both(lambda k: two_finger_swipe(k, 0, 0, apart=25))
     pinch, pinch_plain = of_kind(plugged, 'GESTURE_PINCH_UPDATE'), of_kind(plain, 'GESTURE_PINCH_UPDATE')

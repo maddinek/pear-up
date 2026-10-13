@@ -201,19 +201,40 @@ const WINDOW_BUTTONS_CSS = [
 // nothing above it sees how fast the fingers went. Plugins came with libinput
 // 1.30, and GNOME 50's compositor is the first to load them from the user's own
 // directory, which it reads at login. The file there is all the state there is:
-// the switch reads whether Pear Up's copy is installed, and the strength is the
-// slow-movement gain written into its SLOW_GAIN line. A file of that name that is
-// not Pear Up's is never written over or removed.
+// the switch reads whether Pear Up's copy is installed, and the speed is the
+// number written into its SPEED line. A copy with the SLOW_GAIN line of the
+// versions before is Pear Up's too, from another version. A file of that name
+// that is not Pear Up's is never written over or removed.
 const SCROLL_PLUGIN = '10-pear-up-scroll-acceleration.lua';
-const SCROLL_PLUGIN_GAIN = /^local SLOW_GAIN = ([0-9.]+)$/m;
+const SCROLL_PLUGIN_SPEED = /^local SPEED = ([0-9.]+)$/m;
+const SCROLL_PLUGIN_OLD_GAIN = /^local SLOW_GAIN = ([0-9.]+)$/m;
 const PLUGINS_SHELL = 50;
 const PLUGINS_LIBINPUT = [1, 30];
-const SCROLL_STRENGTHS = [
-    { title: 'Light', gain: 0.6 },
-    { title: 'Medium', gain: 0.35 },
-    { title: 'Strong', gain: 0.2 },
+// The plugin's curve is macOS's; the speed is how far it goes at 80 mm/s, as a
+// share of libinput's own rate. At 0.34 GNOME's apps scroll as far as a MacBook
+// does (8.8 points a millimetre there, against GTK's 26 pixels). Chromium,
+// though, starts its glide after a flick from the speed before its own scale
+// (wayland_event_source.cc keeps the unscaled deltas for the fling), and that
+// glide grows with the square of the speed: at 0.34 browsers hardly glide. At
+// 0.7 they glide about as far as on a Mac, while their scroll under the fingers
+// is set to a Mac's by their own scale (macFactor below).
+const SCROLL_SPEEDS = [
+    { title: 'As on a MacBook', speed: 0.34 },
+    { title: 'Medium', speed: 0.7 },
+    { title: 'As Fast as GNOME', speed: 1 },
 ];
-const SCROLL_STRENGTH_DEFAULT = 1;
+const SCROLL_SPEED_DEFAULT = 1;
+
+// What a Mac scrolls for a millimetre of finger travel at 80 mm/s, in points
+// (IOHIDPointerScrollFilter with a MacBook Air's table; its points are about
+// the size of a 2x GNOME pixel on a 13-inch screen), and what libinput sends
+// for one, in scroll units. From them, the scale a browser or Firefox needs to
+// move the page as far as a Mac at the plugin's speed `level` (1 without it).
+const MAC_POINTS_PER_MM = 8.8;
+const LIBINPUT_UNITS_PER_MM = 10.5;
+function macFactor(level) {
+    return Math.round(MAC_POINTS_PER_MM / (LIBINPUT_UNITS_PER_MM * level) * 100) / 100;
+}
 
 // Chromium on Wayland multiplies touchpad scrolling by 12 — the 10-per-wheel-
 // click convention turned into its 120 — so a browser moves the page about
@@ -228,19 +249,64 @@ const SCROLL_STRENGTH_DEFAULT = 1;
 // file that already has an --enable-features of its own is left alone, as
 // Chromium only reads the last one. Electron apps read no such file, and
 // before Electron 45 (Chromium 156) do not have the feature at all.
-const BROWSER_SCROLL_COMMENT = '# Pear Up: touchpad scrolling as far as in GNOME’s apps (Keyboard → Trackpad)';
+//
+// ChatGPT's desktop app (Chromium 155) reads no flags file. It is started from
+// its desktop file in ~/.local/share/applications, and there Pear Up puts the
+// flag into the Exec line, keeping the line as it was in an
+// X-Pear-Up-Scroll-Exec key to put back. Claude (Electron 44) and other
+// Electron apps before Electron 45 do not have the feature.
+const BROWSER_SCROLL_COMMENT = '# Pear Up: touchpad scrolling at macOS’s or GNOME’s scale (Keyboard → Trackpad)';
+// The comment of the version before, still Pear Up's to remove.
+const BROWSER_SCROLL_OLD_COMMENTS = ['# Pear Up: touchpad scrolling as far as in GNOME’s apps (Keyboard → Trackpad)'];
 const BROWSER_SCROLL_FLAG = /^--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor\/([0-9.]+)$/m;
+const BROWSER_SCROLL_EXEC_FLAG = / --enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor\/([0-9.]+)(?= |$)/;
+const BROWSER_SCROLL_EXEC_KEY = 'X-Pear-Up-Scroll-Exec';
 const BROWSER_SCROLL_BROWSERS = [
     { name: 'Brave', app: 'com.brave.Browser', file: 'brave-flags.conf' },
     { name: 'Chromium', app: 'org.chromium.Chromium', file: 'chromium-flags.conf' },
     { name: 'Google Chrome', app: 'com.google.Chrome', file: 'chrome-flags.conf' },
 ];
+const BROWSER_SCROLL_DESKTOP_APPS = [
+    { name: 'ChatGPT', desktop: 'chatgpt.desktop' },
+];
+// `mac`: macFactor() at the plugin's speed, so the page moves as far as on a
+// Mac; it follows the plugin's speed when that changes.
 const BROWSER_SCROLL_SPEEDS = [
+    { title: 'As on a MacBook', mac: true },
     { title: 'As in GNOME’s Apps', factor: 2.5 },
     { title: 'Slower', factor: 1.5 },
     { title: 'Slowest', factor: 1 },
 ];
 const BROWSER_SCROLL_SPEED_DEFAULT = 0;
+
+// Firefox runs its own glide after a flick, from GTK's scroll-stop, with
+// prefs for everything (modules/libpref/init/StaticPrefList.yaml). macOS's
+// glide, as WebKit reproduces it (MomentumEventDispatcher.cpp), loses 2.5% of
+// its speed every 8 ms, a time constant of 316 ms, and stops below half a
+// pixel a 60 Hz frame; Firefox's default loses 0.2% a millisecond (500 ms) and
+// coasts on for seconds. "macOS Momentum in Firefox" writes these prefs, and
+// Firefox's pixel scale for touchpads set as the browsers' is, into user.js in
+// each Firefox profile, between two comment lines that are Pear Up's. What a
+// pref was in prefs.js before goes into a comment, and back when switched off;
+// as Firefox writes prefs.js when it quits, that is done only while it is not
+// running. Takes effect when Firefox is restarted.
+const FIREFOX_BEGIN = '// Pear Up: macOS momentum (Keyboard → Trackpad). Switch it off there to remove these lines.';
+const FIREFOX_END = '// Pear Up: end of macOS momentum';
+const FIREFOX_WAS = '// Pear Up: was ';
+const FIREFOX_MULTIPLIER = 'apz.gtk.pangesture.pixel_delta_mode_multiplier';
+const FIREFOX_PREFS = [
+    ['apz.gtk.kinetic_scroll.enabled', 'true'],
+    ['apz.fling_friction', '"0.0032"'],
+    ['apz.fling_stopped_threshold', '"0.03"'],
+    ['apz.fling_min_velocity_threshold', '"0.2"'],
+    ['apz.overscroll.enabled', 'true'],
+];
+const FIREFOX_DIRS = [
+    ['.var', 'app', 'org.mozilla.firefox', '.mozilla', 'firefox'],
+    ['.var', 'app', 'org.mozilla.firefox', 'config', 'mozilla', 'firefox'],
+    ['.mozilla', 'firefox'],
+    ['.config', 'mozilla', 'firefox'],
+];
 
 // The keys macOS uses inside apps — Option+←/→ by word, Ctrl+←/→ to the next
 // desktop, Cmd+C and its kind — are libinput/10-pear-up-macos-keys.lua. Apps
@@ -1731,7 +1797,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         return page;
     }
 
-    _buildTrackpadGroup(page) {
+    _buildTrackpadGroup(page, home = GLib.get_home_dir()) {
         const group = new Adw.PreferencesGroup({
             title: 'Trackpad',
             description: 'Scroll acceleration is a plugin for libinput, which GNOME loads when you log in',
@@ -1739,19 +1805,21 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         page.add(group);
 
         const unsupported = this._libinputPluginsUnsupported();
-        const subtitle = 'Scrolling with two fingers starts slowly and speeds up as the fingers do, ' +
-            'instead of moving the page by the same amount at any speed. Takes effect at the next login.';
+        const subtitle = 'Scrolling with two fingers follows macOS’s curve: a slow movement nudges the page, ' +
+            'a quick one sends it far. Takes effect at the next login.';
         const row = new Adw.SwitchRow({ title: 'macOS-Like Scroll Acceleration', subtitle });
         row.set_subtitle_lines(0);
         group.add(row);
 
-        const strengths = Gtk.StringList.new(SCROLL_STRENGTHS.map(strength => strength.title));
-        const strengthRow = new Adw.ComboRow({
-            title: 'Strength',
-            subtitle: 'How much slower a slow scroll is',
-            model: strengths,
+        const speeds = Gtk.StringList.new(SCROLL_SPEEDS.map(speed => speed.title));
+        const speedRow = new Adw.ComboRow({
+            title: 'Scroll Speed',
+            subtitle: 'As on a MacBook, GNOME’s apps scroll as far as a Mac, and browsers glide little after a ' +
+                'flick. Medium scrolls GNOME’s apps twice that, and browsers glide as on a Mac.',
+            model: speeds,
         });
-        group.add(strengthRow);
+        speedRow.set_subtitle_lines(0);
+        group.add(speedRow);
 
         // What went wrong the last time something was written, until the next.
         let problem = null;
@@ -1775,20 +1843,29 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             row.set_sensitive(!state.foreign && (unsupported === null || state.installed));
             row.set_subtitle(problem ?? text);
 
-            // A strength written by hand gets an entry of its own, as a style
+            // A speed written by hand gets an entry of its own, as a style
             // set in Dash to Dock does, rather than reading as one of these.
-            const index = SCROLL_STRENGTHS.findIndex(strength => strength.gain === state.gain);
-            strengths.splice(SCROLL_STRENGTHS.length, strengths.get_n_items() - SCROLL_STRENGTHS.length,
-                state.installed && index < 0 ? [`Custom (${state.gain})`] : []);
-            strengthRow.set_selected(!state.installed ? SCROLL_STRENGTH_DEFAULT
-                : index < 0 ? SCROLL_STRENGTHS.length : index);
-            strengthRow.set_sensitive(state.installed);
+            // An older copy has no speed, and shows the default.
+            const index = SCROLL_SPEEDS.findIndex(speed => speed.speed === state.speed);
+            const custom = state.installed && state.speed !== null && index < 0;
+            speeds.splice(SCROLL_SPEEDS.length, speeds.get_n_items() - SCROLL_SPEEDS.length,
+                custom ? [`Custom (${state.speed})`] : []);
+            speedRow.set_selected(custom ? SCROLL_SPEEDS.length : index < 0 ? SCROLL_SPEED_DEFAULT : index);
+            speedRow.set_sensitive(state.installed);
             busy = false;
         };
         refresh();
 
-        const write = gain => {
-            problem = this._setScrollPlugin(gain);
+        // The rows below set their scale from the plugin's speed, and follow it.
+        const followers = [];
+        const write = speed => {
+            const before = this._scrollLevel();
+            problem = this._setScrollPlugin(speed);
+            const after = this._scrollLevel();
+            if (after !== before) {
+                for (const follow of followers)
+                    problem = follow(before, after) ?? problem;
+            }
             // Show what is on disk, not what was asked for.
             refresh();
         };
@@ -1801,26 +1878,41 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 refresh();
                 return;
             }
-            const strength = SCROLL_STRENGTHS[strengthRow.selected] ?? SCROLL_STRENGTHS[SCROLL_STRENGTH_DEFAULT];
-            write(row.active ? strength.gain : null);
+            const speed = SCROLL_SPEEDS[speedRow.selected] ?? SCROLL_SPEEDS[SCROLL_SPEED_DEFAULT];
+            write(row.active ? speed.speed : null);
         });
-        strengthRow.connect('notify::selected', () => {
-            const strength = SCROLL_STRENGTHS[strengthRow.selected];
-            if (busy || !strength || !this._scrollPluginState().installed)
+        speedRow.connect('notify::selected', () => {
+            const speed = SCROLL_SPEEDS[speedRow.selected];
+            if (busy || !speed || !this._scrollPluginState().installed)
                 return;
-            write(strength.gain);
+            write(speed.speed);
         });
 
-        this._buildBrowserScrollRows(group);
+        const browser = this._buildBrowserScrollRows(group, home);
+        followers.push(browser[2]);
+        const firefox = this._buildFirefoxMomentumRow(group, home);
+        followers.push(firefox[1]);
+    }
+
+    // The plugin's speed as the browsers' scale is set from it: what is
+    // installed, or 1, libinput's own rate, without it. An older copy's curve
+    // was 1 at 80 mm/s too.
+    _scrollLevel() {
+        const state = this._scrollPluginState();
+        return state.installed && state.speed ? state.speed : 1;
     }
 
     // Browser scrolling: one switch and a speed, written into the flags file of
-    // every Flatpak Chromium browser that is installed. `home` is the home
-    // directory they are looked for in.
-    _buildBrowserScrollRows(group, home = GLib.get_home_dir()) {
-        const subtitle = 'Brave, Chromium and Chrome scroll about five times as far as GNOME’s apps for the same ' +
-            'movement of the fingers, in jumps instead of a glide. This sets Chromium’s own scale for touchpad ' +
-            'scrolling. Takes effect when the browser is restarted.';
+    // every Flatpak Chromium browser that is installed, and into the desktop
+    // file of the Chromium apps that have one of the user's own. `home` is the
+    // home directory they are looked for in; `level` the plugin's speed the
+    // Mac scale is worked out from, read from the plugin when not given.
+    // Returns the two rows and what follows a change of the plugin's speed.
+    _buildBrowserScrollRows(group, home = GLib.get_home_dir(), level = null) {
+        const levelNow = () => level ?? this._scrollLevel();
+        const subtitle = 'Brave, Chromium, Chrome and ChatGPT scroll about five times as far as GNOME’s apps for ' +
+            'the same movement of the fingers, in jumps instead of a glide. This sets Chromium’s own scale for ' +
+            'touchpad scrolling. Takes effect when the app is restarted.';
         const row = new Adw.SwitchRow({ title: 'Smooth Browser Scrolling', subtitle });
         row.set_subtitle_lines(0);
         group.add(row);
@@ -1832,6 +1924,9 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             model: speeds,
         });
         group.add(speedRow);
+        const factorOf = (speed, at = levelNow()) => speed.mac ? macFactor(at) : speed.factor;
+        const indexOf = (factor, at = levelNow()) =>
+            BROWSER_SCROLL_SPEEDS.findIndex(speed => factorOf(speed, at) === factor);
 
         let problem = null;
         let busy = false;
@@ -1842,7 +1937,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             const state = this._browserScrollState(home);
             let text = subtitle;
             if (state.browsers.length === 0)
-                text = 'None of Brave, Chromium or Chrome is installed from Flathub.';
+                text = 'None of Brave, Chromium or Chrome is installed from Flathub, nor ChatGPT.';
             else if (state.foreign.length > 0)
                 text = `${subtitle} Left alone: ${state.foreign.map(target => this._tildePath(target.path)).join(', ')}, ` +
                     'which already set --enable-features. Add ' +
@@ -1850,7 +1945,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             row.set_active(state.installed);
             row.set_sensitive(state.installed || state.browsers.length > state.foreign.length);
             row.set_subtitle(problem ?? text);
-            const index = BROWSER_SCROLL_SPEEDS.findIndex(speed => speed.factor === state.factor);
+            const index = indexOf(state.factor);
             speeds.splice(BROWSER_SCROLL_SPEEDS.length, speeds.get_n_items() - BROWSER_SCROLL_SPEEDS.length,
                 state.installed && index < 0 ? [`Custom (${state.factor})`] : []);
             speedRow.set_selected(!state.installed ? BROWSER_SCROLL_SPEED_DEFAULT
@@ -1868,28 +1963,78 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             if (busy || row.active === this._browserScrollState(home).installed)
                 return;
             const speed = BROWSER_SCROLL_SPEEDS[speedRow.selected] ?? BROWSER_SCROLL_SPEEDS[BROWSER_SCROLL_SPEED_DEFAULT];
-            write(row.active ? speed.factor : null);
+            write(row.active ? factorOf(speed) : null);
         });
         speedRow.connect('notify::selected', () => {
             const speed = BROWSER_SCROLL_SPEEDS[speedRow.selected];
             if (busy || !speed || !this._browserScrollState(home).installed)
                 return;
-            write(speed.factor);
+            write(factorOf(speed));
         });
-        return [row, speedRow];
+        // Set to a Mac's scale at the speed before, the browsers get a Mac's at
+        // the new one.
+        const follow = (before, after) => {
+            const state = this._browserScrollState(home);
+            if (!state.installed || state.factor !== macFactor(before))
+                return null;
+            const failed = this._setBrowserScroll(macFactor(after), home);
+            refresh();
+            return failed;
+        };
+        return [row, speedRow, follow];
     }
 
     // The Flatpak browsers installed for this user or the system, each with the
-    // flags file it reads from its own config directory.
+    // flags file it reads from its own config directory, and the Chromium apps
+    // started from a desktop file in the user's own applications directory.
     _browserScrollTargets(home) {
-        return BROWSER_SCROLL_BROWSERS.filter(browser => [
+        const flags = BROWSER_SCROLL_BROWSERS.filter(browser => [
             GLib.build_filenamev([home, '.var', 'app', browser.app]),
             GLib.build_filenamev([home, '.local', 'share', 'flatpak', 'app', browser.app]),
             GLib.build_filenamev(['/var/lib/flatpak/app', browser.app]),
         ].some(dir => GLib.file_test(dir, GLib.FileTest.IS_DIR))).map(browser => ({
             ...browser,
+            kind: 'flags',
             path: GLib.build_filenamev([home, '.var', 'app', browser.app, 'config', browser.file]),
         }));
+        const desktops = BROWSER_SCROLL_DESKTOP_APPS.map(app => ({
+            ...app,
+            kind: 'desktop',
+            path: GLib.build_filenamev([home, '.local', 'share', 'applications', app.desktop]),
+        })).filter(app => GLib.file_test(app.path, GLib.FileTest.IS_REGULAR));
+        return [...flags, ...desktops];
+    }
+
+    // The [Desktop Entry] group of a desktop file's lines: its first and last
+    // line's index, and the index of its Exec and Pear Up's key, or -1.
+    _desktopEntry(lines) {
+        const first = lines.findIndex(line => line.trim() === '[Desktop Entry]');
+        if (first < 0)
+            return null;
+        let last = lines.length - 1;
+        for (let i = first + 1; i < lines.length; i++) {
+            if (lines[i].startsWith('[')) {
+                last = i - 1;
+                break;
+            }
+        }
+        const find = key => {
+            for (let i = first + 1; i <= last; i++) {
+                if (lines[i].startsWith(`${key}=`))
+                    return i;
+            }
+            return -1;
+        };
+        return { first, last, exec: find('Exec'), ours: find(BROWSER_SCROLL_EXEC_KEY) };
+    }
+
+    // An Exec value with the flag put in after the program.
+    _execWithFlag(exec, factor) {
+        const program = exec.startsWith('"') ? exec.match(/^"(?:[^"\\]|\\.)*"/)?.[0] : exec.match(/^\S+/)?.[0];
+        if (!program)
+            throw new Error('its Exec line names no program');
+        return `${program} --enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/${factor}` +
+            exec.slice(program.length);
     }
 
     _readTextOrNull(path) {
@@ -1918,6 +2063,18 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 foreign.push(target);
                 continue;
             }
+            if (target.kind === 'desktop') {
+                const lines = text?.split('\n') ?? [];
+                const entry = this._desktopEntry(lines);
+                const exec = entry && entry.exec >= 0 ? lines[entry.exec] : null;
+                if (exec === null)
+                    foreign.push(target);
+                else if (entry.ours >= 0)
+                    factor ??= Number(exec.match(BROWSER_SCROLL_EXEC_FLAG)?.[1] ?? NaN);
+                else if (/ --enable-features[= ]/.test(exec))
+                    foreign.push(target);
+                continue;
+            }
             const ours = text?.match(BROWSER_SCROLL_FLAG);
             if (ours)
                 factor ??= Number(ours[1]);
@@ -1935,9 +2092,13 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         const failed = [];
         for (const target of this._browserScrollTargets(home)) {
             try {
+                if (target.kind === 'desktop') {
+                    this._setDesktopScroll(target, factor);
+                    continue;
+                }
                 const text = this._readTextOrNull(target.path);
                 const lines = text === null ? [] : text.split('\n');
-                const isOurs = line => line === BROWSER_SCROLL_COMMENT ||
+                const isOurs = line => line === BROWSER_SCROLL_COMMENT || BROWSER_SCROLL_OLD_COMMENTS.includes(line) ||
                     new RegExp(BROWSER_SCROLL_FLAG.source).test(line);
                 const kept = lines.filter(line => !isOurs(line));
                 while (kept.length > 0 && kept[kept.length - 1] === '')
@@ -1968,23 +2129,245 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         return failed.length ? `Could not ${factor === null ? 'change' : 'write'} ${failed.join('; ')}` : null;
     }
 
+    // Puts the flag with `factor` into a desktop file's Exec line, keeping
+    // the line as it was in Pear Up's key, or with null puts that line back
+    // and takes the key out. The rest of the file stays as it was. An Exec of
+    // the app's own with --enable-features is left alone.
+    _setDesktopScroll(target, factor) {
+        const text = this._readTextOrNull(target.path);
+        if (text === null)
+            return;
+        const lines = text.split('\n');
+        const entry = this._desktopEntry(lines);
+        if (!entry || entry.exec < 0)
+            throw new Error('it has no Exec line');
+        let original = lines[entry.exec].slice('Exec='.length);
+        if (entry.ours >= 0)
+            original = lines[entry.ours].slice(BROWSER_SCROLL_EXEC_KEY.length + 1);
+        else if (factor === null || / --enable-features[= ]/.test(original))
+            return;
+        if (factor === null) {
+            lines[entry.exec] = `Exec=${original}`;
+            lines.splice(entry.ours, 1);
+        } else {
+            lines[entry.exec] = `Exec=${this._execWithFlag(original, factor)}`;
+            if (entry.ours >= 0)
+                lines[entry.ours] = `${BROWSER_SCROLL_EXEC_KEY}=${original}`;
+            else
+                lines.splice(entry.exec + 1, 0, `${BROWSER_SCROLL_EXEC_KEY}=${original}`);
+        }
+        Gio.File.new_for_path(target.path).replace_contents(new TextEncoder().encode(lines.join('\n')), null, false,
+            Gio.FileCreateFlags.NONE, null);
+    }
+
+    // macOS momentum in Firefox: one switch, writing the block into user.js
+    // of every Firefox profile found under `home`. Returns the row and what
+    // follows a change of the plugin's speed, which sets Firefox's scale.
+    _buildFirefoxMomentumRow(group, home = GLib.get_home_dir(), level = null) {
+        const levelNow = () => level ?? this._scrollLevel();
+        const subtitle = 'Firefox glides on after a flick for twice as long as a Mac and moves the page further ' +
+            'than other apps. This sets its glide to macOS’s, which slows by 2.5% every 8 ms, and its ' +
+            'scroll under the fingers to a Mac’s. GNOME’s apps and Chromium glide by themselves. ' +
+            'Takes effect when Firefox is restarted.';
+        const row = new Adw.SwitchRow({ title: 'macOS Momentum in Firefox', subtitle });
+        row.set_subtitle_lines(0);
+        group.add(row);
+
+        let problem = null;
+        let busy = false;
+        const refresh = () => {
+            if (busy)
+                return;
+            busy = true;
+            const state = this._firefoxMomentumState(home);
+            let text = subtitle;
+            if (state.profiles.length === 0)
+                text = 'No Firefox profile was found, from Flathub or otherwise.';
+            row.set_active(state.installed);
+            row.set_sensitive(state.installed || state.profiles.length > 0);
+            row.set_subtitle(problem ?? text);
+            busy = false;
+        };
+        refresh();
+        row.connect('notify::active', () => {
+            if (busy || row.active === this._firefoxMomentumState(home).installed)
+                return;
+            problem = this._setFirefoxMomentum(row.active ? macFactor(levelNow()) * 10 : null, home);
+            refresh();
+        });
+        const follow = (_before, after) => {
+            if (!this._firefoxMomentumState(home).installed)
+                return null;
+            const failed = this._setFirefoxMomentum(macFactor(after) * 10, home);
+            refresh();
+            return failed;
+        };
+        return [row, follow];
+    }
+
+    // The profile directories of every Firefox under `home`, from each
+    // profiles.ini found.
+    _firefoxProfiles(home) {
+        const profiles = [];
+        for (const parts of FIREFOX_DIRS) {
+            const dir = GLib.build_filenamev([home, ...parts]);
+            const keyFile = new GLib.KeyFile();
+            try {
+                keyFile.load_from_file(GLib.build_filenamev([dir, 'profiles.ini']), GLib.KeyFileFlags.NONE);
+            } catch {
+                continue;
+            }
+            for (const name of keyFile.get_groups()[0]) {
+                if (!name.startsWith('Profile'))
+                    continue;
+                let path;
+                try {
+                    path = keyFile.get_string(name, 'Path');
+                } catch {
+                    continue;
+                }
+                let relative = true;
+                try {
+                    relative = keyFile.get_string(name, 'IsRelative') !== '0';
+                } catch {
+                    // Relative unless it says otherwise, as Firefox reads it.
+                }
+                const full = relative ? GLib.build_filenamev([dir, path]) : path;
+                if (GLib.file_test(full, GLib.FileTest.IS_DIR) && !profiles.includes(full))
+                    profiles.push(full);
+            }
+        }
+        return profiles;
+    }
+
+    // The block of user.js lines with Firefox's scale `multiplier`, and the
+    // prefs.js lines it displaced in comments.
+    _firefoxBlock(multiplier, was) {
+        const prefs = [...FIREFOX_PREFS, [FIREFOX_MULTIPLIER, `"${multiplier.toFixed(1)}"`]];
+        return [
+            FIREFOX_BEGIN,
+            ...was.map(line => `${FIREFOX_WAS}${line}`),
+            ...prefs.map(([name, value]) => `user_pref("${name}", ${value});`),
+            FIREFOX_END,
+        ];
+    }
+
+    // A user.js's lines split into Pear Up's block, if any, and the rest.
+    _firefoxSplit(text) {
+        const lines = text === null ? [] : text.split('\n');
+        const begin = lines.indexOf(FIREFOX_BEGIN);
+        const end = begin < 0 ? -1 : lines.indexOf(FIREFOX_END, begin);
+        if (begin < 0 || end < 0)
+            return { block: null, rest: lines };
+        return { block: lines.slice(begin, end + 1), rest: [...lines.slice(0, begin), ...lines.slice(end + 1)] };
+    }
+
+    _firefoxMomentumState(home) {
+        const profiles = this._firefoxProfiles(home);
+        let installed = false;
+        for (const profile of profiles) {
+            try {
+                if (this._firefoxSplit(this._readTextOrNull(GLib.build_filenamev([profile, 'user.js']))).block)
+                    installed = true;
+            } catch {
+                // Unreadable is not Pear Up's.
+            }
+        }
+        return { profiles, installed };
+    }
+
+    // Whether a Firefox is running, from the names of the processes: its
+    // profile lock is no help, as a Flatpak Firefox's names a process of its
+    // own sandbox, and one left by a crash looks the same.
+    _firefoxRunning() {
+        try {
+            const proc = Gio.File.new_for_path('/proc');
+            const children = proc.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = children.next_file(null))) {
+                const name = info.get_name();
+                if (!/^\d+$/.test(name))
+                    continue;
+                const comm = this._readTextOrNull(`/proc/${name}/comm`)?.trim();
+                if (['firefox', 'firefox-bin', 'firefox-esr', 'GeckoMain'].includes(comm))
+                    return true;
+            }
+        } catch {
+            // A process that went away while being read, or no /proc.
+        }
+        return false;
+    }
+
+    // Writes the block with Firefox's scale `multiplier` into each profile's
+    // user.js, or with null takes it out again, putting back into prefs.js
+    // what the prefs were before. Returns what went wrong, or null.
+    _setFirefoxMomentum(multiplier, home) {
+        const ours = [...FIREFOX_PREFS.map(([name]) => name), FIREFOX_MULTIPLIER];
+        const prefLine = name => new RegExp(`^user_pref\\("${name.replace(/\./g, '\\.')}",`);
+        if (multiplier === null && this._firefoxRunning())
+            return 'Quit Firefox first: it writes its settings back when it quits.';
+        const failed = [];
+        for (const profile of this._firefoxProfiles(home)) {
+            const userJs = GLib.build_filenamev([profile, 'user.js']);
+            const prefsJs = GLib.build_filenamev([profile, 'prefs.js']);
+            try {
+                const { block, rest } = this._firefoxSplit(this._readTextOrNull(userJs));
+                while (rest.length > 0 && rest[rest.length - 1] === '')
+                    rest.pop();
+                const was = block ? block.filter(line => line.startsWith(FIREFOX_WAS))
+                    .map(line => line.slice(FIREFOX_WAS.length)) : null;
+                const file = Gio.File.new_for_path(userJs);
+                if (multiplier === null) {
+                    if (!block)
+                        continue;
+                    if (rest.length === 0)
+                        file.delete(null);
+                    else
+                        file.replace_contents(new TextEncoder().encode(`${rest.join('\n')}\n`), null, false,
+                            Gio.FileCreateFlags.NONE, null);
+                    // prefs.js: Pear Up's values out, what was there before back.
+                    const prefs = this._readTextOrNull(prefsJs);
+                    if (prefs !== null) {
+                        const kept = prefs.split('\n').filter(line => !ours.some(name => prefLine(name).test(line)));
+                        while (kept.length > 0 && kept[kept.length - 1] === '')
+                            kept.pop();
+                        kept.push(...was);
+                        Gio.File.new_for_path(prefsJs).replace_contents(
+                            new TextEncoder().encode(`${kept.join('\n')}\n`), null, false, Gio.FileCreateFlags.NONE, null);
+                    }
+                    continue;
+                }
+                // What prefs.js had for them before Pear Up first wrote its block.
+                const before = was ?? (this._readTextOrNull(prefsJs)?.split('\n') ?? [])
+                    .filter(line => ours.some(name => prefLine(name).test(line)));
+                rest.push(...this._firefoxBlock(multiplier, before));
+                file.replace_contents(new TextEncoder().encode(`${rest.join('\n')}\n`), null, false,
+                    Gio.FileCreateFlags.NONE, null);
+            } catch (e) {
+                failed.push(`${this._tildePath(userJs)}: ${e.message}`);
+            }
+        }
+        return failed.length ? `Could not ${multiplier === null ? 'change' : 'write'} ${failed.join('; ')}` : null;
+    }
+
     _scrollPluginPath() {
         return GLib.build_filenamev([GLib.get_user_config_dir(), 'libinput', 'plugins', SCROLL_PLUGIN]);
     }
 
-    // The plugin as this version of Pear Up ships it, with `gain` written into
-    // its strength line.
-    _scrollPluginText(gain) {
+    // The plugin as this version of Pear Up ships it, with `speed` written into
+    // its speed line.
+    _scrollPluginText(speed) {
         const [, bytes] = GLib.file_get_contents(GLib.build_filenamev([this.path, 'libinput', SCROLL_PLUGIN]));
         const source = new TextDecoder().decode(bytes);
-        if (source.match(new RegExp(SCROLL_PLUGIN_GAIN.source, 'gm'))?.length !== 1)
-            throw new Error('the plugin Pear Up ships has no strength line');
-        return source.replace(SCROLL_PLUGIN_GAIN, `local SLOW_GAIN = ${gain}`);
+        if (source.match(new RegExp(SCROLL_PLUGIN_SPEED.source, 'gm'))?.length !== 1)
+            throw new Error('the plugin Pear Up ships has no speed line');
+        return source.replace(SCROLL_PLUGIN_SPEED, `local SPEED = ${speed}`);
     }
 
-    // What is installed: Pear Up's plugin, with its gain and whether it is what
-    // this version would write; nothing; or a file of the same name that is
-    // someone else's, which is anything without Pear Up's strength line.
+    // What is installed: Pear Up's plugin, with its speed and whether it is
+    // what this version would write; nothing; or a file of the same name that
+    // is someone else's, which is anything without Pear Up's speed line or the
+    // strength line of the versions before. Those have no speed (null).
     _scrollPluginState() {
         let text;
         try {
@@ -1997,42 +2380,44 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             // Up's to replace.
             const absent = [Gio.IOErrorEnum.NOT_FOUND, Gio.IOErrorEnum.NOT_DIRECTORY]
                 .some(code => e.matches?.(Gio.IOErrorEnum, code));
-            return { installed: false, foreign: !absent, gain: null, current: true };
+            return { installed: false, foreign: !absent, speed: null, current: true };
         }
-        const gain = text.match(SCROLL_PLUGIN_GAIN);
-        if (!gain || !text.includes('Pear Up'))
-            return { installed: false, foreign: true, gain: null, current: true };
+        const speed = text.match(SCROLL_PLUGIN_SPEED);
+        const old = text.match(SCROLL_PLUGIN_OLD_GAIN);
+        if ((!speed && !old) || !text.includes('Pear Up'))
+            return { installed: false, foreign: true, speed: null, current: true };
+        if (!speed)
+            return { installed: true, foreign: false, speed: null, current: false };
         let current = true;
         try {
-            current = text === this._scrollPluginText(Number(gain[1]));
+            current = text === this._scrollPluginText(Number(speed[1]));
         } catch {
             // Without the shipped copy there is nothing to compare with.
         }
-        return { installed: true, foreign: false, gain: Number(gain[1]), current };
+        return { installed: true, foreign: false, speed: Number(speed[1]), current };
     }
 
-    // Installs the plugin with `gain`, written whole beside the old copy and
-    // moved over it, or with null removes Pear Up's copy and only that. Returns
-    // what went wrong, or null.
-    _setScrollPlugin(gain) {
+    // Installs the plugin with `speed`, or with null removes Pear Up's copy and
+    // only that. Returns what went wrong, or null.
+    _setScrollPlugin(speed) {
         const path = this._scrollPluginPath();
         if (this._scrollPluginState().foreign)
             return `${this._tildePath(path)} is not Pear Up’s, and is left alone`;
         try {
             const file = Gio.File.new_for_path(path);
-            if (gain === null) {
+            if (speed === null) {
                 if (this._scrollPluginState().installed)
                     file.delete(null);
                 return null;
             }
-            const text = this._scrollPluginText(gain);
+            const text = this._scrollPluginText(speed);
             const dir = GLib.path_get_dirname(path);
             if (GLib.mkdir_with_parents(dir, 0o755) !== 0)
                 throw new Error(`${this._tildePath(dir)} cannot be created`);
             file.replace_contents(new TextEncoder().encode(text), null, false, Gio.FileCreateFlags.NONE, null);
             return null;
         } catch (e) {
-            return `Could not ${gain === null ? 'remove' : 'write'} ${this._tildePath(path)}: ${e.message}`;
+            return `Could not ${speed === null ? 'remove' : 'write'} ${this._tildePath(path)}: ${e.message}`;
         }
     }
 

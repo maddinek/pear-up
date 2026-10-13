@@ -199,24 +199,39 @@ as `keyd` or input-remapper can do the same.
 **Scrolling that speeds up like the Mac's.** On a touchpad, libinput scrolls by the same amount for
 every millimetre two fingers travel, however slowly they go, so a gentle nudge sends the page away.
 macOS starts slowly and speeds up with the fingers. A switch in the Trackpad group of the Keyboard
-page installs a small [libinput plugin](libinput/10-pear-up-scroll-acceleration.lua) that does the
-same: while two fingers move together, the movement they share is scaled by a gain that follows
-their speed — 0.35 of libinput's rate up to 20 mm/s, rising smoothly to libinput's own at 80 mm/s
-and a little beyond for a flick — with a Strength choice for the slow end. A pinch, one finger,
-three, a palm, the click areas at the bottom and a pad pressed down are left exactly as libinput
-has them. It needs GNOME 50, whose compositor loads the user's libinput plugins, and takes effect at
-the next login; the switch says so on anything older. Switching it off removes the one file it
-installed, `~/.config/libinput/plugins/10-pear-up-scroll-acceleration.lua`.
+page installs a small [libinput plugin](libinput/10-pear-up-scroll-acceleration.lua) that gives
+libinput macOS's own curve, read off IOHIDFamily's scroll filter with a MacBook Air's table: at
+10 mm/s 0.43 of what it scrolls at 80 mm/s, at 20 mm/s 0.64, from 160 mm/s 1.08. A Scroll Speed sets
+how far that is: As on a MacBook (GNOME's apps scroll as far as a Mac), Medium (the default, twice
+that, so Chromium's glide after a flick, which grows with the square of the speed, matches a Mac's)
+or As Fast as GNOME. The first 1.2 mm of a two-finger touch pass as they are, so a slow scroll starts
+as soon as without the plugin. A pinch, one finger, three, a palm, the click areas at the bottom and
+a pad pressed down are left exactly as libinput has them. It needs GNOME 50, whose compositor loads
+the user's libinput plugins, and takes effect at the next login; the switch says so on anything
+older. Switching it off removes the one file it installed,
+`~/.config/libinput/plugins/10-pear-up-scroll-acceleration.lua`.
 
 **Browsers that scroll smoothly.** Chromium on Wayland multiplies touchpad scrolling by 12, so
 Brave, Chromium and Chrome move the page about five times as far as GNOME's own apps for the same
 movement of the fingers — tens of pixels a frame, jumps instead of a glide. Smooth Browser Scrolling,
 in the same Trackpad group, sets Chromium's own scale for it
-(`--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/2.5`, Chromium 155 and
+(`--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/<scale>`, Chromium 155 and
 later) in the flags file of each Flatpak browser installed (`~/.var/app/<app>/config/<name>-flags.conf`),
-with a speed to choose. It writes two lines and takes only those out again; a file that already has
-an `--enable-features` of its own is left alone and named. It takes effect when the browser restarts.
+and in the Exec line of ChatGPT's desktop file in `~/.local/share/applications`, keeping the line
+as it was to put back. As on a MacBook, the default, works the scale out from the plugin's speed so
+the page moves as far as on a Mac, and follows it; GNOME's apps' 2.5 and two slower ones are there
+too. It writes two lines (or the one key) and takes only those out again; a file that already has an
+`--enable-features` of its own is left alone and named. It takes effect when the app restarts.
 Electron apps read no flags file and get the feature with Electron 45.
+
+**macOS momentum in Firefox.** Firefox runs its own glide after a flick, and by default it slows by
+0.2% a millisecond, coasting on for seconds where a Mac stops within about one. macOS Momentum in
+Firefox writes a block into `user.js` of each Firefox profile (Flathub's or not): the glide slowing
+by 2.5% every 8 ms and stopping below half a pixel a frame, as WebKit's copy of macOS's momentum
+does, rubber-banding at the ends, and Firefox's touchpad scale set to a Mac's for the plugin's speed.
+What those prefs were in `prefs.js` is kept in the block and put back when it is switched off, which
+waits until Firefox is not running. GNOME's apps and Chromium glide by themselves; their glide is
+shaped by the plugin's curve.
 
 **Your own menus.** Add any number of extra top-level menus whose items run shell commands or send
 keyboard shortcuts.

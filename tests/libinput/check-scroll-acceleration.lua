@@ -198,11 +198,11 @@ end
 -- would have told libinput without the plugin, for comparison. The kernel
 -- starts on slot 4 unless told otherwise, so the first finger's slot is named;
 -- libinput reads the starting slot from the device.
-local function new_rig(slow_gain, slot)
+local function new_rig(level, slot)
     slot = slot or 4
     local rig = {
         kernel = new_kernel(slot),
-        tp = P.touchpad(ABSX, ABSY, slow_gain),
+        tp = P.touchpad(ABSX, ABSY, level),
         view = new_view(slot),
         raw = new_view(slot),
         max_events = 0,
@@ -236,7 +236,9 @@ local function mm(v) return v * RES end
 
 -- Two fingers 16 mm apart; first they rest, then move down `distance` mm at
 -- `speed` mm/s, then rest again. Returns the scroll libinput would make, as
--- the movement of the fingers' average, with and without the plugin, in mm.
+-- the movement of the fingers' average, with and without the plugin, in mm,
+-- counted from `lead` mm into the movement (2 by default): the plugin leaves
+-- the first START_MM alone, as libinput scrolls none of it.
 -- With `apart`, they move apart sideways at that speed each, a pinch.
 local function centroid(view)
     local a, b = view.slots[0], view.slots[1]
@@ -251,9 +253,15 @@ local function two_fingers(rig, opts)
     end
     step(rig, { [0] = { ax, y } }, opts)
     for _ = 1, 3 do step(rig, fingers(), opts) end
+    local per_frame = (opts.speed or 0) * FRAME_US / 1000000
+    if opts.speed and opts.speed > 0 then
+        for _ = 1, math.ceil((opts.lead or 2) / per_frame) do
+            y = y + mm(per_frame)
+            step(rig, fingers(), opts)
+        end
+    end
     local x0, y0 = centroid(rig.view)
     local rx0, ry0 = centroid(rig.raw)
-    local per_frame = (opts.speed or 0) * FRAME_US / 1000000
     local frames = opts.speed and opts.speed > 0 and math.floor((opts.distance or 0) / per_frame) or (opts.frames or 0)
     for _ = 1, frames do
         y = y + mm(per_frame)
@@ -270,22 +278,32 @@ local function two_fingers(rig, opts)
 end
 
 ---------------------------------------------------------------------------
+-- The speed the tests run at: Pear Up's default, "Balanced".
+local L = 0.7
+
 print("The gain curve")
 do
-    check("still and slow fingers get the slow gain", P.gain(0, 0.35) == 0.35 and P.gain(20, 0.35) == 0.35)
-    check("80 mm/s is libinput's own rate", near(P.gain(80, 0.35), 1, 1e-9))
-    check("a flick gets a little more, and no more than 1.15",
-        near(P.gain(200, 0.35), 1.15, 1e-9) and near(P.gain(1000, 0.35), 1.15, 1e-9))
-    check("halfway between, halfway up", near(P.gain(50, 0.35), 0.675, 1e-9))
+    check("80 mm/s is the speed setting itself", near(P.gain(80, 1), 1, 1e-9) and near(P.gain(80, 0.34), 0.34, 1e-9))
+    -- macOS's own curve (IOHIDPointerScrollFilter with a MacBook Air's table),
+    -- as a share of the 80 mm/s rate.
+    local mac = { { 3, 0.13 }, { 5, 0.19 }, { 10, 0.43 }, { 20, 0.64 }, { 40, 0.84 }, { 60, 0.94 }, { 120, 1.06 }, { 160, 1.08 } }
+    local all = true
+    for _, point in ipairs(mac) do
+        all = all and near(P.gain(point[1], 1), point[2], 1e-9)
+    end
+    check("it is macOS's curve: 0.13 at 3 mm/s, 0.43 at 10, 0.64 at 20, 1.08 from 160", all)
+    check("and stays at 1.08 past 160 mm/s", near(P.gain(400, 1), 1.08, 1e-9) and near(P.gain(5000, 1), 1.08, 1e-9))
+    check("halfway between two points, halfway between their gains", near(P.gain(50, 1), (0.84 + 0.94) / 2, 1e-9))
     local rising, last = true, -1
     for speed = 0, 300 do
-        local g = P.gain(speed, 0.35)
+        local g = P.gain(speed, L)
         rising = rising and g >= last
         last = g
     end
     check("it never falls as the speed rises", rising)
-    check("the strength only moves the slow end",
-        P.gain(0, 0.6) == 0.6 and near(P.gain(80, 0.6), 1, 1e-9) and near(P.gain(80, 0.2), 1, 1e-9))
+    check("the speed setting scales all of it alike",
+        near(P.gain(10, 0.34) / P.gain(10, 1), 0.34, 1e-9) and near(P.gain(200, 0.5) / P.gain(200, 1), 0.5, 1e-9))
+    check("still fingers get a little, not nothing", P.gain(0, 1) > 0 and P.gain(0, 1) < 0.13)
 end
 
 print("Moving together")
@@ -301,32 +319,51 @@ end
 
 print("Two fingers scrolling")
 do
-    local rig = new_rig(0.35)
+    local rig = new_rig(L)
     local out, raw = two_fingers(rig, { speed = 10, distance = 20 })
     local ratio = out / raw
-    check(string.format("slowly (10 mm/s), the scroll is about 0.35 of libinput's (%.3f)", ratio),
-        ratio > 0.33 and ratio < 0.40)
+    check(string.format("slowly (10 mm/s), the scroll is the curve's %.3f of libinput's (%.3f)", P.gain(10, L), ratio),
+        near(ratio, P.gain(10, L), 0.03))
     check("no position outside the touchpad", not rig.out_of_range)
     check("the kernel's slot is selected again after every frame", not rig.slot_mismatch)
     check("frames stay within libinput's 64 events", rig.max_events <= 64)
 
-    rig = new_rig(0.35)
+    rig = new_rig(L)
     out, raw = two_fingers(rig, { speed = 150, distance = 30 })
     ratio = out / raw
-    check(string.format("quickly (150 mm/s), it is about libinput's (%.3f)", ratio), ratio > 0.9 and ratio < 1.15)
+    check(string.format("quickly (150 mm/s), %.3f (%.3f)", P.gain(150, L), ratio), near(ratio, P.gain(150, L), 0.04))
 
-    rig = new_rig(0.35)
+    rig = new_rig(L)
     out, raw = two_fingers(rig, { speed = 40, distance = 30 })
     ratio = out / raw
-    check(string.format("in between (40 mm/s), in between (%.3f)", ratio), ratio > 0.45 and ratio < 0.75)
+    check(string.format("in between (40 mm/s), %.3f (%.3f)", P.gain(40, L), ratio), near(ratio, P.gain(40, L), 0.04))
+
+    -- A slow start: libinput needs a finger to move a millimetre before it
+    -- scrolls at all. The plugin lets that millimetre through as it is, so
+    -- libinput is told of it as soon as without the plugin.
+    rig = new_rig(L)
+    local ax, bx, y = mm(45), mm(61), mm(15)
+    step(rig, { [0] = { ax, y } })
+    for _ = 1, 3 do step(rig, { [0] = { ax, y }, [1] = { bx, y } }) end
+    local first_mm
+    for i = 1, 200 do
+        y = y + mm(3 * FRAME_US / 1e6)
+        step(rig, { [0] = { ax, y }, [1] = { bx, y } })
+        if not first_mm and math.abs(rig.view.slots[0].y - y) < 1 and (y - mm(15)) >= mm(1) then
+            first_mm = i
+        end
+    end
+    check(string.format("at 3 mm/s the first millimetre reaches libinput unscaled (after %s frames)", tostring(first_mm)),
+        first_mm ~= nil and first_mm <= 45)
 
     -- A slow scroll steps evenly. libinput scrolls by the fingers' average,
     -- and positions are whole units: rounded alike, both fingers' shifts round
     -- the same way and the average moves in whole units, at 0.35 a step of one
     -- frame twice the next. Rounded together, their sum stays within half a
     -- unit of the exact one, and no frame's step strays further than that.
-    rig = new_rig(0.35)
-    local ax, bx, ay, by = mm(45), mm(61), mm(15), mm(15)
+    rig = new_rig(L)
+    ax, bx = mm(45), mm(61)
+    local ay, by = mm(15), mm(15)
     step(rig, { [0] = { ax, ay } })
     for _ = 1, 3 do step(rig, { [0] = { ax, ay }, [1] = { bx, by } }) end
     local worst_sum, steps, last = 0, {}, nil
@@ -352,9 +389,9 @@ do
     -- Touchpads do not always report both fingers in every frame: here each
     -- frame carries one of them, by twice the step. Measured over a window
     -- they still move together.
-    rig = new_rig(0.35)
-    local ax, bx, y = mm(45), mm(61), mm(15)
-    local ay, by = y, y
+    rig = new_rig(L)
+    ax, bx, y = mm(45), mm(61), mm(15)
+    ay, by = y, y
     step(rig, { [0] = { ax, ay } })
     for _ = 1, 3 do step(rig, { [0] = { ax, ay }, [1] = { bx, by } }) end
     local _, v0 = centroid(rig.view)
@@ -366,20 +403,23 @@ do
     local _, v1 = centroid(rig.view)
     local _, r1 = centroid(rig.raw)
     ratio = (v1 - v0) / (r1 - r0)
-    check(string.format("with the fingers reported in turn, still about 0.35 (%.3f)", ratio), ratio > 0.33 and ratio < 0.42)
+    -- 10 mm/s; the first 1.2 mm of the 20 pass as they are.
+    local expect = (1.2 + 18.8 * P.gain(10, L)) / 20
+    check(string.format("with the fingers reported in turn, still about %.3f (%.3f)", expect, ratio),
+        near(ratio, expect, 0.05))
 
-    for _, strength in ipairs({ { 0.6, "light" }, { 0.2, "strong" } }) do
-        rig = new_rig(strength[1])
+    for _, speed in ipairs({ { 0.34, "MacBook" }, { 1, "GNOME" } }) do
+        rig = new_rig(speed[1])
         out, raw = two_fingers(rig, { speed = 10, distance = 20 })
         ratio = out / raw
-        check(string.format("the %s strength scales slow scrolling by about %.2f (%.3f)",
-            strength[2], strength[1], ratio), near(ratio, strength[1], 0.05))
+        check(string.format("the %s speed scales slow scrolling to %.3f (%.3f)",
+            speed[2], P.gain(10, speed[1]), ratio), near(ratio, P.gain(10, speed[1]), 0.03))
     end
 end
 
 print("What is left alone")
 do
-    local rig = new_rig(0.35)
+    local rig = new_rig(L)
     local _, _, out_x, raw_x = two_fingers(rig, { frames = 60, apart = 20 })
     local a, b = rig.view.slots[0], rig.view.slots[1]
     local ra, rb = rig.raw.slots[0], rig.raw.slots[1]
@@ -388,7 +428,7 @@ do
         string.format("plugin %d,%d %d,%d; kernel %d,%d %d,%d", a.x, a.y, b.x, b.y, ra.x, ra.y, rb.x, rb.y))
     check("and its centre does not move either", out_x == raw_x)
 
-    rig = new_rig(0.35)
+    rig = new_rig(L)
     local touched = 0
     local x, y = mm(40), mm(20)
     for _ = 1, 100 do
@@ -397,11 +437,11 @@ do
     end
     check("one finger is never touched", touched == 0)
 
-    rig = new_rig(0.35)
+    rig = new_rig(L)
     local out, raw = two_fingers(rig, { speed = 10, distance = 10, button = true })
     check("two fingers while the pad is pressed down are not touched", out == raw)
 
-    rig = new_rig(0.35)
+    rig = new_rig(L)
     -- The second finger rests in the bottom 10.75 mm (15% of 71.7 mm).
     step(rig, { [0] = { mm(40), mm(20) } })
     local resting = { mm(70), mm(66) }
@@ -414,7 +454,7 @@ do
     check("a finger in the button area keeps the other one untouched",
         rig.view.slots[0].y == rig.raw.slots[0].y)
 
-    rig = new_rig(0.35)
+    rig = new_rig(L)
     step(rig, { [0] = { mm(40), mm(20) } })
     fy = mm(20)
     for _ = 1, 60 do
@@ -424,7 +464,7 @@ do
     check("nor is anything while one of them is a palm",
         rig.view.slots[0].y == rig.raw.slots[0].y and rig.view.slots[1].y == rig.raw.slots[1].y)
 
-    rig = new_rig(0.35)
+    rig = new_rig(L)
     step(rig, { [0] = { mm(40), mm(20) } })
     fy = mm(20)
     for _ = 1, 60 do
@@ -434,7 +474,7 @@ do
     check("three fingers are not touched",
         rig.view.slots[0].y == rig.raw.slots[0].y and rig.view.slots[2].y == rig.raw.slots[2].y)
 
-    rig = new_rig(0.35)
+    rig = new_rig(L)
     -- One finger resting while the other moves: libinput's own call, scroll or
     -- thumb, is made on what the kernel sent.
     step(rig, { [0] = { mm(40), mm(20) } })
@@ -450,7 +490,7 @@ end
 
 print("Fingers lifting")
 do
-    local rig = new_rig(0.35)
+    local rig = new_rig(L)
     two_fingers(rig, { speed = 10, distance = 20 })
     local before = rig.view.slots[0].y
     local offset = rig.view.slots[0].y - rig.raw.slots[0].y
@@ -475,7 +515,7 @@ do
 
     -- A new touch at exactly where the last one in its slot left off: the
     -- kernel sends no position for it, and libinput must still be told.
-    rig = new_rig(0.35)
+    rig = new_rig(L)
     two_fingers(rig, { speed = 10, distance = 20 })
     local kx, ky = rig.kernel.slots[1].x, rig.kernel.slots[1].y
     step(rig, { [0] = { rig.kernel.slots[0].x, rig.kernel.slots[0].y } })
@@ -487,24 +527,30 @@ end
 
 print("Remainders")
 do
-    local rig = new_rig(0.35)
+    local rig = new_rig(L)
     local x, y = mm(45), mm(15)
     step(rig, { [0] = { x, y } })
     for _ = 1, 3 do step(rig, { [0] = { x, y }, [1] = { x + mm(16), y } }) end
+    -- One device unit per frame, 5.2 mm/s: every frame's share is a seventh
+    -- of a unit, and only by keeping the fractions does that add up. Counted
+    -- once the first START_MM is past.
+    for _ = 1, 60 do
+        y = y + 1
+        step(rig, { [0] = { x, y }, [1] = { x + mm(16), y } })
+    end
     local _, y0 = centroid(rig.view)
-    -- One device unit per frame, 5 mm/s: every frame's share is 0.35 of a
-    -- unit, and only by keeping the fractions does that add up.
     for _ = 1, 300 do
         y = y + 1
         step(rig, { [0] = { x, y }, [1] = { x + mm(16), y } })
     end
     local _, y1 = centroid(rig.view)
-    check(string.format("300 single units at the slow gain make 105 (%.1f)", y1 - y0), near(y1 - y0, 105, 2))
+    local want = 300 * P.gain(1e6 / FRAME_US / RES, L)
+    check(string.format("300 single units at the slow end make %.1f (%.1f)", want, y1 - y0), near(y1 - y0, want, 2))
 end
 
 print("The edges of the touchpad")
 do
-    local rig = new_rig(0.35)
+    local rig = new_rig(L)
     local x, y = mm(45), mm(60)
     step(rig, { [0] = { x, y } })
     for _ = 1, 3 do step(rig, { [0] = { x, y }, [1] = { x + mm(16), y } }) end
@@ -530,7 +576,7 @@ end
 
 print("Before the kernel has named a slot")
 do
-    local tp = P.touchpad(ABSX, ABSY, 0.35)
+    local tp = P.touchpad(ABSX, ABSY, L)
     local frame = {
         { usage = evdev.ABS_MT_TRACKING_ID, value = 7 },
         { usage = evdev.ABS_MT_POSITION_X, value = 1000 },
@@ -542,7 +588,7 @@ do
     -- Just after login: the kernel is still on slot 0 from boot and never
     -- names it for the first finger, whose touch is then never seen to begin.
     -- That touch is left alone throughout; the next one is not.
-    local rig = new_rig(0.35, 0)
+    local rig = new_rig(L, 0)
     local x, y = mm(45), mm(15)
     step(rig, { [0] = { x, y } })
     for _ = 1, 3 do step(rig, { [0] = { x, y }, [1] = { x + mm(16), y } }) end
@@ -556,11 +602,11 @@ do
     check("from a cold start, a touch that began unseen is left alone", untouched)
     step(rig, {})
     local out, raw = two_fingers(rig, { speed = 10, distance = 20 })
-    check(string.format("and the next two-finger touch is slowed (%.3f)", out / raw), out / raw < 0.40)
+    check(string.format("and the next two-finger touch is slowed (%.3f)", out / raw), near(out / raw, P.gain(10, L), 0.03))
     check("without a position outside the touchpad or a slot left selected",
         not rig.out_of_range and not rig.slot_mismatch)
     check("a touchpad without a resolution is left alone",
-        P.touchpad({ minimum = 0, maximum = 100, resolution = 0 }, ABSY, 0.35) == nil)
+        P.touchpad({ minimum = 0, maximum = 100, resolution = 0 }, ABSY, L) == nil)
 end
 
 print("Registering with libinput")
@@ -605,15 +651,15 @@ do
     check("nor a touchpad without a resolution", blind.handlers["evdev-frame"] == nil)
 end
 
-print("The strength line Pear Up rewrites")
+print("The speed line Pear Up rewrites")
 do
     local f = assert(io.open(plugin_path))
     local source = f:read("a")
     f:close()
     local count = 0
-    for _ in source:gmatch("\nlocal SLOW_GAIN = [%d.]+\n") do count = count + 1 end
-    check("there is exactly one SLOW_GAIN line, as prefs.js expects", count == 1)
-    local strong = source:gsub("\nlocal SLOW_GAIN = [%d.]+\n", "\nlocal SLOW_GAIN = 0.2\n")
+    for _ in source:gmatch("\nlocal SPEED = [%d.]+\n") do count = count + 1 end
+    check("there is exactly one SPEED line, as prefs.js expects", count == 1)
+    local strong = source:gsub("\nlocal SPEED = [%d.]+\n", "\nlocal SPEED = 0.34\n")
     local calls = {}
     local fake = {}
     function fake:register() return 1 end
@@ -640,6 +686,10 @@ do
     local y = mm(15)
     feed({ [0] = { mm(45), y } })
     for _ = 1, 3 do feed({ [0] = { mm(45), y }, [1] = { mm(61), y } }) end
+    for _ = 1, 30 do
+        y = y + mm(0.08)
+        feed({ [0] = { mm(45), y }, [1] = { mm(61), y } })
+    end
     local _, v0 = centroid(view)
     local _, r0 = centroid(raw)
     for _ = 1, 250 do
@@ -649,8 +699,9 @@ do
     local _, v1 = centroid(view)
     local _, r1 = centroid(raw)
     local ratio = (v1 - v0) / (r1 - r0)
-    check(string.format("a copy with 0.2 written in scrolls slowly at about 0.2 (%.3f)", ratio), near(ratio, 0.2, 0.04))
-    check("the module it returns is the same arithmetic", Q.gain(0, 0.2) == 0.2)
+    check(string.format("a copy with 0.34 written in scrolls 10 mm/s at %.3f (%.3f)", P.gain(10, 0.34), ratio),
+        near(ratio, P.gain(10, 0.34), 0.03))
+    check("the module it returns is the same arithmetic, at 0.34", near(Q.gain(80), 0.34, 1e-9))
 end
 
 print()
