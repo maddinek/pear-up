@@ -2878,6 +2878,42 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             'and leaves Adwaita for Steam alone');
 }
 
+// Swipe Between Desktops Like macOS, in the Trackpad group of the Keyboard
+// page: off by default, writes its key, follows it, and leaves the touchpad's
+// own Natural Scrolling alone — that is content scrolling's, not this.
+{
+    const settings = preferences.getSettings();
+    const touchpad = preferences._settingsForSchema('org.gnome.desktop.peripherals.touchpad');
+    const page = pages.find(candidate => candidate.title === 'Keyboard');
+    const problemsBefore = problems.length;
+    const title = 'Swipe Between Desktops Like macOS';
+    const expect = (label, got, wanted) => {
+        if (got !== wanted)
+            problems.push(`gesture direction: ${label} is ${got}, expected ${wanted}`);
+    };
+    const row = page && findWidget(page, widget =>
+        widget instanceof Adw.SwitchRow && widget.title === title);
+    const group = row?.get_ancestor(Adw.PreferencesGroup);
+    if (!row) {
+        problems.push(`the Keyboard page has no "${title}" switch`);
+    } else {
+        expect('its group', group?.title, 'Trackpad');
+        expect('the default of macos-gesture-direction',
+            settings.get_default_value('macos-gesture-direction').unpack(), false);
+        expect(`"${title}" at first`, row.active, false);
+        const natural = touchpad.get_boolean('natural-scroll');
+        row.active = true;
+        expect('macos-gesture-direction after switching on', settings.get_boolean('macos-gesture-direction'), true);
+        expect('natural-scroll after switching on', touchpad.get_boolean('natural-scroll'), natural);
+        settings.set_boolean('macos-gesture-direction', false);
+        expect(`"${title}" after an outside change`, row.active, false);
+        settings.reset('macos-gesture-direction');
+    }
+    if (problems.length === problemsBefore)
+        print('  gesture direction: in Keyboard ▸ Trackpad, off by default, written and followed, ' +
+            'natural scrolling untouched');
+}
+
 if (problems.length > 0) {
     for (const problem of problems)
         print(`FAIL: ${problem}`);

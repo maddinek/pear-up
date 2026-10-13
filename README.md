@@ -69,6 +69,10 @@ and switching one off gives back what GNOME does.
 move: a keyboard switch and the slide after a swipe land on a spring in about 0.4 s, pulled past the
 first or last desktop they stretch with resistance and spring back, and the switch shortcut there gives
 a small bump (the stretch needs GNOME 49 or later).
+**Swipe Between Desktops Like macOS**, in Keyboard ▸ Trackpad and off by default, makes the three-finger
+swipes follow the fingers even with Natural Scrolling off, which GNOME otherwise turns round: left brings
+in the desktop on the right, up opens the overview, down goes back. Two-finger scrolling keeps its own
+direction.
 [Just Perfection](https://extensions.gnome.org/extension/3843/just-perfection/) is no longer needed
 for the macOS layout: none of this wants it, and neither does Dash to Dock's own switch for starting
 without the overview. Left installed at its defaults, Just Perfection does not get in the way.

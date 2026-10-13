@@ -156,6 +156,11 @@
       <summary>Switch desktops on a spring, with a rubber band at the ends</summary>
       <description>As Spaces move on macOS: a keyboard switch, and the slide after a three- or four-finger swipe, land softly in about 0.4 seconds; pulled past the first or last desktop they stretch and spring back, and the switch shortcut there gives a small bump. With dynamic workspaces the last desktop is the empty one GNOME keeps.</description>
     </key>
+    <key name="macos-gesture-direction" type="b">
+      <default>false</default>
+      <summary>Swipe the desktops with the fingers, whatever the scrolling direction</summary>
+      <description>GNOME turns its three-finger swipes round when Natural Scrolling is off. macOS keeps them apart: a swipe to the left brings in the desktop on the right, a swipe up opens Mission Control (here the overview, and again the app grid), a swipe down goes back. Content scrolling keeps its own direction.</description>
+    </key>
     <key name="always-show-workspace-thumbnails" type="b">
       <default>true</default>
       <summary>Always show the desktops along the top of the overview</summary>

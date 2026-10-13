@@ -1512,6 +1512,195 @@ try:
 except OSError as exc:
     print(f"  note: the shell's log could not be read ({exc})")
 
+# ------------------------------------------------- swipe direction like macOS
+# Swipe Between Desktops Like macOS (macos-gesture-direction). GNOME turns its
+# three-finger swipes round with Natural Scrolling off; macOS never does. Each
+# swipe goes through the gesture's own event handler, as the touchpad feeds it,
+# with Natural Scrolling on and off: fingers to the left should bring in the
+# desktop on the right (the tracker's progress rises), fingers up should open
+# the overview, whenever the switch is on, and only with Natural Scrolling on
+# when it is off. The setting itself must never change.
+def touchpad_natural(value=None):
+    if value is not None:
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.peripherals.touchpad",
+                        "natural-scroll", value], check=False)
+        GLib.usleep(200 * 1000)
+    return subprocess.run(["gsettings", "get", "org.gnome.desktop.peripherals.touchpad",
+                           "natural-scroll"], capture_output=True, text=True,
+                          check=False).stdout.strip()
+
+
+def gesture_state():
+    return json.loads(hook("GetGestureState"))
+
+
+def feed_swipe(target, dx, dy, steps=5):
+    return json.loads(hook("FeedSwipe", (target, dx, dy, steps), "(sddi)"))
+
+
+def overview_closed(timeout=3.0):
+    for _ in range(int(timeout / 0.05)):
+        if not json.loads(hook("GetStartupState"))["overviewVisible"]:
+            return True
+        GLib.usleep(50 * 1000)
+    return False
+
+
+def swipe_directions():
+    """Which way fingers left and fingers up went: True is the macOS way."""
+    left = feed_swipe("desktops", -16, 0)
+    settle()
+    up = feed_swipe("overview", 0, -16)
+    overview_closed()
+    return {
+        "left": left and sum(left["deltas"]) > 0 and max(left["progress"] or [0]) > 0.1,
+        "leftBack": left and sum(left["deltas"]) < 0 and max(left["progress"] or [0]) == 0,
+        "up": up and sum(up["deltas"]) > 0 and max(up["progress"] or [0]) > 0.1,
+        "upBack": up and sum(up["deltas"]) < 0 and max(up["progress"] or [0]) == 0,
+        "detail": f"left: deltas {sum(left['deltas']) if left else '-'}, "
+                  f"progress {max(left['progress'] or [0]) if left else '-':.2f}; "
+                  f"up: deltas {sum(up['deltas']) if up else '-'}, "
+                  f"progress {max(up['progress'] or [0]) if up else '-'}",
+    }
+
+
+GESTURE_KEY = "macos-gesture-direction"
+print()
+print("  swipe direction:")
+natural_before = touchpad_natural()
+direction_window = None
+try:
+    pear_up_setting(GESTURE_KEY, "false")
+    pear_up_setting("spaces-spring", "false")
+    GLib.usleep(400 * 1000)
+    direction_window = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(20):
+        GLib.usleep(500 * 1000)
+        if test_windows() >= 1:
+            break
+    hook("FocusFirstWindow")
+    GLib.usleep(800 * 1000)
+    recorded = json.loads(hook("RecordGestures"))
+    names = {g["name"] for g in recorded["gestures"]}
+    check("off by default, every swipe gesture has the shell's own touchpad settings",
+          pear_up_value(GESTURE_KEY) == "false"
+          and {"desktops", "overview", "overview desktops", "app grid"} <= names
+          and all(g["shells"] for g in recorded["gestures"]),
+          f"{sorted(names)}, {len(recorded['gestures'])} gestures")
+
+    for natural in ("false", "true"):
+        touchpad_natural(natural)
+        pear_up_setting(GESTURE_KEY, "false")
+        GLib.usleep(300 * 1000)
+        plain = swipe_directions()
+        if natural == "false":
+            check("off, with Natural Scrolling off, GNOME's swipes are turned round",
+                  plain["leftBack"] and plain["upBack"], plain["detail"])
+        else:
+            check("off, with Natural Scrolling on, GNOME's swipes already follow the fingers",
+                  plain["left"] and plain["up"], plain["detail"])
+
+        pear_up_setting(GESTURE_KEY, "true")
+        GLib.usleep(300 * 1000)
+        mac = swipe_directions()
+        state = gesture_state()
+        check(f"on, with Natural Scrolling {'on' if natural == 'true' else 'off'}, fingers left "
+              "bring in the desktop on the right and fingers up open the overview",
+              mac["left"] and mac["up"], mac["detail"])
+        check(f"and Natural Scrolling is still {natural}, for content scrolling",
+              touchpad_natural() == natural and state["natural"] == (natural == "true")
+              and all(g["reads"] and not g["shells"] for g in state["gestures"]),
+              f"setting {touchpad_natural()}, gestures read "
+              f"{[(g['name'], g['reads'], g['shells']) for g in state['gestures']]}")
+
+    # With Springy Desktop Switching, which wraps the same tracker's methods:
+    # a quick swipe left with Natural Scrolling off lands on the next desktop.
+    touchpad_natural("false")
+    for first_off in ("spaces-spring", GESTURE_KEY):
+        pear_up_setting("spaces-spring", "true")
+        pear_up_setting(GESTURE_KEY, "true")
+        GLib.usleep(400 * 1000)
+        before = settle()
+        flung = feed_swipe("desktops", -60, 0, 4)
+        after = settle()
+        moved = before["active"] == 0 and after["active"] == 1
+        if after["active"] != 0:
+            feed_swipe("desktops", 60, 0, 4)
+        back = settle()
+        check("with the spring as well, a swipe left goes to the desktop on the right and "
+              "a swipe right comes back",
+              moved and back["active"] == 0,
+              f"desktop {before['active']} → {after['active']} → {back['active']}, "
+              f"tracker own {after['trackerOwn']}")
+
+        pear_up_setting(first_off, "false")
+        GLib.usleep(300 * 1000)
+        middle = gesture_state()
+        spring = switch_state()
+        if first_off == "spaces-spring":
+            check("the spring off first, the swipes still follow the fingers and the tracker is the shell's",
+                  all(not g["shells"] for g in middle["gestures"]) and not spring["trackerOwn"],
+                  f"tracker own {spring['trackerOwn']}")
+        else:
+            check("the direction off first, the spring keeps its tracker and the gestures are the shell's",
+                  all(g["shells"] for g in middle["gestures"] if g["recorded"])
+                  and bool(spring["controllerOwn"]),
+                  f"controller own {spring['controllerOwn']}")
+        pear_up_setting("spaces-spring", "false")
+        pear_up_setting(GESTURE_KEY, "false")
+        GLib.usleep(300 * 1000)
+        both_off = gesture_state()
+        spring = switch_state()
+        check("both off, the gestures and the tracker are the shell's again",
+              all(g["shells"] for g in both_off["gestures"] if g["recorded"])
+              and not spring["trackerOwn"] and not spring["controllerOwn"])
+
+    # Disabled with the switch on, as at every lock, and enabled again.
+    pear_up_setting(GESTURE_KEY, "true")
+    GLib.usleep(300 * 1000)
+    call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
+         "DisableExtension", (UUID,), "(s)")
+    GLib.usleep(1500 * 1000)
+    locked = gesture_state()
+    plain = swipe_directions()
+    check("Pear Up disabled with it on, every gesture has the shell's settings back and turns round again",
+          all(g["shells"] for g in locked["gestures"] if g["recorded"])
+          and plain["leftBack"] and plain["upBack"], plain["detail"])
+    call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
+         "EnableExtension", (UUID,), "(s)")
+    GLib.usleep(2500 * 1000)
+    unlocked = gesture_state()
+    mac = swipe_directions()
+    check("enabled again, the swipes follow the fingers once more",
+          all(not g["shells"] for g in unlocked["gestures"] if g["recorded"])
+          and mac["left"] and mac["up"], mac["detail"])
+
+    for value in ("false", "true", "false", "true", "false"):
+        pear_up_setting(GESTURE_KEY, value)
+        GLib.usleep(120 * 1000)
+    GLib.usleep(300 * 1000)
+    final = gesture_state()
+    check("switched on and off repeatedly, it leaves every gesture as the shell made it",
+          all(g["shells"] for g in final["gestures"] if g["recorded"]),
+          f"{[(g['name'], g['shells']) for g in final['gestures']]}")
+except (GLib.Error, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+    check("the swipe direction could be exercised", False, str(exc).splitlines()[0])
+finally:
+    pear_up_setting(GESTURE_KEY, "false")
+    pear_up_setting("spaces-spring", "false")
+    touchpad_natural(natural_before)
+    try:
+        if switch_state()["active"] != 0:
+            hook("PressKeys", (["Control_L", "Alt_L", "Left"],), "(as)")
+            settle()
+    except GLib.Error:
+        pass
+    if direction_window:
+        direction_window.terminate()
+        direction_window.wait()
+        GLib.usleep(800 * 1000)
+
 # ------------------------------------------------------- automatic brightness
 # From GNOME 49 the shell sets the backlight itself, and gnome-settings-daemon
 # sends it a target level over D-Bus whenever the light changes. The container

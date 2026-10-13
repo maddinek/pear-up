@@ -43,6 +43,18 @@ it back when they are switched off.
   banners are not in the corner, and leaves GNOME's drop where those methods
   are missing.
 
+- **Swipe Between Desktops Like macOS** (Keyboard ▸ Trackpad, off by default).
+  GNOME turns its three-finger swipes round when Natural Scrolling is off; with
+  this on they follow the fingers whatever that setting says, as Spaces and
+  Mission Control do: a swipe to the left brings in the desktop on the right, a
+  swipe up opens the overview (and again the app grid), a swipe down goes back.
+  Covers the desktop switcher, the overview, the overview's desktops, the app
+  grid and its folders; the on-screen keyboard and the lock screen keep GNOME's
+  way. Natural Scrolling itself is not touched, so two-finger scrolling keeps
+  its direction. Each gesture's `_touchpadSettings` answers Natural Scrolling
+  with on while the switch is on, beneath Springy Desktop Switching's wrappers.
+  GNOME has no App Exposé, so a swipe down on the desktop still does nothing.
+
 - **Springy Desktop Switching** (General ▸ Desktop, off by default). Desktops
   move the way Spaces do on macOS: a keyboard switch, and the slide after a
   three- or four-finger swipe is let go, land on a critically damped spring in
