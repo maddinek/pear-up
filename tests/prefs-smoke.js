@@ -2527,8 +2527,8 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         '// Pear Up: macOS momentum (Keyboard → Trackpad). Switch it off there to remove these lines.',
         ...was.map(line => `// Pear Up: was ${line}`),
         'user_pref("apz.gtk.kinetic_scroll.enabled", true);',
-        'user_pref("apz.fling_friction", "0.0032");',
-        'user_pref("apz.fling_stopped_threshold", "0.03");',
+        'user_pref("apz.fling_friction", "0.0015");',
+        'user_pref("apz.fling_stopped_threshold", "0.1");',
         'user_pref("apz.fling_min_velocity_threshold", "0.2");',
         'user_pref("apz.overscroll.enabled", true);',
         `user_pref("apz.gtk.pangesture.pixel_delta_mode_multiplier", "${multiplier}");`,
@@ -2545,7 +2545,7 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     expect('a profile after the plugin went to 0.34', read(userA), `${block('24.6')}\n`);
 
     // Firefox has run and written Pear Up's values into prefs.js.
-    write(prefsB, '// Mozilla User Preferences\n\nuser_pref("apz.fling_friction", "0.0032");\n' +
+    write(prefsB, '// Mozilla User Preferences\n\nuser_pref("apz.fling_friction", "0.0015");\n' +
         'user_pref("apz.gtk.pangesture.pixel_delta_mode_multiplier", "24.6");\nuser_pref("browser.startup.page", 3);\n');
     running = true;
     [row] = rowOf(0.34);

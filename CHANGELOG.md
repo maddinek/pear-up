@@ -26,8 +26,9 @@ it back when they are switched off.
   the old 0.35). Smooth Browser Scrolling gains As on a MacBook (the default,
   Chromium's scale worked out from the plugin's speed and following it) and
   covers ChatGPT through its desktop file's Exec line. New switch **macOS
-  Momentum in Firefox**: a user.js block per profile (glide τ 316 ms like
-  macOS, stop at 0.03 px/ms, overscroll, touchpad scale to a Mac's), with the
+  Momentum in Firefox**: a user.js block per profile (friction 0.0015, stop
+  at 0.1 px/ms: the distance and length of a MacBook Air's glide as measured
+  with AppKit, overscroll, touchpad scale to a Mac's), with the
   prefs.js values it displaced put back when switched off. Numbers and
   sources: the libinput test prints the curve through real libinput 1.31.3.
 
