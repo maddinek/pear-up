@@ -14,6 +14,23 @@ it back when they are switched off.
 
 ### Added
 
+- **Scrolling as on a MacBook** (Keyboard ▸ Trackpad). The scroll plugin's
+  curve is now macOS's own (IOHIDPointerScrollFilter with a MacBook Air's
+  table): 0.43 of the 80 mm/s rate at 10 mm/s, 0.64 at 20, 1.08 from 160,
+  measured over 70 ms like macOS's nine events. Strength (the slow end) is
+  replaced by Scroll Speed — As on a MacBook (0.34 of libinput's rate at
+  80 mm/s), Medium (0.7, default), As Fast as GNOME (1) — written into a
+  `SPEED` line; a copy with the old `SLOW_GAIN` line is updated at the default
+  speed. The first 1.2 mm of a touch pass unscaled, so libinput's
+  one-millimetre decision no longer delays a slow scroll (it took 2.9 mm at
+  the old 0.35). Smooth Browser Scrolling gains As on a MacBook (the default,
+  Chromium's scale worked out from the plugin's speed and following it) and
+  covers ChatGPT through its desktop file's Exec line. New switch **macOS
+  Momentum in Firefox**: a user.js block per profile (glide τ 316 ms like
+  macOS, stop at 0.03 px/ms, overscroll, touchpad scale to a Mac's), with the
+  prefs.js values it displaced put back when switched off. Numbers and
+  sources: the libinput test prints the curve through real libinput 1.31.3.
+
 - **Notifications Slide In from the Right.** A new switch under Notifications
   at the Top Right, off by default: a banner comes in from beyond the right
   edge of the screen (an ease-out over about a third of a second, with no

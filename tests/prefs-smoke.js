@@ -2213,7 +2213,7 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
 }
 
 // Scroll acceleration is one file, which the switch installs into the user's
-// libinput plugin directory with the strength written into it, and removes
+// libinput plugin directory with the speed written into it, and removes
 // again. Only GNOME 50 and later load it, so before that the switch is greyed
 // and writes nothing. The file goes into the runner's config directory, like
 // the gtk.css ones, and nothing is written without one.
@@ -2229,7 +2229,7 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     const rowsOf = (prefs = new Preferences(metadata)) => {
         const page = prefs._buildKeyboardPage();
         windowsKept.push(page);
-        return [findWidget(page, titled(Adw.SwitchRow, TITLE)), findWidget(page, titled(Adw.ComboRow, 'Strength'))];
+        return [findWidget(page, titled(Adw.SwitchRow, TITLE)), findWidget(page, titled(Adw.ComboRow, 'Scroll Speed'))];
     };
     const keyboard = pages.find(page => page.title === 'Keyboard');
     const configDir = GLib.get_user_config_dir();
@@ -2247,7 +2247,7 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(`${configDir}/libinput`)}`);
     };
     const source = read(`${extensionDir}/libinput/10-pear-up-scroll-acceleration.lua`);
-    const withGain = gain => source.replace(/^local SLOW_GAIN = [0-9.]+$/m, `local SLOW_GAIN = ${gain}`);
+    const withSpeed = speed => source.replace(/^local SPEED = [0-9.]+$/m, `local SPEED = ${speed}`);
 
     if (!keyboard || !findWidget(keyboard, titled(Adw.SwitchRow, TITLE))) {
         problems.push('the Keyboard page has no scroll acceleration switch');
@@ -2267,8 +2267,8 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             print(`  scroll acceleration: greyed out on GNOME ${shell}, saying it needs GNOME 50`);
     } else if (!ours) {
         print('  scroll acceleration: not driven, the runner has not given this process a config directory of its own');
-    } else if (source === null || !/^local SLOW_GAIN = [0-9.]+$/m.test(source)) {
-        problems.push('scroll acceleration: the plugin is not in libinput/ or has no SLOW_GAIN line');
+    } else if (source === null || !/^local SPEED = [0-9.]+$/m.test(source)) {
+        problems.push('scroll acceleration: the plugin is not in libinput/ or has no SPEED line');
     } else {
         reset();
         write(`${pluginDir}/20-of-my-own.lua`, 'libinput:register({1})\n');
@@ -2279,19 +2279,19 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         expect('the strength while off', strength.selected, 1);
 
         row.active = true;
-        expect('the plugin after switching on', read(target), withGain(0.35));
+        expect('the plugin after switching on', read(target), withSpeed(0.7));
         expect('the strength after switching on, sensitive', strength.sensitive, true);
         strength.selected = 2;
-        expect('the plugin at Strong', read(target), withGain(0.2));
+        expect('the plugin at As Fast as GNOME', read(target), withSpeed(1));
         strength.selected = 0;
-        expect('the plugin at Light', read(target), withGain(0.6));
+        expect('the plugin at As on a MacBook', read(target), withSpeed(0.34));
 
         [row, strength] = rowsOf();
         expect('the switch reopened', row.active, true);
         expect('the strength reopened', strength.selected, 0);
 
         // A strength written by hand reads as itself, not as one of the three.
-        write(target, withGain(0.5));
+        write(target, withSpeed(0.5));
         [row, strength] = rowsOf();
         expect('the strengths with one written by hand', strength.model.get_n_items(), 4);
         expect('the strength written by hand', strength.model.get_string(strength.selected), 'Custom (0.5)');
@@ -2303,13 +2303,25 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         expect('the plugin directory after switching off', GLib.file_test(pluginDir, GLib.FileTest.IS_DIR), true);
 
         // A copy from another version of Pear Up is still Pear Up's, and says so.
-        write(target, `${withGain(0.35)}-- an older line\n`);
+        write(target, `${withSpeed(0.7)}-- an older line\n`);
         [row] = rowsOf();
         expect('the switch with an older copy', row.active, true);
         if (!/another version/.test(row.subtitle ?? ''))
             problems.push(`scroll acceleration: an older copy is not mentioned (${row.subtitle})`);
         row.active = false;
         expect('the older copy after switching off', read(target), null);
+
+        // So is one from before the speed line, with the strength line of then:
+        // shown at the default speed, and replaced when a speed is chosen.
+        write(target, '-- Pear Up\nlocal SLOW_GAIN = 0.35\n');
+        [row, strength] = rowsOf();
+        expect('the switch with a copy from before the speed line', row.active, true);
+        expect('its speed', strength.selected, 1);
+        if (!/another version/.test(row.subtitle ?? ''))
+            problems.push(`scroll acceleration: a copy from before the speed line is not mentioned (${row.subtitle})`);
+        strength.selected = 0;
+        expect('it, after choosing a speed', read(target), withSpeed(0.34));
+        row.active = false;
 
         // A file of the same name that is not Pear Up's is never touched.
         write(target, 'print("mine")\n');
@@ -2334,7 +2346,7 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
 
         reset();
         if (problems.length === problemsBefore)
-            print('  scroll acceleration: installs and removes only its own file, with the strength written in');
+            print('  scroll acceleration: installs and removes only its own file, with the speed written in');
     }
 }
 
@@ -2355,12 +2367,15 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
         GLib.file_set_contents(path, new TextEncoder().encode(text));
     };
+    // The plugin's speed the Mac scale is worked out from: 1, as without it,
+    // so As on a MacBook is 0.84.
     const rowsOf = () => {
         const group = new Adw.PreferencesGroup();
         windowsKept.push(group);
-        return new Preferences(metadata)._buildBrowserScrollRows(group, home);
+        return new Preferences(metadata)._buildBrowserScrollRows(group, home, 1);
     };
-    const comment = '# Pear Up: touchpad scrolling as far as in GNOME’s apps (Keyboard → Trackpad)';
+    const comment = '# Pear Up: touchpad scrolling at macOS’s or GNOME’s scale (Keyboard → Trackpad)';
+    const oldComment = '# Pear Up: touchpad scrolling as far as in GNOME’s apps (Keyboard → Trackpad)';
     const flag = factor => `--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/${factor}`;
     const brave = `${home}/.var/app/com.brave.Browser/config/brave-flags.conf`;
     const chromium = `${home}/.var/app/org.chromium.Chromium/config/chromium-flags.conf`;
@@ -2383,15 +2398,32 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     expect('the switch with a browser, sensitive', row.sensitive, true);
     expect('the speed while off, sensitive', speed.sensitive, false);
     row.active = true;
-    expect('Brave\'s file after switching on', read(brave), `--password-store=basic\n${comment}\n${flag(2.5)}\n`);
+    expect('Brave\'s file after switching on', read(brave), `--password-store=basic\n${comment}\n${flag(0.84)}\n`);
     expect('Chromium\'s file of its own after switching on', read(chromium), theirs);
     if (!/Left alone: .*chromium-flags\.conf/.test(row.subtitle ?? ''))
         problems.push(`browser scrolling: the file left alone is not named (${row.subtitle})`);
-    speed.selected = 2;
+    speed.selected = 3;
     expect('Brave\'s file at Slowest', read(brave), `--password-store=basic\n${comment}\n${flag(1)}\n`);
     [row, speed] = rowsOf();
     expect('the switch reopened', row.active, true);
-    expect('the speed reopened', speed.selected, 2);
+    expect('the speed reopened', speed.selected, 3);
+    speed.selected = 1;
+    expect('Brave\'s file at As in GNOME’s Apps', read(brave), `--password-store=basic\n${comment}\n${flag(2.5)}\n`);
+    // The lines of the version before are Pear Up's too.
+    write(brave, `--password-store=basic\n${oldComment}\n${flag(2.5)}\n`);
+    [row, speed] = rowsOf();
+    expect('the switch with the lines of the version before', row.active, true);
+    speed.selected = 0;
+    expect('Brave\'s file with them, at As on a MacBook', read(brave), `--password-store=basic\n${comment}\n${flag(0.84)}\n`);
+    // At As on a MacBook the scale follows the plugin's speed; at a speed of
+    // its own it stays.
+    const follow = rowsOf()[2];
+    follow(1, 0.34);
+    expect('Brave\'s file after the plugin went to 0.34', read(brave), `--password-store=basic\n${comment}\n${flag(2.46)}\n`);
+    write(brave, `--password-store=basic\n${comment}\n${flag(1.5)}\n`);
+    follow(1, 0.34);
+    expect('Brave\'s file at Slower after the plugin moved', read(brave), `--password-store=basic\n${comment}\n${flag(1.5)}\n`);
+    [row] = rowsOf();
     row.active = false;
     expect('Brave\'s file after switching off', read(brave), '--password-store=basic\n');
     expect('Chromium\'s file after switching off', read(chromium), theirs);
@@ -2401,15 +2433,137 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     GLib.unlink(chromium);
     [row] = rowsOf();
     row.active = true;
-    expect('Brave\'s new file', read(brave), `${comment}\n${flag(2.5)}\n`);
-    expect('Chromium\'s new file', read(chromium), `${comment}\n${flag(2.5)}\n`);
+    expect('Brave\'s new file', read(brave), `${comment}\n${flag(0.84)}\n`);
+    expect('Chromium\'s new file', read(chromium), `${comment}\n${flag(0.84)}\n`);
     row.active = false;
     expect('Brave\'s file after switching off', read(brave), null);
     expect('Chromium\'s file after switching off', read(chromium), null);
 
+    // ChatGPT: the flag goes into the Exec line of its desktop file, and the
+    // line as it was comes back. A desktop file with features of its own is
+    // left alone.
+    const chatgpt = `${home}/.local/share/applications/chatgpt.desktop`;
+    const entry = exec => `[Desktop Entry]\nName=ChatGPT\nExec=${exec}\nType=Application\n\n[Desktop Action new]\nExec=/opt/chatgpt --new\n`;
+    const original = entry('/opt/chatgpt/codex-launcher --no-sandbox %U');
+    write(chatgpt, original);
+    [row, speed] = rowsOf();
+    row.active = true;
+    expect('ChatGPT\'s desktop file after switching on', read(chatgpt),
+        '[Desktop Entry]\nName=ChatGPT\nExec=/opt/chatgpt/codex-launcher ' +
+        '--enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/0.84 --no-sandbox %U\n' +
+        'X-Pear-Up-Scroll-Exec=/opt/chatgpt/codex-launcher --no-sandbox %U\nType=Application\n\n' +
+        '[Desktop Action new]\nExec=/opt/chatgpt --new\n');
+    speed.selected = 1;
+    if (!/ --enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor\/2\.5 --no-sandbox %U\n/.test(read(chatgpt) ?? ''))
+        problems.push(`browser scrolling: ChatGPT's speed did not change (${read(chatgpt)})`);
+    [row, speed] = rowsOf();
+    expect('the switch with only ChatGPT', row.active, true);
+    expect('the speed with only ChatGPT', speed.selected, 1);
+    row.active = false;
+    expect('ChatGPT\'s desktop file after switching off', read(chatgpt), original);
+    const quoted = entry('"/opt/Chat GPT/chatgpt" %U');
+    write(chatgpt, quoted);
+    [row] = rowsOf();
+    row.active = true;
+    if (!(read(chatgpt) ?? '').includes('Exec="/opt/Chat GPT/chatgpt" --enable-features=WaylandUnscaledTouchpadScrolling:scroll_scaling_factor/0.84 %U\n'))
+        problems.push(`browser scrolling: a quoted program is not kept whole (${read(chatgpt)})`);
+    row.active = false;
+    expect('a quoted ChatGPT after switching off', read(chatgpt), quoted);
+    const own = entry('/opt/chatgpt --enable-features=Foo %U');
+    write(chatgpt, own);
+    [row] = rowsOf();
+    row.active = true;
+    expect('a ChatGPT with features of its own', read(chatgpt), own);
+
     GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(home)}`);
     if (problems.length === problemsBefore)
-        print('  browser scrolling: writes and removes only its own two lines, leaves a file with its own features alone');
+        print('  browser scrolling: writes and removes only its own two lines and ChatGPT\'s Exec, leaves files with their own features alone');
+}
+
+// macOS momentum in Firefox is a block in user.js of each profile, in a home
+// directory made up for the test with a Flatpak Firefox of two profiles: the
+// block written with the Mac scale for the plugin's speed, the prefs it
+// displaces in prefs.js kept in it and put back when switched off, and the
+// rest of both files as they were. Switching off waits for Firefox to quit.
+{
+    const problemsBefore = problems.length;
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`Firefox momentum: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+    const home = GLib.dir_make_tmp('pear-up-firefox-home-XXXXXX');
+    const read = path => GLib.file_test(path, GLib.FileTest.IS_REGULAR)
+        ? new TextDecoder().decode(GLib.file_get_contents(path)[1]) : null;
+    const write = (path, text) => {
+        GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
+        GLib.file_set_contents(path, new TextEncoder().encode(text));
+    };
+    const prefs = new Preferences(metadata);
+    let running = false;
+    prefs._firefoxRunning = () => running;
+    const rowOf = level => {
+        const group = new Adw.PreferencesGroup();
+        windowsKept.push(group);
+        return prefs._buildFirefoxMomentumRow(group, home, level);
+    };
+    let [row] = rowOf(0.7);
+    expect('the switch with no Firefox, sensitive', row.sensitive, false);
+
+    const dir = `${home}/.var/app/org.mozilla.firefox/.mozilla/firefox`;
+    write(`${dir}/profiles.ini`, '[Profile1]\nName=default\nIsRelative=1\nPath=a.default\n\n' +
+        '[Profile0]\nName=default-release\nIsRelative=1\nPath=b.default-release\n\n[General]\nVersion=2\n');
+    const userA = `${dir}/a.default/user.js`;
+    const userB = `${dir}/b.default-release/user.js`;
+    const prefsB = `${dir}/b.default-release/prefs.js`;
+    GLib.mkdir_with_parents(`${dir}/a.default`, 0o755);
+    write(userB, 'user_pref("browser.startup.page", 3);\n');
+    const prefsBefore = '// Mozilla User Preferences\n\nuser_pref("apz.fling_friction", "0.004");\n' +
+        'user_pref("browser.startup.page", 3);\n';
+    write(prefsB, prefsBefore);
+    [row] = rowOf(0.7);
+    expect('the switch with two profiles', [row.active, row.sensitive], [false, true]);
+    row.active = true;
+    const block = (multiplier, was = []) => [
+        '// Pear Up: macOS momentum (Keyboard → Trackpad). Switch it off there to remove these lines.',
+        ...was.map(line => `// Pear Up: was ${line}`),
+        'user_pref("apz.gtk.kinetic_scroll.enabled", true);',
+        'user_pref("apz.fling_friction", "0.0032");',
+        'user_pref("apz.fling_stopped_threshold", "0.03");',
+        'user_pref("apz.fling_min_velocity_threshold", "0.2");',
+        'user_pref("apz.overscroll.enabled", true);',
+        `user_pref("apz.gtk.pangesture.pixel_delta_mode_multiplier", "${multiplier}");`,
+        '// Pear Up: end of macOS momentum',
+    ].join('\n');
+    expect('a profile\'s new user.js', read(userA), `${block('12.0')}\n`);
+    expect('a user.js of its own, with the block', read(userB),
+        `user_pref("browser.startup.page", 3);\n${block('12.0', ['user_pref("apz.fling_friction", "0.004");'])}\n`);
+    [row] = rowOf(0.7);
+    expect('the switch reopened', row.active, true);
+
+    // The plugin's speed moves Firefox's scale with it.
+    rowOf(0.7)[1](0.7, 0.34);
+    expect('a profile after the plugin went to 0.34', read(userA), `${block('24.6')}\n`);
+
+    // Firefox has run and written Pear Up's values into prefs.js.
+    write(prefsB, '// Mozilla User Preferences\n\nuser_pref("apz.fling_friction", "0.0032");\n' +
+        'user_pref("apz.gtk.pangesture.pixel_delta_mode_multiplier", "24.6");\nuser_pref("browser.startup.page", 3);\n');
+    running = true;
+    [row] = rowOf(0.34);
+    row.active = false;
+    expect('the switch while Firefox runs', row.active, true);
+    if (!/Quit Firefox/.test(row.subtitle ?? ''))
+        problems.push(`Firefox momentum: switching off while it runs is not explained (${row.subtitle})`);
+    running = false;
+    row.active = false;
+    expect('the switch after Firefox quit', row.active, false);
+    expect('a profile\'s user.js after switching off', read(userA), null);
+    expect('a user.js of its own after switching off', read(userB), 'user_pref("browser.startup.page", 3);\n');
+    expect('prefs.js after switching off', read(prefsB),
+        '// Mozilla User Preferences\n\nuser_pref("browser.startup.page", 3);\nuser_pref("apz.fling_friction", "0.004");\n');
+
+    GLib.spawn_command_line_sync(`rm -rf ${GLib.shell_quote(home)}`);
+    if (problems.length === problemsBefore)
+        print('  Firefox momentum: writes its block into each profile, follows the speed, puts prefs.js back, waits for Firefox to quit');
 }
 
 // The macOS keys are one file too, with a line for each of three switches,
