@@ -51,7 +51,61 @@ for run = 1, runs do
     -- The kernel starts on any slot (where the last session left it).
     local start_slot = math.random(0, 4)
     local view, vkeys, vslot = {}, {}, start_slot
-    local function feed(frame)
+    local fingers = {}
+    -- libinput's jump rule (evdev-mt-touchpad.c, tp_detect_jumps): every
+    -- frame records each touch; a touch that moved is a jump when its move,
+    -- scaled from the time since the last frame to 12 ms, is over 20 mm, or
+    -- 7 mm more than its last move. A frame of the engine's timer that does
+    -- this to a finger that is down throws real motion away.
+    local hist, lastdelta, vpos = {}, {}, {}
+    local function jumps_in(frame, time)
+        local moved = {}
+        local s = vslot
+        for _, e in ipairs(frame) do
+            if e.usage == evdev.ABS_MT_SLOT then
+                s = e.value
+            elseif e.usage == evdev.ABS_MT_TRACKING_ID then
+                hist[s], lastdelta[s] = nil, 0
+            elseif e.usage == evdev.ABS_MT_POSITION_X or e.usage == evdev.ABS_MT_POSITION_Y then
+                local p = vpos[s] or {}
+                p[e.usage == evdev.ABS_MT_POSITION_X and 1 or 2] = e.value
+                vpos[s] = p
+                moved[s] = true
+            end
+        end
+        local found = {}
+        for slot in pairs(view) do
+            local h, p = hist[slot], vpos[slot]
+            if h and p and p[1] and p[2] and moved[slot] then
+                local dt = time - h.t
+                if dt > 0 and dt <= 30000 then
+                    local d = math.sqrt(((p[1] - h.x) / 24) ^ 2 + ((p[2] - h.y) / 24) ^ 2) * 12000 / dt
+                    if d > 20 or d - (lastdelta[slot] or 0) > 7 then
+                        found[#found + 1] = slot
+                        hist[slot] = nil
+                    end
+                    lastdelta[slot] = d
+                end
+            end
+            if p and p[1] and p[2] then
+                hist[slot] = { t = time, x = p[1], y = p[2] }
+            end
+        end
+        return found
+    end
+    local function feed(frame, time, from_timer)
+        if time then
+            for _, slot in ipairs(jumps_in(frame, time)) do
+                -- Paced fingers carry real motion while in contact; while
+                -- they glide or rest they are the engine's own (a finger
+                -- left down after a lift is hidden until it moves), and the
+                -- glide's recentring is a jump on purpose.
+                if from_timer and fingers[slot] and tp.engine and tp.engine.mode == "contact" then
+                    fail(run, string.format("a paced step at %d is a jump to libinput for slot %d, a finger down (mode %s)",
+                        time, slot, tostring(tp.engine and tp.engine.mode)))
+                end
+            end
+        end
         for _, e in ipairs(frame) do
             if e.usage == evdev.ABS_MT_SLOT then
                 vslot = e.value
@@ -67,7 +121,7 @@ for run = 1, runs do
         end
     end
     -- The kernel's side.
-    local t, kslot, ids, fingers, keys = 1000000, start_slot, 0, {}, {}
+    local t, kslot, ids, keys = 1000000, start_slot, 0, {}
     local function tick_until(limit)
         while tp.engine and tp.engine.timer and tp.engine.timer < limit do
             local now = math.floor(tp.engine.timer)
@@ -76,7 +130,7 @@ for run = 1, runs do
                 fail(run, "tick: " .. tostring(frames))
                 return false
             end
-            for _, f in ipairs(frames) do feed(f) end
+            for _, f in ipairs(frames) do feed(f, now, true) end
             -- libinput runs an expired timer again at once with the same now:
             -- a tick that asks for the past would spin its input thread.
             if tp.engine and tp.engine.timer and tp.engine.timer <= now then
@@ -169,9 +223,9 @@ for run = 1, runs do
                 fail(run, "frame: " .. tostring(result))
                 alive = false
             else
-                for _, f in ipairs(tp.engine.prepend) do feed(f) end
+                for _, f in ipairs(tp.engine.prepend) do feed(f, t) end
                 tp.engine.prepend = {}
-                if result == nil then feed(frame) elseif #result > 0 then feed(result) end
+                if result == nil then feed(frame, t) elseif #result > 0 then feed(result, t) end
                 seen[tp.engine.mode] = (seen[tp.engine.mode] or 0) + 1
             end
         end

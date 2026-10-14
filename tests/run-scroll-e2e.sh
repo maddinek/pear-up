@@ -13,9 +13,13 @@
 # Thresholds: tests/scroll-e2e/thresholds.py. Report: <out-dir>/report.md and
 # PNGs; by default <out-dir> is tests/scroll-e2e/out.
 #
-# Nothing touches the desktop it runs on: the touchpad is a umockdev one inside
-# the container (never uinput, which the session's libinput would pick up), and
-# the shell is a headless one inside the container.
+# Stage 1 and the hand-off checks run the plugin live inside this machine's
+# libinput, as root (sudo): a uinput touchpad that the run grabs the moment
+# libinput opens it, so the desktop's compositor sees a touchpad come and go
+# but never gets an event from it (tests/scroll-e2e/live.py). Stage 2, the
+# headless shell and its clients, runs in a container. Nothing is simulated.
+#
+#   E2E_HANDOFFS=0 tests/run-scroll-e2e.sh      # skip the hand-off checks
 set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 E2E="$REPO_DIR/tests/scroll-e2e"
@@ -25,6 +29,17 @@ STAGES="${E2E_STAGES:-1 2}"
 NAME="pear-up-scroll-e2e-$$"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
+
+read -r -a GESTURES <<< "${E2E_GESTURES:-}"
+if [[ " $STAGES " == *" 1 "* ]]; then
+    echo "==> Stage 1: the plugin live in this machine's libinput ($(rpm -q --qf '%{VERSION}' libinput 2>/dev/null || echo '?'))"
+    sudo -n env E2E_REPEATS="${E2E_REPEATS:-5}" python3 "$E2E/stream.py" "$E2E/gestures" "$OUT/stream.json"
+    sudo -n chown "$(id -u):$(id -g)" "$OUT/stream.json"
+    if [[ "${E2E_HANDOFFS:-1}" == 1 ]]; then
+        echo "==> Hand-offs, the plugin live in libinput"
+        sudo -n python3 "$E2E/check-handoffs.py" | tee "$OUT/handoffs.txt"
+    fi
+fi
 
 if ! "$RUNTIME" image exists localhost/pear-up-test:gnome50 2>/dev/null; then
     "$RUNTIME" build --build-arg FEDORA=44 -t localhost/pear-up-test:gnome50 \
@@ -43,11 +58,6 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 
-read -r -a GESTURES <<< "${E2E_GESTURES:-}"
-if [[ " $STAGES " == *" 1 "* ]]; then
-    echo "==> Stage 1: plugin + libinput 1.31 (umockdev touchpad)"
-    "$RUNTIME" exec "$NAME" python3 /src/tests/scroll-e2e/stream.py /src/tests/scroll-e2e/gestures /out/stream.json
-fi
 if [[ " $STAGES " == *" 2 "* ]]; then
     echo "==> Stage 2: GNOME Shell 50 headless at 120 Hz, GTK 4 and Chromium clients"
     "$RUNTIME" exec -e E2E_CHROMIUM="${E2E_CHROMIUM:-1}" "$NAME" bash /src/tests/scroll-e2e/clients/session.sh /src /out/stream.json /out/clients "${GESTURES[@]}"

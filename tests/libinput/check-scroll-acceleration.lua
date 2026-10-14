@@ -670,6 +670,133 @@ do
     check("nor a touchpad without a resolution", blind.handlers["evdev-frame"] == nil)
 end
 
+print("The engine's fail-safe")
+do
+    -- A libinput with one plugin timer that behaves as libinput's does: an
+    -- expired timer is run again at once, with the same now, while it keeps
+    -- asking for a moment not after now (timer.c, goto restart).
+    local function harness(misbehave)
+        local f = assert(io.open(plugin_path))
+        local source = f:read("a"):gsub("\nlocal ENGINE = %a+\n", "\nlocal ENGINE = true\n", 1)
+        f:close()
+        local h = { errors = {}, infos = {}, calls = 0, expiry = nil, cancelled = 0 }
+        local fake = {}
+        function fake:register() return 1 end
+        function fake:connect(name, fn) h[name] = fn end
+        function fake:log_info(m) h.infos[#h.infos + 1] = m end
+        function fake:log_error(m) h.errors[#h.errors + 1] = m end
+        function fake:log_debug(_) end
+        function fake:now() return h.now end
+        function fake:timer_set_absolute(t) h.expiry = t end
+        function fake:timer_cancel() h.expiry = nil; h.cancelled = h.cancelled + 1 end
+        h.M = load_plugin({ libinput = fake }, source)
+        if misbehave then
+            h.M.tick = misbehave
+        end
+        local d = { handlers = {}, appended = 0 }
+        function d:udev_properties() return { ID_INPUT_TOUCHPAD = "1" } end
+        function d:usages()
+            return { [evdev.ABS_MT_SLOT] = true, [evdev.ABS_MT_TRACKING_ID] = true,
+                     [evdev.ABS_MT_POSITION_X] = true, [evdev.ABS_MT_POSITION_Y] = true }
+        end
+        function d:absinfos() return { [evdev.ABS_MT_POSITION_X] = ABSX, [evdev.ABS_MT_POSITION_Y] = ABSY } end
+        function d:name() return "Fake Touchpad" end
+        function d:connect(name, fn) self.handlers[name] = fn end
+        function d:append_frame(_) self.appended = self.appended + 1 end
+        function d:prepend_frame(_) end
+        h["new-evdev-device"](d)
+        h.device = d
+        -- Run libinput's timers up to `until_us`, as its dispatch does; how
+        -- many times the plugin's timer ran, and the most at one moment.
+        function h.run(until_us)
+            local most = 0
+            while h.expiry and h.expiry <= until_us do
+                local now = math.max(h.expiry, h.now or 0)
+                h.now = now
+                local here = 0
+                while h.expiry and h.expiry <= now and here < 100000 do
+                    h.expiry = nil
+                    h.calls = h.calls + 1
+                    here = here + 1
+                    h["timer-expired"](now)
+                end
+                most = math.max(most, here)
+                if here >= 100000 then return most end
+                if h.expiry and h.expiry <= now then h.expiry = now + 1 end
+            end
+            h.now = until_us
+            return most
+        end
+        return h
+    end
+    -- A flick on the fake touchpad, so the engine has fingers and a glide.
+    local function flick(h)
+        local kernel = new_kernel(4)
+        local t0 = 1000000
+        local y = mm(15)
+        for i = 0, 30 do
+            local fingers = i < 30 and { [0] = { mm(45), y }, [1] = { mm(61), y } } or {}
+            local frame = kernel:frame(fingers)
+            h.now = t0 + i * 7000
+            h.device.handlers["evdev-frame"](h.device, copy(frame), h.now - 1000)
+            h.run(h.now)
+            y = y + mm(0.8)
+        end
+        return h.now
+    end
+
+    local h = harness()
+    local t = flick(h)
+    h.run(t + 3000000)
+    check(string.format("as written: the flick glides and comes to rest (%d timer runs, no error)", h.calls),
+        h.calls > 100 and #h.errors == 0)
+
+    -- The bug of 2026-10-14, put back: asking for the past forever.
+    local real_tick
+    h = harness(function(tp, now)
+        local frames = real_tick(tp, now)
+        tp.engine.timer, tp.engine.asked_past = now - 20000, true
+        return frames
+    end)
+    real_tick = load_plugin().tick
+    t = flick(h)
+    local most = h.run(t + 3000000)
+    check(string.format("a timer that asks for the past: engine off after %d runs, at most %d at one moment",
+        h.calls, most), h.calls <= 40 and most <= 2 and #h.errors == 1 and h.errors[1]:find("asked for the past"),
+        table.concat(h.errors, " | "))
+    check("and its fingers let go, its timer cancelled, nothing more from it",
+        h.expiry == nil and h.cancelled >= 1 and h.run(t + 6000000) == 0)
+
+    -- A timer that never asks for the past, yet runs far too often.
+    h = harness(function(tp, now)
+        local frames = real_tick(tp, now)
+        tp.engine.timer = now + 1
+        return frames
+    end)
+    t = flick(h)
+    h.run(t + 3000000)
+    check(string.format("a timer running every 0.5 ms: engine off after %d runs", h.calls),
+        h.calls <= 1100 and #h.errors == 1 and h.errors[1]:find("within a second"), table.concat(h.errors, " | "))
+
+    -- An error in the engine.
+    h = harness(function() error("boom") end)
+    t = flick(h)
+    h.run(t + 3000000)
+    check("an error in the engine: off, one line in the log", #h.errors == 1 and h.errors[1]:find("boom"))
+    -- The touchpad keeps plain acceleration at the speed line's level, and a
+    -- touchpad added later (a resume) does not bring the engine back.
+    local d2 = { handlers = {} }
+    for k, v in pairs(h.device) do d2[k] = v end
+    d2.handlers = {}
+    h.infos = {}
+    h["new-evdev-device"](d2)
+    check("a touchpad added after: acceleration only", h.infos[1] and not h.infos[1]:find("engine"),
+        tostring(h.infos[1]))
+    local before = h.calls
+    flick(h)
+    check("and the first one scrolls on without the engine (no timer runs)", h.calls == before)
+end
+
 print("The speed line Pear Up rewrites")
 do
     local f = assert(io.open(plugin_path))

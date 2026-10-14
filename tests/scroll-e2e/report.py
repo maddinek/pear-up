@@ -7,7 +7,7 @@ Every gesture becomes a series of (ms, distance moved) with the times of the
 lift and of any touch after it, for each view there is of it:
 
   mac            the Air's AppKit events (fixture), one per 60 Hz frame
-  <mode>/stream  libinput's stream (stage 1), as an app is handed it
+  <mode>/stream  libinput's stream (stage 1, the plugin live in libinput), as an app is handed it
   <mode>/gtk-model  that stream through GTK 4's own glide, worked out from its
                  source (gtkeventcontrollerscroll.c: velocity of the last
                  150 ms at the stop; gtkscrolledwindow.c: x(t) = v/4 (1-e^-4t),
@@ -431,6 +431,10 @@ def main():
             results[k]['late_frames'] = v['late_frames']
 
     lines = ['# Scroll end-to-end report', '',
+             'Stage 1 is live: ' + ('every stream here comes from Pear Up\'s plugin running inside this '
+             'machine\'s libinput, on a uinput touchpad (live.py); nothing is simulated.'
+             if all(e.get('live') for e in stream.values()) else
+             '**not** live for every gesture (an old stream.json): those streams were simulated.'), '',
              'MacBook Air reference: fixtures/mac-air-events.log. Gestures: tests/scroll-e2e/gestures '
              f'({sum(1 for e in stream.values() if e.get("synthetic"))} of {len(stream)} synthetic). '
              'Limits: thresholds.py.', '',

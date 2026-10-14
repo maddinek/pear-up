@@ -6,24 +6,29 @@ recorded stream.
 
 ```bash
 tests/run-scroll-e2e.sh                       # everything; report in tests/scroll-e2e/out/
-E2E_STAGES=1 tests/run-scroll-e2e.sh          # libinput only (a minute or two)
+E2E_STAGES=1 tests/run-scroll-e2e.sh          # libinput only, and the hand-offs
 E2E_GESTURES="flick quick-reflick" tests/run-scroll-e2e.sh
 E2E_CHROMIUM=0 tests/run-scroll-e2e.sh        # GTK 4 only
+E2E_HANDOFFS=0 tests/run-scroll-e2e.sh        # without the hand-off checks
 ```
 
-Nothing touches the desktop it runs on. The touchpad is a umockdev one inside a container, never
-uinput, which the session's own libinput would pick up. The shell is a headless one in the same
-container.
+Stage 1 and the hand-off checks run on the host, as root (`sudo -n`), with the plugin live inside
+the host's libinput: nothing is simulated. The touchpad is a uinput one, grabbed (`EVIOCGRAB`) the
+moment libinput opens it, so the desktop's compositor sees a touchpad come and go but never gets an
+event from it. The shell is a headless one in a container.
 
 ## The pipeline
 
 1. **Gesture** (`gestures/*.yaml`, the `libinput record` format).
-2. **Pear Up's plugin** in `simulate.lua`: the plugin's own code in libinput's Lua sandbox, with
-   its timer fired exactly when asked.
-3. **Real libinput 1.31.3** without a plugin, on a umockdev PIXA3854 (`stream.py`). libinput's own
-   two-finger scroll, jump detection and stop produce the scroll stream. The stream keeps the
-   frames' own microsecond times. libinput's printed output (millisecond times) must agree with it
-   on distance.
+2. **The kernel** (`live.py`): the gesture's frames are written to a uinput PIXA3854 (framy's
+   touchpad: 24 units per mm, 5 slots, a buttonpad), which hands them on as it does a real
+   touchpad's: a slot named only when it changes, a value only when it changed. Before each
+   gesture one finger rests 250 ms in slot 4, so the kernel names the gesture's first slot, as
+   on a touchpad in use; check 17 runs a gesture on a touchpad libinput has just opened.
+3. **Pear Up's plugin inside libinput** (the host's, 1.31.3): a path context that loads the plugin
+   as mutter does (its own directory first, then libinput's defaults). The plugin's timer runs on
+   libinput's clock, its frames go through libinput's two-finger scroll, jump detection and stop,
+   and the stream keeps libinput's own microsecond event times (`stream.py`).
 4. **Headless GNOME Shell 50 at 120 Hz with Pear Up enabled** (`clients/session.sh`). The stream
    goes in through mutter's RemoteDesktop `NotifyPointerAxis` with the finger source and finish
    flag (`clients/feed.py`). Headless mutter runs without libinput, but this call ends in the same
@@ -40,13 +45,14 @@ container.
    `metrics.json` and `mac-scroll-<gesture>.png` (distance over time, scaled by the speed at lift,
    Mac flicks in grey).
 
-Why the plugin runs in `simulate.lua` rather than live inside libinput: umockdev replays through a
-pty, late and in bursts on a busy machine, and the engine's timer would then pace against that
-rather than against a touchpad. The live path is checked separately for function, not timing:
-`check-handoffs.py` and `../libinput/engine_replay.py`, run by `tests/run-libinput-tests.sh`.
-`fuzz.lua` (also run there) throws random frames at the engine and checks three things: it never
-errors (libinput would unload the plugin), it never reports a place off the pad, and it never
-leaves a finger down.
+`check-handoffs.py` (live, on the host) checks the engine's hand-offs: glide and stop, a touch
+stopping it, two fingers taking it over, taps, clicks, pinches and swipes in its rest, the first
+gesture on a just-opened touchpad, jumps only while no finger is down, and that no run spins
+libinput's timer (its CPU time and wake-ups are bounded; a run that never comes back from libinput
+is ended by `faulthandler` and fails). `fuzz.lua` (in the container, `tests/run-libinput-tests.sh`)
+throws random frames at the engine and checks that it never errors, never reports a place off the
+pad, never leaves a finger down, and never asks for its timer at or before now. `simulate.lua`
+runs the plugin's arithmetic outside libinput; nothing passes or fails on it.
 
 ## Modes
 
@@ -78,6 +84,8 @@ synthetic.
 ## Known limits
 
 - The gestures are synthetic until recorded on framy; the `martin-NN` ones are reconstructions.
+- Stage 1 runs on a live desktop: its timing is the host's, as the compositor's would be, and
+  varies a little from run to run (the engine is run 5 times a gesture).
 - In stage 2 no libinput hold gesture reaches the clients, because RemoteDesktop has no call for
   one. So when a finger stops an app's own glide (engine off), this test cannot see it.
   `report.py` models it for GTK from source as 90 ms (40 ms quick hold plus GTK's 50 ms).
