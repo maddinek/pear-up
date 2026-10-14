@@ -195,6 +195,12 @@ def client_series(entry, mode, path, fed_path, kind):
         best = min(best, (err, shift))
     delay = best[1]
     moves = [(t - lift - delay, d) for t, d in moves]
+    if kind.startswith('gtk'):
+        # The stops GTK's scroll controller saw (its "scroll-end"), from the
+        # first scroll fed on.
+        base['stops'] = [r for r in rows if r['k'] == 'end' and r['mono'] / 1000 - offset >= fed[0]['t'] - 20]
+    elif kind.startswith('chromium'):
+        base['stops'] = None
     base.update({'moves': moves, 'app_velocity': added, 'hz': hz, 'draw_delay_ms': delay, 'late_frames': late,
                  'fling_share': fling / total if total and not kind.endswith('-events') else None,
                  # Chromium 154 scales touchpads 12x (no WaylandUnscaledTouchpadScrolling yet): no distance check.
@@ -281,14 +287,17 @@ def measure_all(s):
         early = sum(d for t, d in after if t <= 33) / 0.033
         m['handoff_ratio'] = early / before
         sp = bins(after, 0, 2000, 16.67)
-        speeds = [x / 0.01667 for x in sp]
+        raw = [x / 0.01667 for x in sp]
+        # Over three frames: a slow glide steps by whole units, and a single
+        # frame a unit short would end its "hold" early.
+        speeds = [sum(raw[max(0, i - 1):i + 2]) / len(raw[max(0, i - 1):i + 2]) for i in range(len(raw))]
         if speeds and max(speeds) > 0:
             peak = max(speeds)
             ip = speeds.index(peak)
             hold_end = next((i for i in range(ip, len(speeds)) if speeds[i] < 0.9 * peak), None)
             if hold_end is not None:
                 m['glide_hold_ms'] = hold_end * 16.67
-                pts = [(i * 16.67, math.log(v)) for i, v in enumerate(speeds)
+                pts = [(i * 16.67, math.log(v)) for i, v in enumerate(raw)
                        if i >= hold_end and v >= 0.1 * peak]
                 if len(pts) >= 3:
                     xs = [p[0] for p in pts]
@@ -310,6 +319,8 @@ def measure_all(s):
     if s['touch'] is not None:
         late = [t + shift for t, d in moves if t + shift > s['touch']]
         m['cancel_latency_ms'] = (max(late) - s['touch']) if late else 0.0
+    if s.get('stops') is not None:
+        m['stop_count'] = len(s['stops'])
     if s.get('fling_share') is not None:
         m['app_fling_share'] = s['fling_share']
     # How far the page slows where new fingers take over a glide: the slowest
@@ -491,6 +502,10 @@ def main():
                   'phase.', '', '| gesture | measure | min | max | fails |', '|---|---|---|---|---|']
         for (g, key), vals in sorted(spread.items()):
             fails = sum(1 for v in vals if not verdict(key, v))
+            if fails:
+                # The engine has to pass at every phase of its beat, not on
+                # one lucky one.
+                failed.setdefault(('engine', 'stream at every phase'), []).append((g, key))
             if max(vals) - min(vals) > 0.05 * max(abs(max(vals)), 1e-9) or fails:
                 lines.append(f'| {g} | {key} | {min(vals):.3g} | {max(vals):.3g} | {fails}/{len(vals)} |')
     lines += ['', '## Failures by mode and view', '']
@@ -548,7 +563,7 @@ def main():
         fig.savefig(os.path.join(out, f'mac-scroll-{g}.png'), dpi=110)
         plt.close(fig)
     print('\n'.join(lines))
-    engine_failed = [k for k in failed if k[0] != 'now' and k[1] in ('gtk', 'chromium', 'stream')]
+    engine_failed = [k for k in failed if k[0] != 'now' and k[1] in ('stream', 'stream at every phase')]
     return 1 if engine_failed else 0
 
 

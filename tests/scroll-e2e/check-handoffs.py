@@ -18,6 +18,16 @@ only (tests/run-libinput-tests.sh runs it).
      (tap to click on, as on framy), as without the engine
   9. two fingers resting 200 ms, then scrolling at 15 mm/s, start scrolling
      sooner than without the engine
+ Inside the rest after a flick (the fingers kept down for libinput):
+ 10. a click (one finger, pad pressed) is one left click, with button areas
+     and with clickfinger
+ 11. one finger that points gets the pointer within 0.3 mm of moving, and
+     moves it about as far as without a glide before it
+ 12. a two-finger tap right-clicks (tap to click on)
+ 13. two fingers spreading apart are a pinch
+ 14. three fingers moving are a three-finger swipe (the shell's gestures)
+ 15. one finger, then a second joining, take the scroll over: one stop in all
+ 16. every gesture's scroll ends with exactly one stop, after its last move
 """
 import os
 import sys
@@ -26,6 +36,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', 'libinput'))
 import engine_replay as er  # noqa: E402
+import gestures as G  # noqa: E402
+import re  # noqa: E402
 import stream as R  # noqa: E402
 
 failures, passes = [], []
@@ -273,6 +285,115 @@ def main():
         check(f'fingers resting 200 ms, then 15 mm/s: first scroll {first[True]:.0f} ms after they move with the '
               f'engine, {first[False]:.0f} ms without', first[True] is not None and first[False] is not None
               and first[True] < first[False] and first[True] <= 50)
+
+        lift150 = er.scroll_track(er.Fingers(), UP150, y0=60) * 1000
+
+        # 10
+        def click(k, lift):
+            t = lift + 0.1
+            for i in range(6):
+                k.at(t + i * 0.007, {0: (60, 35)})
+            k.at(t + 0.042, {0: (60, 35)}, button=True)
+            for i in range(1, 8):
+                k.at(t + 0.042 + i * 0.007, {0: (60, 35)}, button=True)
+            k.at(t + 0.1, {0: (60, 35)})
+            k.at(t + 0.13, {})
+            return t + 1.0
+        for method in ('buttonareas', 'clickfinger'):
+            _, lines = through(workdir, lambda k: flick_then(k, click), True, extra=f'--set-click-method={method}')
+            presses = [ln for ln in kinds(lines, 'POINTER_BUTTON') if 'pressed' in ln]
+            check(f'a click in the rest after a flick ({method}): {len(presses)} press, left',
+                  len(presses) == 1 and 'BTN_LEFT' in presses[0], '\n'.join(presses))
+
+        # 11
+        def point(k, lift, rest=0.1):
+            t = lift + rest
+            k.at(t, {0: (40, 30)})
+            for i in range(1, 36):
+                k.at(t + i * 0.007, {0: (40 + i * 0.28, 30)})
+            k.at(t + 36 * 0.007, {})
+            return t + 1.0
+        def motion_of(lines):
+            xs = [float(v) for ln in kinds(lines, 'POINTER_MOTION')
+                  for v in re.findall(r'(-?\d+\.\d+)/', ln)[:1]]
+            return len(xs), sum(xs)
+        _, lines_on = through(workdir, lambda k: flick_then(k, point), True)
+        _, lines_off = through(workdir, lambda k: point(k, 0.0, 0.3), False)
+        n_on, x_on = motion_of(lines_on)
+        n_off, x_off = motion_of(lines_off)
+        check(f'one finger in the rest points: {n_on} motions moving {x_on:.0f} px, without a glide '
+              f'{n_off} moving {x_off:.0f} px', n_on >= n_off - 3 and x_on >= 0.85 * x_off)
+
+        # 12
+        def two_tap(k, lift):
+            t = lift + 0.1
+            k.at(t, {0: (45, 40), 1: (61, 40)})
+            for i in range(1, 9):
+                k.at(t + i * 0.007, {0: (45, 40), 1: (61, 40)})
+            k.at(t + 0.07, {})
+            return t + 1.0
+        _, lines = through(workdir, lambda k: flick_then(k, two_tap), True, extra='--enable-tap')
+        presses = [ln for ln in kinds(lines, 'POINTER_BUTTON') if 'pressed' in ln]
+        check(f'a two-finger tap in the rest: {len(presses)} press, right', len(presses) == 1 and 'BTN_RIGHT' in presses[0],
+              '\n'.join(presses))
+
+        # 13
+        def pinch(k, lift):
+            t = lift + 0.1
+            for i in range(0, 45):
+                d = i * 0.35
+                k.at(t + i * 0.007, {0: (45 - d / 2, 40), 1: (65 + d / 2, 40)})
+            k.at(t + 45 * 0.007, {})
+            return t + 1.0
+        _, lines = through(workdir, lambda k: flick_then(k, pinch), True)
+        check('two fingers spreading in the rest: a pinch', bool(kinds(lines, 'GESTURE_PINCH_BEGIN')),
+              '\n'.join(kinds(lines, 'GESTURE')[:4]))
+
+        # 14
+        def swipe3(k, lift):
+            t = lift + 0.1
+            for i in range(0, 45):
+                d = i * 0.6
+                k.at(t + i * 0.007, {0: (35 + d, 40), 1: (50 + d, 40), 2: (65 + d, 40)})
+            k.at(t + 45 * 0.007, {})
+            return t + 1.0
+        _, lines = through(workdir, lambda k: flick_then(k, swipe3), True)
+        begins = [ln for ln in kinds(lines, 'GESTURE_SWIPE_BEGIN')]
+        check(f'three fingers in the rest: a three-finger swipe ({begins[0].split()[-1] if begins else "none"})',
+              bool(begins) and begins[0].split()[-1] == '3', '\n'.join(kinds(lines, 'GESTURE')[:4]))
+
+        # 15
+        def one_then_two(k, lift):
+            t = lift + 0.1
+            k.at(t, {0: (45, 50)})
+            k.at(t + 0.021, {0: (45, 50), 1: (61, 50)})
+            for i in range(1, 30):
+                k.at(t + 0.021 + i * 0.007, {0: (45, 50 - i * 0.5), 1: (61, 50 - i * 0.5)})
+            k.at(t + 0.021 + 30 * 0.007, {})
+            return t + 1.5
+        model, _ = through(workdir, lambda k: flick_then(k, one_then_two), True)
+        stops = [t for t, v, s in model if s]
+        moving = [t for t, v, s in model if lift150 + 150 < t < lift150 + 300 and not s]
+        check(f'one finger then a second in the rest: they scroll on ({len(moving)} events), one stop ({len(stops)})',
+              len(stops) == 1 and len(moving) > 20)
+
+        # 16
+        for name in sorted(os.listdir(os.path.join(HERE, 'gestures'))):
+            events, _ = G.load(os.path.join(HERE, 'gestures', name))
+            def replay(k, events=events):
+                for t, ty, code, value in events:
+                    pass
+                return 0.0
+            k = er.Fingers()
+            raw = os.path.join(workdir, 'k.events')
+            open(raw, 'w').write('\n'.join(k.lines[:2] + G.evemu_lines(events, k.t0)) + '\n')
+            sim = os.path.join(workdir, 's.events')
+            R.simulate(raw, True, sim, "0.7")
+            model = R.scroll_from_frames(R.read_frames(sim))
+            stops = [t for t, v, s in model if s]
+            moves = [t for t, v, s in model if not s]
+            ok = (not moves and not stops) or (len(stops) == 1 and stops[0] > moves[-1])
+            check(f'{name[:-5]}: {len(stops)} stop, after the last of {len(moves)} scrolls', ok)
     finally:
         er.cleanup(workdir)
     print()

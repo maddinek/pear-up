@@ -87,6 +87,11 @@ LIMITS = {
     # it moved: the app's own fling (Chromium's from the last 200 ms, GTK's
     # from the last 150 ms). The Mac's apps add none; 3% allowed.
     'app_fling_share': (None, 0.03),
+
+    # Stops an app is handed for the gesture (wl_pointer axis_stop, GTK's
+    # scroll-end): exactly one, at the real end. With the engine a re-flick
+    # is one gesture; without it each flick ends on its own.
+    'stop_count': (1, 1),
 }
 
 # Which checks apply to which gesture (by name prefix).

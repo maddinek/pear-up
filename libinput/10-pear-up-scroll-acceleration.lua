@@ -325,6 +325,10 @@ local GLIDE_TAU = 200000     -- µs, the time constant it slows down with after
 local GLIDE_END = 1.5        -- mm/s at which it ends
 local STILL = 260000         -- µs the fingers rest before libinput lets them lift (Chromium: 200)
 local FROZEN_MAX = 100000    -- µs a new finger has to become a scroll
+local POINT_MM = 0.3         -- a new single finger moved this far points: the pad is its at once
+local ADOPT_MM = 0.3         -- two new fingers moved this far alike take a glide over
+local DECIDE = 50000         -- µs a glide runs on under two new fingers before they hold it
+local TAP_MM = 1.3           -- libinput's tap motion limit (DEFAULT_TAP_MOVE_THRESHOLD)
 local POINTER_MM = 1.5       -- a finger moved this far points
 local LEFTOVER_MAX = 300000  -- µs a finger left down after a lift is ignored
 local EDGE_MM = 6            -- how near an edge the resting fingers go
@@ -555,9 +559,17 @@ local function touch_frame(tp, e)
         frame[#frame + 1] = { usage = ABS_MT_POSITION_X, value = f.x }
         frame[#frame + 1] = { usage = ABS_MT_POSITION_Y, value = f.y }
     end
+    -- The pad's button comes in a frame of its own, after the fingers: with
+    -- button areas libinput decides which button by where the fingers are,
+    -- so they must be down first.
+    local press = nil
     for usage, value in pairs(tp.keys) do
         if value ~= 0 then
-            frame[#frame + 1] = { usage = usage, value = value }
+            if usage == BTN_LEFT then
+                press = { { usage = BTN_LEFT, value = value } }
+            else
+                frame[#frame + 1] = { usage = usage, value = value }
+            end
         end
     end
     if tp.slot then
@@ -565,7 +577,7 @@ local function touch_frame(tp, e)
     end
     e.keys = copy(tp.keys)
     tp.pair, tp.history = nil, {}
-    return frame
+    return frame, press
 end
 
 -- libinput scrolls nothing until a finger has moved about a millimetre
@@ -635,6 +647,8 @@ local function carry(tp, e, now)
     if tp.vel then
         local g = M.gain(tp.speed or 0, tp.level)
         along = (tp.vel[1] * tp.xres * ux + tp.vel[2] * tp.yres * uy) * g / 1000000
+    elseif c.fingers then
+        along = c.fingers[1] * ux + c.fingers[2] * uy
     end
     local fading = len * math.exp(-(now - c.t0) / CARRY_TAU)
     if along < -0.2 * fading or mm_speed(tp, ux * fading, uy * fading) < GLIDE_END then
@@ -662,12 +676,55 @@ end
 local function release(tp, e)
     e.carry = nil
     local lifted = lift_frame(tp, e)
-    local touched = touch_frame(tp, e)
+    local touched, press = touch_frame(tp, e)
     if #touched > (tp.slot and 1 or 0) then
         e.prepend[#e.prepend + 1] = lifted
+        if press then
+            e.prepend[#e.prepend + 1] = touched
+            return press
+        end
         return touched
     end
+    if press then
+        e.prepend[#e.prepend + 1] = lifted
+        return press
+    end
     return lifted
+end
+
+-- Two fingers that tapped while the glide ran: libinput is told the resting
+-- fingers lifted, then shown the two coming down and lifting where they were,
+-- in this frame, which its tap code takes as the tap it was.
+local function tap_release(tp, e)
+    local two = e.two
+    local lifted = lift_frame(tp, e)
+    local down, up = {}, {}
+    local order = {}
+    for slot in pairs(two) do
+        order[#order + 1] = slot
+    end
+    table.sort(order)
+    for _, slot in ipairs(order) do
+        local f = two[slot]
+        down[#down + 1] = { usage = ABS_MT_SLOT, value = slot }
+        down[#down + 1] = { usage = ABS_MT_TRACKING_ID, value = f[1] }
+        down[#down + 1] = { usage = ABS_MT_POSITION_X, value = f[2] }
+        down[#down + 1] = { usage = ABS_MT_POSITION_Y, value = f[3] }
+        up[#up + 1] = { usage = ABS_MT_SLOT, value = slot }
+        up[#up + 1] = { usage = ABS_MT_TRACKING_ID, value = -1 }
+    end
+    down[#down + 1] = { usage = evdev.BTN_TOUCH, value = 1 }
+    down[#down + 1] = { usage = evdev.BTN_TOOL_DOUBLETAP, value = 1 }
+    up[#up + 1] = { usage = evdev.BTN_TOUCH, value = 0 }
+    up[#up + 1] = { usage = evdev.BTN_TOOL_DOUBLETAP, value = 0 }
+    if tp.slot then
+        down[#down + 1] = { usage = ABS_MT_SLOT, value = tp.slot }
+        up[#up + 1] = { usage = ABS_MT_SLOT, value = tp.slot }
+    end
+    e.prepend[#e.prepend + 1] = lifted
+    e.prepend[#e.prepend + 1] = down
+    e.keys = {}
+    return up
 end
 
 -- The fingers on the touchpad that came after the lift (not left over from it).
@@ -699,7 +756,7 @@ end
 
 -- While the fingers glide or rest: what a frame from the touchpad, or the
 -- timer (frame nil), does. Returns the frame for libinput.
-local function resting(tp, e, time)
+local function resting(tp, e, time, tick)
     local more = tp.button
     for _, on in pairs(tp.more) do
         more = more or on
@@ -713,22 +770,36 @@ local function resting(tp, e, time)
             local g = M.glide(time - DELAY - e.start)
             e.carry = { e.vx * g, e.vy * g }
         end
-        e.mode, e.frozen, e.halted = "frozen", time, false
+        e.mode, e.frozen, e.halted, e.window = "frozen", time, false, GRACE
+        e.two, e.twosince, e.twomoved, e.twolast, e.twov = nil, nil, 0, nil, nil
         if not e.carry then
             halt(e, time)
         end
-        -- Otherwise the glide runs on for GRACE (M.tick), so that a second
-        -- finger landing a report later takes it over without a stall; a
-        -- lone finger stops it after that.
+        -- Otherwise the glide runs on under the touch for a while (M.tick):
+        -- GRACE for one finger, so a second landing a report later takes it
+        -- over without a stall; DECIDE for two, until they move (a re-flick)
+        -- or turn out to rest (a hold, which stops it) or lift (a tap).
     end
     if e.mode ~= "frozen" then
         return {}
     end
+    -- Not yet halted, the glide is still being drawn: keep the beat going.
+    if not e.halted then
+        e.timer = math.min(e.timer or math.huge, grid(time))
+    end
     if more or #new >= 3 then
+        -- A click, or three fingers and more (the shell's swipes): libinput's,
+        -- with the real fingers where they are.
         return release(tp, e)
     end
     if all == 0 then
-        -- Touched and lifted: the glide only stopped.
+        -- Lifted again. Two fingers that came down together and lifted within
+        -- libinput's tap time, hardly moving, are handed to it as the tap they
+        -- were (a right click with tap to click); anything else only stopped
+        -- the glide.
+        if e.two and time - e.twosince < TAP_TIMEOUT - 10000 and e.twomoved < TAP_MM then
+            return tap_release(tp, e)
+        end
         halt(e, time)
         e.mode, e.still = "still", e.frozen
         return {}
@@ -743,9 +814,42 @@ local function resting(tp, e, time)
         table.sort(slots)
         local a, b = tp.slots[slots[1]], tp.slots[slots[2]]
         if a.x and a.y and b.x and b.y then
+            local sa = e.seen[a.touch] or { a.x, a.y, time }
+            local sb = e.seen[b.touch] or { b.x, b.y, time }
+            if not e.two then
+                e.two, e.twosince, e.window = {}, time, DECIDE
+            end
+            local ax, ay = (a.x - sa[1]) / tp.xres, (a.y - sa[2]) / tp.yres
+            local bx, by = (b.x - sb[1]) / tp.xres, (b.y - sb[2]) / tp.yres
+            local la, lb = math.sqrt(ax * ax + ay * ay), math.sqrt(bx * bx + by * by)
+            e.twomoved = math.max(e.twomoved, la, lb)
+            -- Their speed over the last report, for taking a glide over.
+            local cx, cy = (a.x + b.x) / 2, (a.y + b.y) / 2
+            local prev = e.twolast
+            if tick then
+                prev = nil -- the timer: no new report, nothing to measure
+            elseif prev and time > prev[1] then
+                e.twov = { (cx - prev[2]) / (time - prev[1]), (cy - prev[3]) / (time - prev[1]) }
+            end
+            if not tick then
+                e.twolast = { time, cx, cy }
+            end
+            for _, slot in ipairs(slots) do
+                local f = tp.slots[slot]
+                e.two[slot] = { f.id, f.x, f.y }
+            end
             local fits = not a.palm and not b.palm and a.y < tp.bottom and b.y < tp.bottom
                 and slots[1] == e.slots[1] and slots[2] == e.slots[2]
             if not fits then
+                return release(tp, e)
+            end
+            if math.max(la, lb) < ADOPT_MM then
+                -- Not moving (yet): the glide runs on for DECIDE, then stops
+                -- under fingers that hold it. M.tick halts it.
+                return {}
+            end
+            if la < ADOPT_MM / 2 or lb < ADOPT_MM / 2 or (ax * bx + ay * by) / (la * lb) < 0.8 then
+                -- Not moving alike: a pinch or a turn, libinput's to tell.
                 return release(tp, e)
             end
             -- They take over the resting fingers: libinput goes on seeing the
@@ -763,35 +867,44 @@ local function resting(tp, e, time)
             tp.start, tp.started = { a.x, a.y, b.x, b.y }, true
             e.mode, e.pair, e.since = "contact", tp.pair, time
             e.coff, e.kicked = { 0, 0 }, true
-            if e.carry then
+            if e.carry and not e.halted then
                 e.carry.t0, e.carry.last = e.frozen, time
+                -- How fast they already go, until libinput's own measure of
+                -- them (tp.vel) has samples: so the glide under them is not
+                -- added on top of their first steps in full.
+                local v = e.twov or { 0, 0 }
+                local mm = math.sqrt((v[1] / tp.xres) ^ 2 + (v[2] / tp.yres) ^ 2) * 1000000
+                local g = M.gain(mm, tp.level)
+                e.carry.fingers = { v[1] * g, v[2] * g }
+            else
+                e.carry = nil
             end
             e.timer = math.min(e.timer or math.huge, grid(time))
             return {}
         end
     end
-    if #new == 1 then
+    if #new == 1 and all == 1 then
         local seen = e.seen[tp.slots[new[1]].touch]
         local f = tp.slots[new[1]]
         local d = 0
         if seen and f.x and f.y then
             d = math.max(math.abs(f.x - seen[1]) / tp.xres, math.abs(f.y - seen[2]) / tp.yres)
         end
-        -- A finger that points is handed over at once: libinput's quick hold
-        -- (40 ms) then stops what glide the apps start from the last moments
-        -- of ours. One that only rests waits until the resting fingers have
-        -- been still for STILL, so that no app glides at all.
+        -- A finger that points is handed over at once (libinput's quick hold
+        -- then stops what glide an app starts from the last moments of ours).
+        -- One that only rests waits until the resting fingers have been still
+        -- for STILL, so that no app glides at all.
         local last = e.frozen
         for _, slot in ipairs(e.slots) do
             last = math.max(last, e.moved[slot] or 0)
         end
-        if d > POINTER_MM or (time - e.frozen >= FROZEN_MAX and time >= last + STILL) then
+        if d > POINT_MM or (time - e.frozen >= FROZEN_MAX and time >= last + STILL) then
             return release(tp, e)
         end
-        e.timer = math.max(e.timer or 0, math.max(e.frozen + FROZEN_MAX, last + STILL))
+        e.timer = math.min(e.timer or math.huge, math.max(e.frozen + FROZEN_MAX, last + STILL))
         return {}
     end
-    e.timer = math.max(e.timer or 0, e.frozen + FROZEN_MAX)
+    e.timer = math.min(e.timer or math.huge, e.frozen + FROZEN_MAX)
     return {}
 end
 
@@ -911,7 +1024,7 @@ function M.tick(tp, now)
     end
     local frames = {}
     if e.mode == "frozen" then
-        local frame = resting(tp, e, now)
+        local frame = resting(tp, e, now, true)
         for _, f in ipairs(e.prepend) do
             frames[#frames + 1] = f
         end
@@ -927,7 +1040,7 @@ function M.tick(tp, now)
         carry(tp, e, now)
     end
     if e.mode == "frozen" and not e.halted then
-        if e.carry and now < e.frozen + GRACE then
+        if e.carry and now < e.frozen + (e.window or GRACE) then
             for _, slot in ipairs(e.slots) do
                 local path = e.path[slot]
                 local last = path[#path]
