@@ -133,7 +133,7 @@ for run = 1, runs do
             for _, f in ipairs(frames) do feed(f, now, true) end
             -- libinput runs an expired timer again at once with the same now:
             -- a tick that asks for the past would spin its input thread.
-            if tp.engine and tp.engine.timer and tp.engine.timer <= now then
+            if tp.engine and tp.engine.timer and math.floor(tp.engine.timer) <= now then
                 fail(run, string.format("tick at %d asked for its timer at %d (mode %s)", now,
                     math.floor(tp.engine.timer), tostring(tp.engine.mode)))
                 return false

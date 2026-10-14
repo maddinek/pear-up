@@ -166,7 +166,9 @@ def prime_frames(t_us, slot=SLOTS - 1):
 
 
 def _writer(ui, schedule):
-    """In a child: each frame at its moment, to well under a millisecond."""
+    """In a child: each frame at its moment, to well under a millisecond.
+    Returns how late the latest frame went out (s)."""
+    worst = 0.0
     for at, events in schedule:
         while True:
             left = at - time.monotonic()
@@ -174,6 +176,14 @@ def _writer(ui, schedule):
                 break
             time.sleep(left - 0.0015 if left > 0.002 else 0)
         ui.send_events(events)
+        worst = max(worst, time.monotonic() - at)
+    return worst
+
+
+# A replay whose writer was held up (the host busy) sends its frames in a
+# burst, a touchpad no finger makes: such a run is made again, up to RETRIES
+# times. LATE is how late a frame may go out.
+LATE, RETRIES = 0.002, 5
 
 
 class Live:
@@ -191,6 +201,16 @@ class Live:
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def run(self, frames, t0_us, extra=(), prime=True, tail=1.5, lead=0.3):
+        for _ in range(RETRIES):
+            result = self._run(frames, t0_us, extra, prime, tail, lead)
+            if self.late <= LATE:
+                return result
+            self.retried += 1
+        raise RuntimeError(f'the replay ran {self.late * 1000:.1f} ms late {RETRIES} times: the host is too busy')
+
+    retried = 0
+
+    def _run(self, frames, t0_us, extra, prime, tail, lead):
         ui = touchpad()
         ctx = li.libinput_path_create_context(ctypes.byref(_interface), None)
         _LOG.clear()
@@ -225,12 +245,15 @@ class Live:
         gesture_from = int(start * 1e6)
         end = plan[-1][0] + tail
 
+        rfd, wfd = os.pipe()
         pid = os.fork()
         if pid == 0:
             try:
-                _writer(ui, schedule)
+                os.close(rfd)
+                os.write(wfd, repr(_writer(ui, schedule)).encode())
             finally:
                 os._exit(0)
+        os.close(wfd)
         got = []
         # A plugin that keeps libinput's timer loop spinning never returns
         # from libinput_dispatch(): then this process says where it was and
@@ -258,6 +281,9 @@ class Live:
         self.cpu_share = (time.process_time() - cpu0) / wall
         self.wakeups_per_s = wakeups / wall
         os.waitpid(pid, 0)
+        with os.fdopen(rfd) as late:
+            text = late.read()
+        self.late = float(text) if text else float('inf')
         li.libinput_path_remove_device(P(dev))
         li.libinput_dispatch(P(ctx))
         while True:

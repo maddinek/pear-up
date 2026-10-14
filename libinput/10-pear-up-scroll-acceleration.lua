@@ -85,6 +85,8 @@ local CURVE = {
 }
 local WINDOW = 70000        -- µs the speed is measured over: macOS's nine events
 local START_MM = 1.2        -- see "What is left alone"
+local SWIPE_TIMEOUT = 150000 -- µs: libinput's DEFAULT_GESTURE_SWIPE_TIMEOUT (accelerate())
+local DECIDE_MARGIN = 0.05   -- mm past libinput's 1.5 mm, for its own rounding
 local BOTTOM_MM = 10        -- the clickpad's button areas...
 local BOTTOM_SHARE = 0.15   -- ...or libinput's thumb zone, whichever is taller
 local ALIKE_FROM = 0.3      -- see together()
@@ -260,13 +262,27 @@ local function accelerate(tp, a, b, a0, b0, time)
     -- the fingers do, and is left to.
     if not tp.started then
         local s = tp.start
-        local da = math.max(math.abs(a.x - s[1]) / tp.xres, math.abs(a.y - s[2]) / tp.yres)
-        local db = math.max(math.abs(b.x - s[3]) / tp.xres, math.abs(b.y - s[4]) / tp.yres)
-        -- With the engine, exactly libinput's millimetre: nothing passes
-        -- unscaled beyond it (the engine gives that millimetre back through
-        -- the curve instead, see kick()).
-        if math.max(da, db) < (tp.engine and 1.0 or START_MM) then
-            return
+        if tp.engine then
+            -- With the engine, exactly as long as libinput takes to decide
+            -- (evdev-mt-touchpad-gestures.c, tp_gesture_detect_motion_gestures):
+            -- a finger 1 mm from where it came down once 150 ms have passed
+            -- since the two did (DEFAULT_GESTURE_SWIPE_TIMEOUT), and before
+            -- that both 1.5 mm, the same way. Scaled down sooner, the fingers
+            -- would take that much longer to get there and the scroll start
+            -- late (5-14 ms on a flick); what passes unscaled is given back
+            -- through the curve (engine_frame()), as libinput never scrolls it.
+            local da = math.sqrt(((a.x - s[1]) / tp.xres) ^ 2 + ((a.y - s[2]) / tp.yres) ^ 2)
+            local db = math.sqrt(((b.x - s[3]) / tp.xres) ^ 2 + ((b.y - s[4]) / tp.yres) ^ 2)
+            local early = time - (tp.since or time) < SWIPE_TIMEOUT
+            if (early and math.min(da, db) < 1.5 + DECIDE_MARGIN) or (not early and math.max(da, db) < 1.0) then
+                return
+            end
+        else
+            local da = math.max(math.abs(a.x - s[1]) / tp.xres, math.abs(a.y - s[2]) / tp.yres)
+            local db = math.max(math.abs(b.x - s[3]) / tp.xres, math.abs(b.y - s[4]) / tp.yres)
+            if math.max(da, db) < START_MM then
+                return
+            end
         end
         tp.started = true
     end
@@ -348,6 +364,7 @@ end
 -- scrolling past the end, as they would with real ones.
 local TICK = 1000000 / 480   -- µs: 4 reports a frame at 120 Hz, 8 at 60
 local DELAY = 9000           -- µs the paced fingers trail the touchpad's reports
+local DELAY_RAMP = 100000    -- µs over which they fall back to DELAY once scrolling (catch_up())
 local LIFT_WINDOW = 50000    -- µs the speed at lift is measured over
 local MOMENTUM_FROM = 28     -- mm/s of the fingers (before the curve) for a glide
 local GLIDE_START = 1.30     -- the glide's speed as it starts, over the lift speed
@@ -435,6 +452,7 @@ function M.engine(tp)
         slots = nil,     -- the two slots libinput is told about
         path = {},       -- slot: { {time, x, y}, ... } in device units
         outf = {},       -- slot: { x, y } paced so far, before rounding
+        delay = DELAY,   -- µs the paced fingers are drawn behind (catch_up())
         lastframe = nil, -- when libinput last had a frame from the touchpad
         lastnorm = {},   -- slot: its last paced step as libinput measures it (mm per 12 ms)
         view = {},       -- slot: { x, y } as libinput was last told
@@ -462,10 +480,26 @@ local function clampv(v, low, high)
     return math.max(low, math.min(high, v))
 end
 
+-- How far behind the touchpad's reports the paced fingers are drawn. A touch
+-- starts with none: until libinput has decided the fingers scroll, every
+-- millisecond behind would be a millisecond later to the first scroll, and
+-- nothing is on screen to be smoothed. From the touchpad's report after
+-- libinput's decision (the one its first scroll comes with: the report it
+-- decides on only starts the scroll) the fingers fall back to DELAY over
+-- DELAY_RAMP, drawn 9 % slower for that
+-- tenth of a second, and stay there. It never shrinks within a touch, so the
+-- paced fingers never go back.
+local function catch_up(tp, e, now)
+    if e.ramp and e.delay < DELAY then
+        e.delay = math.min(DELAY, e.delay + (now - (e.delay_t or now)) * DELAY / DELAY_RAMP)
+    end
+    e.delay_t = now
+end
+
 -- Appends what libinput should be told now about the paced fingers to
 -- `events`, and returns whether anything moved.
 local function pace(tp, e, now, events)
-    local q = now - DELAY
+    local q = now - e.delay
     local a, b = e.slots[1], e.slots[2]
     local ax, ay = at(e.path[a], q)
     local bx, by = at(e.path[b], q)
@@ -741,7 +775,7 @@ local function halt(e, time)
     e.halted = true
     for _, slot in ipairs(e.slots) do
         local o = e.outf[slot]
-        e.path[slot] = { { time - DELAY, o[1], o[2] } }
+        e.path[slot] = { { time - e.delay, o[1], o[2] } }
     end
     e.step = 0
 end
@@ -840,8 +874,8 @@ local function resting(tp, e, time, tick)
         -- What the glide was doing, for fingers that take it over.
         e.carry = nil
         if e.mode == "glide" then
-            -- As it is on screen: DELAY behind.
-            local g = M.glide(time - DELAY - e.start)
+            -- As it is on screen: e.delay behind.
+            local g = M.glide(time - e.delay - e.start)
             e.carry = { e.vx * g, e.vy * g }
         end
         e.mode, e.frozen, e.halted, e.window = "frozen", time, false, GRACE
@@ -942,6 +976,7 @@ local function resting(tp, e, time, tick)
             e.mode, e.pair, e.since = "contact", tp.pair, time
             e.coff, e.kicked = { 0, 0 }, true
             e.lastnorm = {}   -- libinput measured them itself until now (pace())
+            e.direct = false  -- new fingers in the old ones' slots: only paced (M.frame)
             if e.carry and not e.halted then
                 e.carry.t0, e.carry.last = e.frozen, time
                 -- How fast they already go, until libinput's own measure of
@@ -1026,7 +1061,7 @@ local function engine_frame(tp, e, frame, time, known)
                 e.timer = math.min(e.timer or math.huge, grid(time))
             else
                 e.mode, e.still = "still", time
-                e.timer = time + DELAY + TICK
+                e.timer = time + e.delay + TICK
             end
             return true, resting(tp, e, time)
         end
@@ -1045,6 +1080,7 @@ local function engine_frame(tp, e, frame, time, known)
     if tp.pair and e.mode == "idle" then
         -- Two fingers came down together: from here they are paced.
         e.mode, e.pair, e.since, e.fresh = "contact", tp.pair, time, true
+        e.delay, e.delay_t, e.ramp, e.direct = 0, time, false, true
         e.coff, e.kicked, e.carry, e.given = { 0, 0 }, false, nil, false
         e.slots = { known[1], known[2] }
         e.path, e.view, e.moved = {}, {}, {}
@@ -1166,6 +1202,9 @@ tick = function(tp, now)
             end
         end
     end
+    if e.mode == "contact" then
+        catch_up(tp, e, now)
+    end
     local events = {}
     pace(tp, e, now, events)
     if #events > 0 then
@@ -1178,7 +1217,7 @@ tick = function(tp, now)
     local pending = false
     for _, slot in ipairs(e.slots or {}) do
         local path = e.path[slot]
-        pending = pending or (#path > 0 and path[#path][1] > now - DELAY)
+        pending = pending or (#path > 0 and path[#path][1] > now - e.delay)
     end
     if e.mode == "contact" or e.mode == "glide" or pending then
         e.timer = math.max(grid(now), now + TICK / 2)
@@ -1204,7 +1243,8 @@ tick = function(tp, now)
         e.timer = math.min(e.timer or math.huge, e.frozen + FROZEN_MAX)
     end
     e.asked_past = false
-    if e.timer and e.timer <= now then
+    -- (libinput's timer is whole µs: a moment less than 1 µs ahead is now.)
+    if e.timer and e.timer < now + 1 then
         e.timer = now + TICK / 4
         e.asked_past = true    -- a bug: counted by the fail-safe (registration)
     end
@@ -1230,9 +1270,19 @@ local frame_of
 -- Takes one evdev frame and returns it rewritten, or nil when libinput may
 -- have it as it is.
 function M.frame(tp, frame, time, now)
-    local slot = tp.slot
+    local slot, decided = tp.slot, tp.started
     local result = frame_of(tp, frame, time, now)
     local e = tp.engine
+    if e and decided and e.mode == "contact" then
+        e.ramp = true
+    end
+    -- libinput takes the touchpad's frame at the touchpad's time, even when
+    -- that is before the timer's last frame (a report that came in late),
+    -- and measures the next move from it; a frame taken out entirely it
+    -- never sees.
+    if e and (result == nil or #result > 0 or #e.prepend > 0) then
+        e.lastframe = time
+    end
     if e and e.lastnorm then
         -- A finger whose place goes to libinput in this frame is measured
         -- by libinput from it: its next paced step starts from no move at
@@ -1327,9 +1377,9 @@ frame_of = function(tp, frame, time, now)
         local pair = a.touch .. ":" .. b.touch
         if tp.pair ~= pair then
             tp.pair, tp.history = pair, {}
-            -- With the engine, libinput's millimetre is its kick's business
-            -- (kick()), and the curve applies from the start.
-            tp.start, tp.started = { a.x, a.y, b.x, b.y }, false
+            -- With the engine, the curve applies once libinput has decided
+            -- (accelerate()), or from the kick (kick()).
+            tp.start, tp.started, tp.since = { a.x, a.y, b.x, b.y }, false, time
         end
         accelerate(tp, a, b, before[known[1]], before[known[2]], time)
     elseif tp.pair then
@@ -1383,10 +1433,6 @@ frame_of = function(tp, frame, time, now)
                 libinput:log_debug(string.format("Pear Up scroll engine: touchpad clock %d us behind", math.floor(lag)))
             end
         end
-        -- libinput takes the touchpad's frame at the touchpad's time, even
-        -- when that is before the timer's last frame (a report that came in
-        -- late): it measures the next move from it.
-        e.lastframe = time
         local decided, result = engine_frame(tp, e, frame, time + (e.lag or 0), known)
         if decided then
             return result
@@ -1405,7 +1451,20 @@ frame_of = function(tp, frame, time, now)
         local index, slot, axis = p[1], p[2], p[3]
         local f = slots[slot]
         local value = frame[index].value
-        if paced[slot] and f.down and not e.fresh then
+        if paced[slot] and f.down and not e.fresh and e.direct and e.delay == 0 and f["out" .. axis] then
+            -- Until libinput has decided the fingers scroll (and in the frame
+            -- it decides on), they are drawn with no delay (catch_up()), and
+            -- their places go to libinput in the touchpad's own frame, at
+            -- once, rather than on the next beat: the first scroll comes as
+            -- soon as without the engine.
+            local i = axis == "x" and 1 or 2
+            value = f["out" .. axis]
+            paced[slot][i], e.outf[slot][i] = value, value
+            if value ~= frame[index].value then
+                frame[index].value = value
+                changed = true
+            end
+        elseif paced[slot] and f.down and not e.fresh then
             drop[index] = true
             changed = true
         elseif paced[slot] and f.down then

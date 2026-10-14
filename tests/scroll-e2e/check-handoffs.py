@@ -35,6 +35,7 @@ simulated. tests/run-scroll-e2e.sh runs it.
      across the whole touchpad, and every gesture
  19. no run spins libinput's timer: its CPU time and wake-ups per second are
      bounded, and a run that never comes back from libinput ends the test
+ 20. every gesture's first scroll comes no later than without the engine
 """
 import os
 import sys
@@ -350,8 +351,8 @@ def main():
         check(f'one finger then a second in the rest: they scroll on ({len(moving)} events), one stop ({len(stops)})',
               len(stops) == 1 and len(moving) > 20)
 
-        # 16 (and 18, for every gesture)
-        jumps_down = []
+        # 16 (and 18 and 20, for every gesture)
+        jumps_down, starts = [], []
         for name in sorted(os.listdir(os.path.join(HERE, 'gestures'))):
             events, _ = G.load(os.path.join(HERE, 'gestures', name))
             frames, cur = [], []
@@ -369,6 +370,11 @@ def main():
             moves = [t for t, v, s in model if not s]
             ok = (not moves and not stops) or (len(stops) == 1 and stops[0] > moves[-1])
             check(f'{name[:-5]}: {len(stops)} stop, after the last of {len(moves)} scrolls', ok)
+            # 20: the first scroll no later than without the engine.
+            off, _ = through(workdir, None, False, frames=frames)
+            off_moves = [t for t, v, s in off if not s]
+            if moves and off_moves:
+                starts.append((name[:-5], moves[0] - off_moves[0]))
 
         # 17
         for prime in (True, False):
@@ -410,6 +416,10 @@ def main():
                   jumps == 0 and short == 0 and mid)
         check(f'jumps only while no finger is down, every gesture ({len(jumps_down)} while down)',
               not jumps_down, str(jumps_down[:5]))
+        # (1 ms for the replay's own timing, which varies by that much.)
+        late = max(starts, key=lambda x: x[1])
+        check(f'the first scroll no later than without the engine, every gesture (at most {late[1]:+.1f} ms, '
+              f'{late[0]}; on average {sum(d for _, d in starts) / len(starts):+.1f} ms)', late[1] <= 1.0)
 
         # 19: no run spun libinput's timer: what each cost, at worst. The
         # engine's beat is 480 a second, and the touchpad's 143; a timer that
@@ -417,8 +427,10 @@ def main():
         # (live.py then ends the run).
         cpu = max(c for c, _ in COST)
         wake = max(w for _, w in COST)
-        check(f'no run spun the timer ({len(COST)} runs): libinput at most {cpu * 100:.1f} % of a CPU, '
-              f'woken at most {wake:.0f} times a second', cpu < 0.25 and wake < 800)
+        retried = sum(r.retried for r in RUNNERS.values())
+        check(f'no run spun the timer ({len(COST)} runs, {retried} made again for a replay held up by the host): '
+              f'libinput at most {cpu * 100:.1f} % of a CPU, woken at most {wake:.0f} times a second',
+              cpu < 0.25 and wake < 800)
     finally:
         for runner in RUNNERS.values():
             runner.__exit__()

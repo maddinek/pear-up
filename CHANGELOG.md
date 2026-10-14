@@ -44,7 +44,13 @@ it back when they are switched off.
   touchpad (grabbed, so the desktop never sees them), the plugin live
   inside the host's libinput, and a headless GNOME Shell to a GTK 4 and a
   Chromium client, measured against a MacBook Air's own stream; its
-  hand-off checks fail a run that spins libinput's timer.
+  hand-off checks fail a run that spins libinput's timer. Off by default:
+  on 2026-10-14 an earlier build's timer held mutter's input thread (no
+  mouse, keyboard or wake) until gnome-shell was killed; fixed, with the
+  fail-safe above, but the switch stays Experimental. Its first scroll now
+  comes no later than without it: the fingers go unscaled until libinput
+  has decided they scroll (1.5 mm on both, or 1 mm after 150 ms), and are
+  drawn with no delay until then, easing back to 9 ms over 100 ms after.
 - **Scrolling as on a MacBook** (Keyboard ▸ Trackpad). The scroll plugin's
   curve is now macOS's own (IOHIDPointerScrollFilter with a MacBook Air's
   table): 0.43 of the 80 mm/s rate at 10 mm/s, 0.64 at 20, 1.08 from 160,
