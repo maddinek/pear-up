@@ -586,8 +586,10 @@ do
     check("frames are passed through as they are", P.frame(tp, frame, 1000) == nil)
 
     -- Just after login: the kernel is still on slot 0 from boot and never
-    -- names it for the first finger, whose touch is then never seen to begin.
-    -- That touch is left alone throughout; the next one is not.
+    -- names it for the first finger. The second finger names its own slot,
+    -- the first one's next move names slot 0, and from there on the pair is
+    -- shaped like any other (unnamed_event()); a touch that began before
+    -- libinput opened the touchpad is left alone (below).
     local rig = new_rig(L, 0)
     local x, y = mm(45), mm(15)
     step(rig, { [0] = { x, y } })
@@ -599,7 +601,24 @@ do
         untouched = untouched and rig.view.slots[0].y == rig.raw.slots[0].y
             and rig.view.slots[1].y == rig.raw.slots[1].y
     end
-    check("from a cold start, a touch that began unseen is left alone", untouched)
+    check("from a cold start, the first two fingers (slot 0 never named) are shaped", not untouched)
+    check("and the plugin never names a slot the kernel is not on",
+        not rig.slot_mismatch and not rig.out_of_range)
+
+    -- The kernel left on slot 3 by the last session, the first finger in it.
+    rig = new_rig(L, 3)
+    x, y = mm(45), mm(15)
+    step(rig, { [3] = { x, y } })
+    for _ = 1, 3 do step(rig, { [3] = { x, y }, [0] = { x + mm(16), y } }) end
+    untouched = true
+    for _ = 1, 100 do
+        x, y = x + 1, y + mm(0.08)
+        step(rig, { [3] = { x, y }, [0] = { x + mm(16), y } })
+        untouched = untouched and rig.view.slots[3].y == rig.raw.slots[3].y
+    end
+    check("from slot 3, its first finger unnamed: shaped once named, no slot mixed up",
+        not untouched and not rig.slot_mismatch and not rig.out_of_range)
+    step(rig, {})
     step(rig, {})
     local out, raw = two_fingers(rig, { speed = 10, distance = 20 })
     check(string.format("and the next two-finger touch is slowed (%.3f)", out / raw), near(out / raw, P.gain(10, L), 0.03))

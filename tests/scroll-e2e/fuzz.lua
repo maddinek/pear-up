@@ -48,7 +48,9 @@ for run = 1, runs do
         { minimum = 0, maximum = YMAX, resolution = 24 }, M.ENGINE_SPEED)
     M.engine(tp)
     -- libinput's side: slot -> tracking id, keys, selected slot.
-    local view, vkeys, vslot = {}, {}, 4
+    -- The kernel starts on any slot (where the last session left it).
+    local start_slot = math.random(0, 4)
+    local view, vkeys, vslot = {}, {}, start_slot
     local function feed(frame)
         for _, e in ipairs(frame) do
             if e.usage == evdev.ABS_MT_SLOT then
@@ -65,7 +67,7 @@ for run = 1, runs do
         end
     end
     -- The kernel's side.
-    local t, kslot, ids, fingers, keys = 1000000, 4, 0, {}, {}
+    local t, kslot, ids, fingers, keys = 1000000, start_slot, 0, {}, {}
     local function tick_until(limit)
         while tp.engine and tp.engine.timer and tp.engine.timer < limit do
             local now = math.floor(tp.engine.timer)
@@ -75,8 +77,12 @@ for run = 1, runs do
                 return false
             end
             for _, f in ipairs(frames) do feed(f) end
+            -- libinput runs an expired timer again at once with the same now:
+            -- a tick that asks for the past would spin its input thread.
             if tp.engine and tp.engine.timer and tp.engine.timer <= now then
-                tp.engine.timer = now + 1
+                fail(run, string.format("tick at %d asked for its timer at %d (mode %s)", now,
+                    math.floor(tp.engine.timer), tostring(tp.engine.mode)))
+                return false
             end
         end
         return true
@@ -95,11 +101,14 @@ for run = 1, runs do
         for _ in pairs(fingers) do count = count + 1 end
         if count == 0 and math.random() < 0.3 then
             -- Two fingers come down together, to scroll: the way to a glide.
-            for _, s in ipairs({ 0, 1 }) do
+            -- Often the first in the slot the kernel is on, unnamed.
+            local pair = { 0, 1 }
+            if math.random() < 0.5 then pair = { kslot, kslot == 0 and 1 or 0 } end
+            for _, s in ipairs(pair) do
                 ids = ids + 1
                 if s ~= kslot then ev(evdev.ABS_MT_SLOT, s); kslot = s end
                 ev(evdev.ABS_MT_TRACKING_ID, ids)
-                fingers[s] = { 900 + s * 400, math.random(600, 1300) }
+                fingers[s] = { 900 + (s % 2) * 400, math.random(600, 1300) }
                 ev(evdev.ABS_MT_POSITION_X, fingers[s][1])
                 ev(evdev.ABS_MT_POSITION_Y, fingers[s][2])
             end

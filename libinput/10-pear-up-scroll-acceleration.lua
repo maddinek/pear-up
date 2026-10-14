@@ -45,10 +45,9 @@
 --   - movement the fingers do not share. Only the common part is scaled, and
 --     only as far as the fingers move alike, so a pinch, a rotation or one
 --     finger resting while the other moves are passed through as they are;
---   - a touch that began before the plugin could tell which slot it is in.
---     The kernel names a slot only when it changes, so just after login the
---     first finger is often unnamed until a second one comes, and that one
---     gesture is libinput's own;
+--   - a touch that began before libinput opened the touchpad, and the first
+--     finger after it until its slot is named (the kernel names a slot only
+--     when it changes; a second finger names it within a frame or two);
 --   - anything but a touchpad.
 --
 -- Momentum after the fingers lift is the apps' own (GTK, Chromium and Firefox
@@ -166,9 +165,10 @@ function M.touchpad(absx, absy, level)
         bottom = absy.maximum - zone * absy.resolution,
         level = level or SPEED,
         -- The slot the kernel last selected. Frames only say when it changes,
-        -- so until one has, which finger an event belongs to is not known and
-        -- nothing is touched.
+        -- so until one has, which finger an event belongs to is not known
+        -- (unnamed_event()).
         slot = nil,
+        unnamed = nil,   -- the finger in that slot, until it is named
         slots = {},
         button = false,
         more = {},
@@ -191,6 +191,39 @@ local function slot_state(tp, slot)
         tp.slots[slot] = f
     end
     return f
+end
+
+-- The first finger after libinput opens the touchpad. The kernel names a slot
+-- only when it changes and starts where it last was, so the first touch (just
+-- after login, or on a new device) often comes without one. It is followed
+-- here, apart from the slots, and left alone. Once a slot is named, an event
+-- for a finger already down in a slot never seen to begin a touch is that
+-- finger (the kernel has come back to its slot, naming it): it joins the
+-- slots and is shaped like any other from then on. A new touch is not it.
+local function unnamed_event(tp, usage, value)
+    if usage == ABS_MT_TRACKING_ID then
+        if value >= 0 then
+            tp.touches = tp.touches + 1
+            tp.unnamed = { down = true, touch = tp.touches, ox = 0, oy = 0, id = value }
+        else
+            tp.unnamed = nil
+        end
+    elseif tp.unnamed then
+        tp.unnamed[usage == ABS_MT_POSITION_X and "x" or "y"] = value
+    end
+end
+
+local function name_unnamed(tp, slot, new_touch)
+    local u = tp.unnamed
+    if not u or new_touch then
+        return
+    end
+    local f = tp.slots[slot]
+    if f and f.id ~= nil then
+        return
+    end
+    tp.unnamed = nil
+    tp.slots[slot] = u
 end
 
 local function clamp_offset(f, axis, low, high)
@@ -350,7 +383,12 @@ local EV_KEY = 1
 -- The next tick on the beat after `t`: the beat is kept, whatever arrives in
 -- between, so that each frame gets the same number of steps.
 local function grid(t)
-    return math.floor(t / TICK + 1) * TICK
+    local g = math.floor(t / TICK + 1) * TICK
+    -- TICK is not a whole number of µs: on a beat, t / TICK can round down.
+    if g <= t then
+        g = g + TICK
+    end
+    return g
 end
 
 -- A place on a finger's path at time `t`, drawn between the points either side.
@@ -904,7 +942,9 @@ local function resting(tp, e, time, tick)
         e.timer = math.min(e.timer or math.huge, math.max(e.frozen + FROZEN_MAX, last + STILL))
         return {}
     end
-    e.timer = math.min(e.timer or math.huge, e.frozen + FROZEN_MAX)
+    if e.frozen + FROZEN_MAX > time then
+        e.timer = math.min(e.timer or math.huge, e.frozen + FROZEN_MAX)
+    end
     return {}
 end
 
@@ -1107,8 +1147,16 @@ function M.tick(tp, now)
         end
         e.timer = last + STILL
     end
-    if e.mode == "frozen" then
+    -- Back when the touch is to be decided, unless that has passed (resting()
+    -- then asked for the moment the fingers will have rested STILL). Never at
+    -- or before now: libinput runs an expired timer again at once, with the
+    -- same now, and a timer that always asks for the past would hold its
+    -- input thread in that loop for good (libinput timer.c, goto restart).
+    if e.mode == "frozen" and e.frozen + FROZEN_MAX > now then
         e.timer = math.min(e.timer or math.huge, e.frozen + FROZEN_MAX)
+    end
+    if e.timer and e.timer <= now then
+        e.timer = now + TICK / 4
     end
     return frames
 end
@@ -1145,8 +1193,13 @@ function M.frame(tp, frame, time, now)
         local usage, value = e.usage, e.value
         if usage == ABS_MT_SLOT then
             tp.slot = value
+        elseif not tp.slot and (usage == ABS_MT_TRACKING_ID or usage == ABS_MT_POSITION_X
+                or usage == ABS_MT_POSITION_Y) then
+            -- Before the kernel has named any slot (unnamed_event()).
+            unnamed_event(tp, usage, value)
         elseif usage == ABS_MT_TRACKING_ID then
             if tp.slot then
+                name_unnamed(tp, tp.slot, value >= 0)
                 local f = slot_state(tp, tp.slot)
                 f.ox, f.oy, f.palm = 0, 0, false
                 f.id = value
@@ -1159,6 +1212,7 @@ function M.frame(tp, frame, time, now)
             end
         elseif usage == ABS_MT_POSITION_X or usage == ABS_MT_POSITION_Y then
             if tp.slot then
+                name_unnamed(tp, tp.slot, false)
                 local f = slot_state(tp, tp.slot)
                 local axis = usage == ABS_MT_POSITION_X and "x" or "y"
                 f[axis] = value
@@ -1356,9 +1410,12 @@ if libinput then
     libinput:register({ 1 })
     -- The engine runs for the first touchpad only: the plugin has one timer.
     local engine_tp, engine_device = nil, nil
-    local function want_timer(e)
+    -- Never at or before now (see the end of M.tick): an expired timer that
+    -- asks for the past again would keep libinput's timer loop, and with it
+    -- the compositor's input, spinning.
+    local function want_timer(e, now)
         if e and e.timer then
-            libinput:timer_set_absolute(math.floor(e.timer))
+            libinput:timer_set_absolute(math.max(math.floor(e.timer), now + 500))
         end
     end
     local function give_up(err)
@@ -1377,7 +1434,7 @@ if libinput then
         for _, frame in ipairs(frames) do
             engine_device:append_frame(frame)
         end
-        want_timer(engine_tp.engine)
+        want_timer(engine_tp.engine, now)
     end)
     libinput:connect("new-evdev-device", function(device)
         if not device:udev_properties().ID_INPUT_TOUCHPAD then
@@ -1423,7 +1480,7 @@ if libinput then
                 device:prepend_frame(before)
             end
             tp.engine.prepend = {}
-            want_timer(tp.engine)
+            want_timer(tp.engine, libinput:now())
             return result
         end)
         device:connect("device-removed", function()
