@@ -44,10 +44,16 @@ local env = {
 local M = assert(load(source, "=plugin", "t", env))()
 
 -- framy's touchpad, as tests/libinput/check-with-libinput.py makes it up.
-local tp = M.touchpad({ minimum = 0, maximum = 2830, resolution = 24 },
-    { minimum = 0, maximum = 1720, resolution = 24 })
+local absx = { minimum = 0, maximum = 2830, resolution = 24 }
+local absy = { minimum = 0, maximum = 1720, resolution = 24 }
+local tp
 if engine then
+    -- As the plugin registers itself with the engine on: finer positions
+    -- (libinput is told the scaled absinfo) and the Mac's speed.
+    tp = M.touchpad(M.scaled(absx, M.SCALE), M.scaled(absy, M.SCALE), M.ENGINE_SPEED, M.SCALE)
     M.engine(tp)
+else
+    tp = M.touchpad(absx, absy)
 end
 
 -- The recording, as frames.

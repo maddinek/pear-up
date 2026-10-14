@@ -33,6 +33,8 @@ container.
    - `clients/gtk-probe.js`: a GTK 4 scrolled window. It logs each scroll event, GTK's
      `decelerate` velocity and, every frame, the frame-clock time and the page position.
    - `clients/chromium-probe.html`: wheel events, and `scrollY` on every `requestAnimationFrame`.
+   - Chromium runs with `--password-store=basic`: otherwise a keyring dialog takes the pointer.
+   - The integration tests' hook extension puts the pointer on the window.
 6. **`report.py`** takes the same measurements of every view and of the Mac. The limits are in
    `thresholds.py`, each with a comment saying where it comes from. Output: `report.md`,
    `metrics.json` and `mac-scroll-<gesture>.png` (distance over time, scaled by the speed at lift,
@@ -51,8 +53,7 @@ leaves a finger down.
 | mode | what it is |
 |---|---|
 | `now` | the plugin as framy has it: Medium (0.7), engine off; apps glide on their own |
-| `engine` | the Mac scroll engine on, Medium |
-| `engine-mac` | engine on, As on a MacBook (0.34): the distances a Mac scrolls |
+| `engine` | the Mac scroll engine on; it scrolls at a MacBook's speed (0.34) whatever the speed line says |
 
 ## Fixtures
 
@@ -80,7 +81,10 @@ synthetic.
 - In stage 2 no libinput hold gesture reaches the clients, because RemoteDesktop has no call for
   one. So when a finger stops an app's own glide (engine off), this test cannot see it.
   `report.py` models it for GTK from source as 90 ms (40 ms quick hold plus GTK's 50 ms).
-- In the headless shell, Chromium draws frames but got no pointer input in the runs so far, so its
-  rows are empty. Its fling with the engine is shown to be zero from source:
-  `kFlingStartTimeoutMs` is 200 ms, and the engine rests 260 ms before the stop.
+- The headless shell renders in software. Up to half of GTK's frames come late, and GDK hands
+  scroll events on once a frame. So GTK views with more than 5 % late frames report distances and
+  GTK's own glide only; the stream is the timing reference.
+  - Chromium's frames come on time (≤ 2 % late) and are measured in full.
+- Chromium 154 predates the WaylandUnscaledTouchpadScrolling flag Pear Up sets on Brave. It
+  still multiplies touchpad scrolling by 12, so its distances are not judged.
 - How it feels is for fingers on framy's real touchpad to say.

@@ -62,7 +62,7 @@ dbus-run-session -- bash -c '
     # The pointer once, early: the first move after start-up only creates it.
     hook HideOverview; hook MovePointer 700 470; sleep 1; hook MovePointer 720 480
     for g in '"${GESTURES[*]}"'; do
-        for mode in $(python3 -c "import json; print(\" \".join(k for k in json.load(open(\"$STREAM\"))[\"$g\"] if k in (\"now\",\"engine\",\"engine-mac\")))"); do
+        for mode in $(python3 -c "import json; print(\" \".join(k for k in json.load(open(\"$STREAM\"))[\"$g\"] if k in (\"now\",\"engine\")))"); do
             GDK_DEBUG=no-portals PROBE_LOG="$OUT/$g.$mode.gtk.jsonl" gjs -m "$SRC/tests/scroll-e2e/clients/gtk-probe.js" > "$OUT/$g.$mode.gtk.log" 2>&1 &
             P=$!
             for _ in $(seq 1 100); do
@@ -75,7 +75,7 @@ dbus-run-session -- bash -c '
             sleep 0.5
             kill $P 2>/dev/null; wait $P 2>/dev/null
             if [[ "${E2E_CHROMIUM:-1}" == 1 ]] && command -v chromium-browser >/dev/null; then
-                chromium-browser --ozone-platform=wayland --no-sandbox --no-first-run --user-data-dir=/tmp/chr \
+                chromium-browser --ozone-platform=wayland --no-sandbox --no-first-run --password-store=basic --user-data-dir=/tmp/chr \
                     --kiosk --enable-logging=stderr --v=0 \
                     --app="file://$SRC/tests/scroll-e2e/clients/chromium-probe.html" 2> "$OUT/$g.$mode.chromium.raw" &
                 C=$!

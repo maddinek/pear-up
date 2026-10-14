@@ -44,7 +44,8 @@ local function fail(run, msg)
 end
 
 for run = 1, runs do
-    local tp = M.touchpad({ minimum = 0, maximum = XMAX, resolution = 24 }, { minimum = 0, maximum = YMAX, resolution = 24 })
+    local tp = M.touchpad(M.scaled({ minimum = 0, maximum = XMAX, resolution = 24 }, M.SCALE),
+        M.scaled({ minimum = 0, maximum = YMAX, resolution = 24 }, M.SCALE), M.ENGINE_SPEED, M.SCALE)
     M.engine(tp)
     -- libinput's side: slot -> tracking id, keys, selected slot.
     local view, vkeys, vslot = {}, {}, 4
@@ -54,9 +55,9 @@ for run = 1, runs do
                 vslot = e.value
             elseif e.usage == evdev.ABS_MT_TRACKING_ID then
                 view[vslot] = e.value >= 0 and e.value or nil
-            elseif e.usage == evdev.ABS_MT_POSITION_X and (e.value < 0 or e.value > XMAX) then
+            elseif e.usage == evdev.ABS_MT_POSITION_X and (e.value < 0 or e.value > XMAX * M.SCALE) then
                 fail(run, "x out of range: " .. e.value)
-            elseif e.usage == evdev.ABS_MT_POSITION_Y and (e.value < 0 or e.value > YMAX) then
+            elseif e.usage == evdev.ABS_MT_POSITION_Y and (e.value < 0 or e.value > YMAX * M.SCALE) then
                 fail(run, "y out of range: " .. e.value)
             elseif e.usage >> 16 == EV_KEY then
                 vkeys[e.usage] = e.value

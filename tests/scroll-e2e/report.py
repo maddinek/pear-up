@@ -106,6 +106,9 @@ def stream_series(entry, mode, gtk_model=False):
     start = entry['fingers']['start']
     reflick = len(lifts) > 1
     return {'moves': moves, 'lift': 0.0, 'touch': touches[0] if touches and not reflick else None, 'hz': 120,
+            # The engine draws the fingers 9 ms behind the touchpad (its DELAY):
+            # what they moved up to the lift is on screen 9 ms later.
+            'contact_end': 9.0 if mode == 'engine' else 0.0,
             'touch2': touches[0] if touches and reflick else None,
             'start': start - lift if start is not None else None, 'stops': stops, 'app_velocity': added,
             'track': [(t - lift, mm) for t, mm in entry['fingers']['track']]}
@@ -122,9 +125,12 @@ def client_series(entry, mode, path, fed_path, kind):
         return None
     lifts = entry['fingers']['lifts']
     lift = lifts[0] if lifts else fed[-1]['t']
-    if kind == 'gtk':
+    events = None
+    if kind in ('gtk', 'gtk-events'):
         offset = fed[0]['sent'] / 1000 - fed[0]['t']     # monotonic ms - stream ms
         frames = [(r['frame'] / 1000 - offset, r['y']) for r in rows if r['k'] == 'frame']
+        events = [(r['mono'] / 1000 - offset, abs(r['dy']) * GTK_FACTOR) for r in rows
+                  if r['k'] == 'scroll' and 'mono' in r and r['dy']]
         # GTK's "decelerate" is in touchpad units a second; its window
         # multiplies it by 2.5 like the scroll itself.
         added = GTK_FACTOR * max([abs(r['vy']) for r in rows if r['k'] == 'decelerate'] or [0.0])
@@ -135,6 +141,7 @@ def client_series(entry, mode, path, fed_path, kind):
         offset = wheels[0]['t'] - fed[0]['t']             # page ms - stream ms
         frames = [(r['t'] - offset, r['y']) for r in rows if r['k'] == 'frame']
         added = None
+        events = [(r['t'] - offset, abs(r['dy'])) for r in wheels if r['dy']]
     # Only from the first scroll fed on: before it the probe set its page to
     # the middle, which is no scroll.
     frames = [(t, y) for t, y in frames if t >= fed[0]['t'] - 20]
@@ -146,7 +153,28 @@ def client_series(entry, mode, path, fed_path, kind):
     for (t1, y1), (t2, y2) in zip(frames, frames[1:]):
         if y2 != y1:
             moves.append((t2, abs(y2 - y1)))
+    # What the app scrolled after the stop that ended the gesture: its own glide.
+    stops = [f['t'] for f in fed if f['stop']]
+    total = sum(d for _, d in moves)
+    fling = sum(d for t, d in moves if stops and t > stops[-1] + 30)
     base = stream_series(entry, mode)
+    if kind.endswith('-events'):
+        # The events the app was handed, when it got them, and GTK's own glide
+        # from the velocity it reported: not tied to when the headless shell
+        # managed to draw.
+        moves = list(events or [])
+        if added and stops:
+            v = added
+            stop = stops[-1]
+            prev = 0.0
+            for k in range(1, 3000):
+                x = v / 4 * (1 - math.exp(-4 * k / 1000))
+                if x - prev > 1e-3:
+                    moves.append((stop + k, x - prev))
+                prev = x
+        # Both toolkits hand their events on once a frame (GDK compresses
+        # scroll events, Chromium coalesces wheel events), so these come in
+        # frame-sized batches too: the drawn frames' lateness applies.
     # What is drawn comes a frame or so after the event: find that delay by
     # lining the drawn distance up with the stream's, report it, and measure
     # the rest on the lined-up series, so the shape is not blurred by it.
@@ -168,6 +196,10 @@ def client_series(entry, mode, path, fed_path, kind):
     delay = best[1]
     moves = [(t - lift - delay, d) for t, d in moves]
     base.update({'moves': moves, 'app_velocity': added, 'hz': hz, 'draw_delay_ms': delay, 'late_frames': late,
+                 'fling_share': fling / total if total and not kind.endswith('-events') else None,
+                 # Chromium 154 scales touchpads 12x (no WaylandUnscaledTouchpadScrolling yet): no distance check.
+                 'track': None if kind.startswith('chromium') else base.get('track'),
+                 'track_for_start': base.get('track'),
                  'frames': [(t - lift - delay, y) for t, y in frames]})
     return base
 
@@ -182,7 +214,10 @@ def bins(moves, t0, t1, width):
     return b
 
 
-TIMING = ('contact_jitter', 'start_latency_ms', 'handoff_ratio', 'glide_hold_ms', 'glide_tau_ms', 'handover_jump')
+# What depends on when each frame came, including the ratios to the speed in
+# the 50 ms before the lift, which a late frame's batch of events distorts.
+TIMING = ('contact_jitter', 'start_latency_ms', 'handoff_ratio', 'glide_hold_ms', 'glide_tau_ms', 'handover_jump',
+          'handover_dip', 'glide_over_lift_s')
 
 
 def measure(s, name):
@@ -198,17 +233,23 @@ def measure(s, name):
 
 
 def measure_all(s):
-    moves = s['moves']
     m = {}
-    if not moves:
+    if not s['moves']:
         return m
+    # Everything about the lift is measured from when it is on screen: the
+    # engine draws the fingers DELAY behind the touchpad (contact_end).
+    shift = s.get('contact_end', 0.0)
+    moves = [(t - shift, d) for t, d in s['moves']]
     first = moves[0][0]
     # Contact jitter: the steady middle half of the touch, per frame.
     width = 1000 / s['hz']
     a = first + (0 - first) * 0.25
     b = first + (0 - first) * 0.75
     fr = bins(moves, a, b, width)
-    if len(fr) >= 8 and sum(fr) > 0:
+    # Only where a frame moves at least 1.5 px (3 a 60 Hz frame, as the Mac
+    # contacts it is taken on): slower, both sides step by whole points or
+    # units every few frames, which says nothing about pacing.
+    if len(fr) >= 8 and sum(fr) / len(fr) >= 1.5 * 120 / s['hz']:
         res = []
         for i in range(2, len(fr) - 2):
             avg = sum(fr[i - 2:i + 3]) / 5
@@ -216,9 +257,24 @@ def measure_all(s):
         mean = sum(fr) / len(fr)
         m['contact_jitter'] = math.sqrt(sum(r * r for r in res) / len(res)) / mean
     if s.get('start') is not None:
-        m['start_latency_ms'] = first - s['start']
+        # Against when a Mac would show its first point for the same fingers:
+        # the curve with the Air's table summed until it reaches one point.
+        mac_first = None
+        track = s.get('track') or s.get('track_for_start') or []
+        total = 0.0
+        for (t1, y1), (t2, y2) in zip(track, track[1:]):
+            if t2 < s['start'] - shift:
+                continue
+            mm = abs(y2 - y1)
+            speed = mm / max((t2 - t1) / 1000, 1e-3)
+            total += mm * MAC_PT_PER_MM * share(speed)
+            if total >= 1.0:
+                mac_first = t2
+                break
+        if mac_first is not None:
+            m['start_latency_ms'] = (first + shift) - max(mac_first, s['start'])
     before = sum(d for t, d in moves if -50 <= t <= 0) / 0.05
-    contact = sum(d for t, d in moves if t <= 0)
+    contact = sum(d for t, d in moves if t <= s.get('contact_end', 0.0))
     after = [(t, d) for t, d in moves if t > 0 and (s['touch'] is None or t <= s['touch'])]
     if before > 0:
         m['lift_speed'] = before
@@ -252,8 +308,17 @@ def measure_all(s):
         if s.get('app_velocity') is not None:
             m['app_added_velocity_share'] = s['app_velocity'] / before
     if s['touch'] is not None:
-        late = [t for t, d in moves if t > s['touch']]
+        late = [t + shift for t, d in moves if t + shift > s['touch']]
         m['cancel_latency_ms'] = (max(late) - s['touch']) if late else 0.0
+    if s.get('fling_share') is not None:
+        m['app_fling_share'] = s['fling_share']
+    # How far the page slows where new fingers take over a glide: the slowest
+    # 16.7 ms within 300 ms of their touch over the speed just before it.
+    if s.get('touch2') is not None:
+        pre = sum(d for t, d in moves if s['touch2'] - 50 <= t < s['touch2']) / 0.05
+        after = bins(moves, s['touch2'], s['touch2'] + 300, 16.67)
+        if pre > 0 and after:
+            m['handover_dip'] = min(after) / 0.01667 / pre
     # Continuity across a second gesture's touch: the largest frame within
     # 100 ms of it over the largest anywhere else in the gesture. A jump where
     # the glide and the new fingers meet stands out above both.
@@ -290,8 +355,10 @@ def applies(gesture, key):
         return gesture.startswith(TH.SLOW)
     if key == 'cancel_latency_ms':
         return gesture.startswith(TH.CANCELS)
-    if key == 'handover_jump':
+    if key in ('handover_jump', 'handover_dip'):
         return gesture.startswith(TH.REFLICKS)
+    if key == 'app_fling_share':
+        return gesture.startswith(TH.GLIDES)
     if key == 'app_added_velocity_share':
         return gesture.startswith(TH.GLIDES)
     return True
@@ -332,14 +399,15 @@ def main():
 
     views = {}
     for g, entry in stream.items():
-        for mode in ('now', 'engine', 'engine-mac'):
+        for mode in ('now', 'engine'):
             if mode not in entry:
                 continue
             views[(g, mode, 'stream')] = stream_series(entry, mode)
             views[(g, mode, 'gtk-model')] = stream_series(entry, mode, gtk_model=True)
-            for kind in ('gtk', 'chromium'):
-                c = client_series(entry, mode, os.path.join(clients, f'{g}.{mode}.{kind}.jsonl'),
-                                  os.path.join(clients, f'{g}.{mode}.{"fed" if kind == "gtk" else "cfed"}.jsonl'),
+            for kind in ('gtk-events', 'gtk', 'chromium-events', 'chromium'):
+                app = kind.split('-')[0]
+                c = client_series(entry, mode, os.path.join(clients, f'{g}.{mode}.{app}.jsonl'),
+                                  os.path.join(clients, f'{g}.{mode}.{"fed" if app == "gtk" else "cfed"}.jsonl'),
                                   kind)
                 if c:
                     views[(g, mode, kind)] = c
@@ -366,17 +434,22 @@ def main():
         lines.append(f'| {key} | {lim} | ' + (' | '.join(f'{x:.3g}' for x in a[:3]) + f' | {a[3]}' if a else '— | — | — | 0') + ' |')
 
     failed = {}
-    for mode in ('now', 'engine', 'engine-mac'):
-        for view in ('gtk', 'chromium', 'gtk-model', 'stream'):
+    for mode in ('now', 'engine'):
+        for view in ('gtk-events', 'gtk', 'chromium-events', 'chromium', 'gtk-model', 'stream'):
             rows = [(g, results[(g, mode, view)]) for g in stream if (g, mode, view) in results]
             if not rows:
                 continue
             note = {
                 'stream': 'what libinput hands every app, binned at 120 Hz: a client drawing every frame on time',
                 'gtk-model': 'that stream through GTK 4\'s own glide, from its source',
+                'gtk-events': 'the scroll events the GTK 4 probe received, when it received them, plus the '
+                              'glide GTK started itself (its decelerate velocity). GDK hands scroll events on once '
+                              'a frame, so with late frames only distances and the app\'s own glide count',
                 'gtk': 'what the GTK 4 probe drew in the headless shell; timing measures left out when over 5% '
                        'of its frames came late (software rendering)',
-                'chromium': 'what Chromium drew in the headless shell',
+                'chromium-events': 'the wheel events Chromium\'s page received (Chromium 154, without the '
+                                   'WaylandUnscaledTouchpadScrolling flag: 12x scale, so no distance check)',
+                'chromium': 'what Chromium drew (scrollY each animation frame), its own fling included',
             }[view]
             lates = [results[(g, mode, view)].get('late_frames') for g, _ in rows]
             lates = [x for x in lates if x is not None]
@@ -406,7 +479,7 @@ def main():
               open(os.path.join(out, 'metrics.json'), 'w'), indent=1)
 
     # Plots: displacement over time, Mac vs framy, per gesture (best view).
-    colors = {'now': '#d1495b', 'engine': '#2e86ab', 'engine-mac': '#66a182'}
+    colors = {'now': '#d1495b', 'engine': '#2e86ab'}
     for g in stream:
         fig, ax = plt.subplots(figsize=(8.5, 4.6))
         for s, mm in zip(mac, mac_m):
@@ -419,8 +492,8 @@ def main():
                 ys.append(cum)
             base = next((y for x, y in zip(xs, ys) if x >= 0), ys[-1])
             ax.plot(xs, [(y - base) / mm['lift_speed'] for y in ys], color='0.6', lw=0.8)
-        for mode in ('now', 'engine', 'engine-mac'):
-            for view in ('gtk', 'chromium', 'gtk-model'):
+        for mode in ('now', 'engine'):
+            for view in ('gtk-events', 'gtk-model', 'chromium'):
                 k = (g, mode, view)
                 if k not in views:
                     continue
@@ -434,7 +507,7 @@ def main():
                     ys.append(cum)
                 base = next((y for x, y in zip(xs, ys) if x >= 0), ys[-1] if ys else 0)
                 ax.plot(xs, [(y - base) / mm['lift_speed'] for y in ys], color=colors[mode],
-                        ls={'gtk': '-', 'chromium': '--', 'gtk-model': ':'}[view], lw=1.6,
+                        ls={'gtk-events': '-', 'chromium': '--', 'gtk-model': ':'}[view], lw=1.6,
                         label=f'framy {mode}, {view}')
                 break
         ax.plot([], [], color='0.6', lw=0.8, label='MacBook Air flicks')

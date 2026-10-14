@@ -41,7 +41,10 @@ import gestures as G  # noqa: E402
 PLUGIN = os.path.abspath(os.path.join(HERE, '..', '..', 'libinput', '10-pear-up-scroll-acceleration.lua'))
 RES = 24
 UNITS_PER_MM = 10.5   # libinput 1.31.3's two-finger scroll, units per mm (no plugin; see agrees())
-MODES = {'now': (False, '0.7'), 'engine': (True, '0.7'), 'engine-mac': (True, '0.34')}
+# With the engine on the plugin scrolls at the Mac's speed whatever the speed
+# line says (ENGINE_SPEED), and tells libinput positions in quarter units.
+MODES = {'now': (False, '0.7'), 'engine': (True, '0.7')}
+SCALE = 8
 
 
 def simulate(events_in, engine, events_out, speed):
@@ -66,14 +69,18 @@ def read_frames(path):
     return frames
 
 
-def scroll_from_frames(frames):
+def scroll_from_frames(frames, res=RES):
     """libinput's two-finger scroll from the frames it is handed: while two
     touches are down, the movement of those that moved, over two, in scroll
     units; a touch moving over 20 mm per 12 ms (normalised as libinput does)
     is a jump and moves nothing; a stop when fewer than two remain.
     [(µs, vertical units, stop)]."""
-    slot, down, pos, moved_at = 0, {}, {}, {}
+    slot, down, pos, moved_at, origin = 0, {}, {}, {}, {}
     out, scrolling = [], False
+    # libinput scrolls nothing until a touch has moved a millimetre from
+    # where it came down (tp_gesture_detect_motion_gestures), and the first
+    # delta after that decision only starts the scroll.
+    decided, started = False, False
     for t, events in frames:
         before = {s: pos.get(s) for s in down}
         dirty = set()
@@ -91,6 +98,21 @@ def scroll_from_frames(frames):
                 p[0 if code == 0x35 else 1] = value
                 pos[slot] = tuple(p)
                 dirty.add(slot)
+        for s_ in down:
+            if s_ not in origin and s_ in pos:
+                origin[s_] = pos[s_]
+        for s_ in list(origin):
+            if s_ not in down:
+                del origin[s_]
+        if len(down) != 2:
+            decided, started = False, False
+        elif not decided:
+            if any(math.hypot(pos[s_][0] - origin[s_][0], pos[s_][1] - origin[s_][1]) / res >= 1.0
+                   for s_ in down if s_ in pos and s_ in origin):
+                decided = True
+            for s_ in dirty:
+                moved_at[s_] = t
+            continue
         if len(down) == 2:
             dy = 0.0
             for s in down:
@@ -98,13 +120,16 @@ def scroll_from_frames(frames):
                     d = pos[s][1] - before[s][1]
                     dx = pos[s][0] - before[s][0]
                     dt = max(t - moved_at.get(s, t), 1)
-                    if math.hypot(dx, d) / RES * 12000 / dt > 20 and dt < 30000:
+                    if math.hypot(dx, d) / res * 12000 / dt > 20 and dt < 30000:
                         d = 0
                     dy += d
                     moved_at[s] = t
+            if dy and not started:
+                started = True
+                dy = 0.0
             if dy:
                 scrolling = True
-                out.append((t, dy / 2 / RES * UNITS_PER_MM, False))
+                out.append((t, dy / 2 / res * UNITS_PER_MM, False))
         elif scrolling:
             out.append((t, 0.0, True))
             scrolling = False
@@ -164,7 +189,22 @@ def agrees(real, model):
     return -2 <= mt - rt <= 45 and rn >= 0.7 * mn - 10
 
 
-def libinput_scrolls(workdir, events_file, model=None, tries=10):
+def device(workdir, scale):
+    """A directory with the made-up touchpad, its positions `scale` times
+    finer, as the plugin with the engine on has libinput see it."""
+    path = os.path.join(workdir, f'device-{scale}')
+    if not os.path.exists(path):
+        os.makedirs(path)
+        saved = er.cwl.RES, er.cwl.XMAX, er.cwl.YMAX
+        er.cwl.RES, er.cwl.XMAX, er.cwl.YMAX = saved[0] * scale, saved[1] * scale, saved[2] * scale
+        try:
+            er.cwl.write_device(path)
+        finally:
+            er.cwl.RES, er.cwl.XMAX, er.cwl.YMAX = saved
+    return path
+
+
+def libinput_scrolls(workdir, events_file, model=None, tries=10, scale=1):
     """Real libinput, no plugin, on a frames file: [(ms, units, stop)], log."""
     if os.path.exists(er.INSTALLED):
         os.remove(er.INSTALLED)
@@ -190,8 +230,9 @@ def libinput_scrolls(workdir, events_file, model=None, tries=10):
                  'printf "I:1\\nE:ID_INPUT=1\\nE:ID_INPUT_TOUCHPAD=1\\n" > "$UMOCKDEV_DIR/run/udev/data/c13:72" && '
                  f'exec timeout -s INT {span:.1f} libinput debug-events --device {er.cwl.DEV}')
         try:
-            r = subprocess.run(['umockdev-run', '-d', os.path.join(workdir, 'touchpad.umockdev'),
-                                '-i', f'{er.cwl.DEV}={os.path.join(workdir, "touchpad.ioctl")}',
+            dev = device(workdir, scale)
+            r = subprocess.run(['umockdev-run', '-d', os.path.join(dev, 'touchpad.umockdev'),
+                                '-i', f'{er.cwl.DEV}={os.path.join(dev, "touchpad.ioctl")}',
                                 '-e', f'{er.cwl.DEV}={path}', '--', 'sh', '-c', inner],
                                cwd=workdir, capture_output=True, text=True, timeout=span + 30)
         except subprocess.TimeoutExpired:
@@ -247,26 +288,9 @@ def main():
                 engine, speed = MODES[mode]
                 sim = os.path.join(workdir, 'sim.events')
                 simulate(raw, engine, sim, speed)
-                model = scroll_from_frames(read_frames(sim))
-                real, log = libinput_scrolls(workdir, sim, model)
-                # libinput holds back the start of a scroll (about a mm) until
-                # it has decided on one; take as much off the model's start
-                # as it did, or 16 units (1.5 mm) when the replay broke.
-                held = (abs(sum(v for _, v, s in model if not s)) - abs(sum(v for _, v, s in real if not s))
-                        if real else 16.0)
-                starts = 1 + sum(1 for _, _, s in model[:-1] if s)
-                per = held / starts if real else 16.0
-                kept, gone, fresh = [], 0.0, True
-                for t, v, s in model:
-                    if s:
-                        kept.append((t, v, s))
-                        gone, fresh = 0.0, True
-                    elif fresh and gone + abs(v) <= per + 1e-6:
-                        gone += abs(v)
-                    else:
-                        fresh = False
-                        kept.append((t, v, s))
-                model = kept
+                scale = SCALE if engine else 1
+                model = scroll_from_frames(read_frames(sim), RES * scale)
+                real, log = libinput_scrolls(workdir, sim, model, scale=scale)
                 entry[mode] = {
                     'stream': [((t - t0) / 1000, v, s) for t, v, s in model],
                     'libinput': real,

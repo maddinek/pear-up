@@ -10,19 +10,21 @@ to every limit, so a limit that the Mac itself fails is visible at once.
 LIMITS = {
     # Unevenness while touching: how much the distance per frame wanders
     # around its own 5-frame average, over that average (coefficient of
-    # variation), in the steady middle half of the touch. The Mac sends one
+    # variation), in the steady middle half of the touch, where a frame moves
+    # at least 1.5 px (3 a Mac frame): slower, both step by whole points. The Mac sends one
     # event a frame and measures about 0.07-0.12 at 60 Hz, mostly its rounding
     # to whole points. framy draws at 120 Hz, where whole-unit rounding weighs
     # twice as much, so up to 0.20.
     'contact_jitter': (None, 0.20),
 
-    # Milliseconds from the fingers first moving 0.1 mm to the first scroll.
-    # libinput waits for about a millimetre before it calls it a scroll, which
-    # at the start of a gesture takes 15-40 ms; on a Mac the first point comes
-    # in the first frame of movement. The engine may add its DELAY (9 ms), and
-    # no more: 60 ms is the most a scroll start may lag behind a Mac's by
-    # libinput's millimetre plus that.
-    'start_latency_ms': (None, 60),
+    # How much later than a Mac the page starts to move: ms from the first
+    # scroll to when a Mac would show its first point for the same fingers
+    # (the Air's curve summed over the finger track until it reaches one
+    # point; at 5 mm/s that alone takes about 120 ms). libinput waits for a
+    # millimetre before it scrolls (15-40 ms at a normal start, far more when
+    # slow); the engine helps it past that and adds its DELAY (9 ms). 40 ms
+    # allowed.
+    'start_latency_ms': (None, 40),
 
     # The hand-off: speed in the first 33 ms after the lift over the speed in
     # the 50 ms before it. Mac: 1.11-1.45, fit 1.30 (9 flicks). +-0.2.
@@ -73,6 +75,17 @@ LIMITS = {
     # contact starts from rest, so nothing there is bigger than the flicks
     # themselves; a jump where glide and fingers meet would be. 1.2 allowed.
     'handover_jump': (None, 1.2),
+
+    # The other side of the hand-over: the slowest 16.7 ms within 300 ms of
+    # the new touch over the glide's speed just before it. A glide that stops
+    # dead under new fingers and only resumes once they get going is the
+    # hitch to avoid; 60% allowed.
+    'handover_dip': (0.6, None),
+
+    # What a drawn page moved after the stop that ended the gesture, over all
+    # it moved: the app's own fling (Chromium's from the last 200 ms, GTK's
+    # from the last 150 ms). The Mac's apps add none; 3% allowed.
+    'app_fling_share': (None, 0.03),
 }
 
 # Which checks apply to which gesture (by name prefix).

@@ -43,10 +43,11 @@ def through(workdir, gesture, engine=True):
     sim = os.path.join(workdir, 's.events')
     R.simulate(raw, engine, sim, "0.7")
     frames = R.read_frames(sim)
-    model = [((t - k.t0 * 1e6) / 1000, v, s) for t, v, s in R.scroll_from_frames(frames)]
+    scale = R.SCALE if engine else 1
+    model = [((t - k.t0 * 1e6) / 1000, v, s) for t, v, s in R.scroll_from_frames(frames, R.RES * scale)]
     lines = None
     for _ in range(8):
-        got, log = R.libinput_scrolls(workdir, sim)
+        got, log = R.libinput_scrolls(workdir, sim, scale=scale)
         if got is None:
             continue
         # libinput_scrolls keeps scroll events only; take the rest from its log.
