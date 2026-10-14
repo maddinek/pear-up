@@ -73,7 +73,8 @@
 local SPEED = 0.7
 
 -- Whether the Mac scroll engine is on (see "The Mac scroll engine" below), as
--- Pear Up's preferences write it. Experimental.
+-- Pear Up's preferences write it. Experimental. With it on, SPEED rests and
+-- the plugin scrolls at a MacBook's speed (ENGINE_SPEED).
 local ENGINE = false
 
 -- { mm/s, share of the 80 mm/s rate }, from the table above; linear between,
@@ -153,7 +154,7 @@ end
 -- The state of one touchpad, from the absinfo of its two position axes.
 -- Without a resolution there are no millimetres to measure speed in, and the
 -- touchpad is left alone.
-function M.touchpad(absx, absy, level)
+function M.touchpad(absx, absy, level, scale)
     if not absx or not absy or (absx.resolution or 0) <= 0 or (absy.resolution or 0) <= 0 then
         return nil
     end
@@ -164,6 +165,7 @@ function M.touchpad(absx, absy, level)
         ymin = absy.minimum, ymax = absy.maximum, yres = absy.resolution,
         bottom = absy.maximum - zone * absy.resolution,
         level = level or SPEED,
+        scale = scale or 1, -- what positions are multiplied by (see M.scaled)
         -- The slot the kernel last selected. Frames only say when it changes,
         -- so until one has, which finger an event belongs to is not known and
         -- nothing is touched.
@@ -221,6 +223,7 @@ local function accelerate(tp, a, b, a0, b0, time)
     local cx, cy = (ax + bx) / 2, (ay + by) / 2
     local speed = math.sqrt(cx * cx + cy * cy) / span * 1000000
     tp.speed = speed
+    tp.vel = { cx / span * 1000000, cy / span * 1000000 } -- mm/s, the fingers alone
     -- Until one finger has moved START_MM, libinput is still deciding what
     -- the fingers do, and is left to.
     if not tp.started then
@@ -261,7 +264,16 @@ end
 --   - Paced: while two fingers scroll, libinput is told where they are on a
 --     fixed beat of TICK, four times a 120 Hz frame, at a point DELAY behind
 --     the touchpad and drawn between its last two reports, so every frame gets
---     the same share of the movement.
+--     the same share of the movement. Places are told in eighths of a
+--     touchpad unit (SCALE: libinput is given the finer absinfo, the same
+--     millimetres), so a slow scroll does not step by whole units.
+--   - Start: libinput scrolls nothing until a finger has moved a millimetre;
+--     once both have moved KICK_FROM alike it is shown them KICK further,
+--     which it spends on that decision, so a slow scroll starts nearly at
+--     once, as on a Mac. The curve then applies from the start.
+--   - Speed: with the engine on the plugin scrolls as far as a MacBook
+--     (ENGINE_SPEED), whatever the speed line says: the faster speeds were
+--     there to make up for the apps' short glides.
 --   - Glide: when the fingers lift at MOMENTUM_FROM or faster, libinput is
 --     told they are still there, moving on as a MacBook Air glides (measured
 --     on one with an AppKit probe, 9 flicks, fitted): from GLIDE_START times
@@ -274,10 +286,12 @@ end
 --     a rest longer than that each of them adds nothing: the glide is the engine's
 --     alone, and the same in every app. A slow lift rests too, for the same
 --     reason, so no app glides where a Mac would not.
---   - Touch: a finger put down during the glide or the rest stops it at once,
---     as on a Mac, and is not shown to libinput yet. If it becomes two fingers
+--   - Touch: a finger put down during the glide or the rest stops it (within
+--     GRACE), as on a Mac, and is not shown to libinput yet. If it becomes two fingers
 --     in the same slots, they take over the resting ones and the scroll goes
---     on as one gesture. A finger that points (POINTER_MM) or presses ends
+--     on as one gesture: the glide runs on under the first finger for GRACE,
+--     and under the two it fades with CARRY_TAU while they get going, so the
+--     page does not stall between them. A finger that points (POINTER_MM) or presses ends
 --     the resting fingers and is handed to libinput as it is at once (its
 --     quick hold then stops whatever glide an app starts); one that only
 --     rests is handed over once the resting fingers have been still STILL.
@@ -310,8 +324,21 @@ local JUMP_MIN_MM = 20       -- the smallest move back libinput surely ignores
 local JUMP_FRESH = 10000     -- µs: a finger moved longer ago than this is not moved back
 local STEP_GROWTH = 0.8      -- mm a paced step may be longer than the one before
 local STEP_MAX = 3           -- mm a paced step may be at most
+local SCALE = 8              -- the engine tells libinput places in eighths of a touchpad unit
+local ENGINE_SPEED = 0.34    -- the engine scrolls as far as a MacBook (the speed setting is for apps that glide on their own)
+local CARRY_TAU = 220000     -- µs: a glide carried into new fingers fades with this
+local KICK_FROM = 0.5        -- mm two fingers move alike before libinput is helped past its millimetre
+local KICK = 1.1             -- mm it is helped by
+local GRACE = 8000           -- µs a glide runs on under a new touch, for a second finger to join it
+M.SCALE, M.ENGINE_SPEED = SCALE, ENGINE_SPEED
 
 local EV_KEY = 1
+
+-- The next tick on the beat after `t`: the beat is kept, whatever arrives in
+-- between, so that each frame gets the same number of steps.
+local function grid(t)
+    return math.floor(t / TICK + 1) * TICK
+end
 
 -- A place on a finger's path at time `t`, drawn between the points either side.
 local function at(path, t)
@@ -533,7 +560,92 @@ local function touch_frame(tp, e)
 end
 
 -- Ends the resting fingers and hands libinput the real ones.
+-- libinput scrolls nothing until a finger has moved about a millimetre
+-- (evdev-mt-touchpad-gestures.c: "both touches moved less than a mm"), which a
+-- slow scroll takes 60 ms and more to cover; a Mac moves the page in the first
+-- frame. Once both fingers have moved KICK_FROM alike, libinput is shown them
+-- KICK further at once, which it spends on that decision and scrolls nothing
+-- for; from there on the fingers scroll it from where they really are.
+local function kick(tp, e, time)
+    local a, b = tp.slots[e.slots[1]], tp.slots[e.slots[2]]
+    local s = tp.start
+    if not s or not a.x or not b.x then
+        return
+    end
+    local ax, ay = (a.x - s[1]) / tp.xres, (a.y - s[2]) / tp.yres
+    local bx, by = (b.x - s[3]) / tp.xres, (b.y - s[4]) / tp.yres
+    local la, lb = math.sqrt(ax * ax + ay * ay), math.sqrt(bx * bx + by * by)
+    if la < KICK_FROM or lb < KICK_FROM or time - e.since < 20000 then
+        return
+    end
+    e.kicked = true
+    if (ax * bx + ay * by) / (la * lb) < 0.8 then
+        return -- not alike: a pinch or a turn, libinput's to decide
+    end
+    local dx, dy = (ax + bx) / 2, (ay + by) / 2
+    local l = math.sqrt(dx * dx + dy * dy)
+    local kx, ky = dx / l * KICK * tp.xres, dy / l * KICK * tp.yres
+    -- What the fingers moved before libinput decided (after the curve), which
+    -- it will never scroll: given again after it, over the next steps.
+    local px, py = 0, 0
+    for _, slot in ipairs(e.slots) do
+        local path = e.path[slot] or {}
+        if #path >= 2 then
+            px = px + (path[#path][2] - path[1][2]) / 2
+            py = py + (path[#path][3] - path[1][3]) / 2
+        end
+    end
+    for _, slot in ipairs(e.slots) do
+        for _, p in ipairs(e.path[slot] or {}) do
+            p[2], p[3] = p[2] + kx, p[3] + ky
+        end
+    end
+    e.coff = { e.coff[1] + kx + px, e.coff[2] + ky + py }
+end
+
+-- A glide that new fingers took over keeps going under them, fading with
+-- CARRY_TAU, less what the fingers themselves already move along it, so the
+-- page does not stall while they get going. Fingers moving against it end it.
+local function carry(tp, e, now)
+    local c = e.carry
+    local dt = now - c.last
+    c.last = now
+    local len = math.sqrt(c[1] * c[1] + c[2] * c[2])
+    if len <= 0 or dt <= 0 then
+        return
+    end
+    local ux, uy = c[1] / len, c[2] / len
+    -- How fast the fingers themselves go along it, after the curve, in
+    -- units a µs (their path also holds the carry, so not from that).
+    local along = 0
+    if tp.vel then
+        local g = M.gain(tp.speed or 0, tp.level)
+        along = (tp.vel[1] * tp.xres * ux + tp.vel[2] * tp.yres * uy) * g / 1000000
+    end
+    local fading = len * math.exp(-(now - c.t0) / CARRY_TAU)
+    if along < -0.2 * fading or mm_speed(tp, ux * fading, uy * fading) < GLIDE_END then
+        e.carry = nil
+        return
+    end
+    local rate = math.max(0, fading - math.max(along, 0))
+    e.coff = { e.coff[1] + ux * rate * dt, e.coff[2] + uy * rate * dt }
+end
+
+-- Stops the resting fingers where libinput was last told they are.
+local function halt(e, time)
+    if e.halted or not e.slots then
+        return
+    end
+    e.halted = true
+    for _, slot in ipairs(e.slots) do
+        local o = e.outf[slot]
+        e.path[slot] = { { time - DELAY, o[1], o[2] } }
+    end
+    e.step = 0
+end
+
 local function release(tp, e)
+    e.carry = nil
     local lifted = lift_frame(tp, e)
     local touched = touch_frame(tp, e)
     if #touched > (tp.slot and 1 or 0) then
@@ -579,13 +691,20 @@ local function resting(tp, e, time)
     end
     local new, all = newcomers(tp, e, time)
     if #new > 0 and (e.mode == "glide" or e.mode == "still") then
-        e.mode, e.frozen = "frozen", time
-        -- The glide stops where libinput was last told it is.
-        for _, slot in ipairs(e.slots) do
-            local o = e.outf[slot]
-            e.path[slot] = { { time - DELAY, o[1], o[2] } }
+        -- What the glide was doing, for fingers that take it over.
+        e.carry = nil
+        if e.mode == "glide" then
+            -- As it is on screen: DELAY behind.
+            local g = M.glide(time - DELAY - e.start)
+            e.carry = { e.vx * g, e.vy * g }
         end
-        e.step = 0
+        e.mode, e.frozen, e.halted = "frozen", time, false
+        if not e.carry then
+            halt(e, time)
+        end
+        -- Otherwise the glide runs on for GRACE (M.tick), so that a second
+        -- finger landing a report later takes it over without a stall; a
+        -- lone finger stops it after that.
     end
     if e.mode ~= "frozen" then
         return {}
@@ -595,6 +714,7 @@ local function resting(tp, e, time)
     end
     if all == 0 then
         -- Touched and lifted: the glide only stopped.
+        halt(e, time)
         e.mode, e.still = "still", e.frozen
         return {}
     end
@@ -614,18 +734,24 @@ local function resting(tp, e, time)
                 return release(tp, e)
             end
             -- They take over the resting fingers: libinput goes on seeing the
-            -- same two touches, now moved by these.
+            -- same two touches, now moved by these from where the glide's
+            -- path has got to, which the paced places are still catching up
+            -- with.
             for _, slot in ipairs(slots) do
                 local f, v = tp.slots[slot], e.view[slot]
-                f.ox, f.oy = v[1] - f.x, v[2] - f.y
+                local path = e.path[slot]
+                local last = path[#path]
+                f.ox, f.oy = last[2] - f.x, last[3] - f.y
                 f.sentx, f.senty = v[1], v[2]
-                e.path[slot] = { { time, v[1], v[2] } }
-                e.outf[slot] = { v[1], v[2] }
             end
-            tp.pair, tp.history = a.touch .. ":" .. b.touch, {}
+            tp.pair, tp.history, tp.vel = a.touch .. ":" .. b.touch, {}, nil
             tp.start, tp.started = { a.x, a.y, b.x, b.y }, true
             e.mode, e.pair, e.since = "contact", tp.pair, time
-            e.timer = time + TICK
+            e.coff, e.kicked = { 0, 0 }, true
+            if e.carry then
+                e.carry.t0, e.carry.last = e.frozen, time
+            end
+            e.timer = math.min(e.timer or math.huge, grid(time))
             return {}
         end
     end
@@ -692,7 +818,7 @@ local function engine_frame(tp, e, frame, time, known)
                 local vy = (y1a + y1b - y0a - y0b) / 2 / span
                 e.vx, e.vy = vx * GLIDE_START, vy * GLIDE_START
                 e.mode, e.start = "glide", time
-                e.timer = time + TICK
+                e.timer = math.min(e.timer or math.huge, grid(time))
             else
                 e.mode, e.still = "still", time
                 e.timer = time + DELAY + TICK
@@ -714,6 +840,7 @@ local function engine_frame(tp, e, frame, time, known)
     if tp.pair and e.mode == "idle" then
         -- Two fingers came down together: from here they are paced.
         e.mode, e.pair, e.since, e.fresh = "contact", tp.pair, time, true
+        e.coff, e.kicked, e.carry = { 0, 0 }, false, nil
         e.slots = { known[1], known[2] }
         e.path, e.view, e.moved = {}, {}, {}
         e.outf, e.step = {}, 0
@@ -724,17 +851,21 @@ local function engine_frame(tp, e, frame, time, known)
         end
     end
     if e.mode == "contact" then
+        if not e.kicked then
+            kick(tp, e, time)
+        end
+        local c = e.coff or { 0, 0 }
         for _, slot in ipairs(e.slots) do
             local f = tp.slots[slot]
             local path = e.path[slot] or {}
             e.path[slot] = path
             path[#path + 1] = {
                 time,
-                clampv(f.x + f.ox, tp.xmin, tp.xmax),
-                clampv(f.y + f.oy, tp.ymin, tp.ymax),
+                clampv(f.x + f.ox + c[1], tp.xmin, tp.xmax),
+                clampv(f.y + f.oy + c[2], tp.ymin, tp.ymax),
             }
         end
-        e.timer = e.timer or time + TICK
+        e.timer = math.min(e.timer or math.huge, grid(time))
     end
     e.keys = copy(tp.keys)
     return false
@@ -761,6 +892,27 @@ function M.tick(tp, now)
         end
         if e.mode ~= "frozen" and e.mode ~= "contact" then
             return frames
+        end
+    end
+    if e.mode == "contact" and e.carry then
+        carry(tp, e, now)
+    end
+    if e.mode == "frozen" and not e.halted then
+        if e.carry and now < e.frozen + GRACE then
+            for _, slot in ipairs(e.slots) do
+                local path = e.path[slot]
+                local last = path[#path]
+                local dt = now - last[1]
+                if dt > 0 then
+                    path[#path + 1] = {
+                        now,
+                        clampv(last[2] + e.carry[1] * dt, tp.xmin, tp.xmax),
+                        clampv(last[3] + e.carry[2] * dt, tp.ymin, tp.ymax),
+                    }
+                end
+            end
+        else
+            halt(e, now)
         end
     end
     if e.mode == "glide" then
@@ -799,7 +951,7 @@ function M.tick(tp, now)
         pending = pending or (#path > 0 and path[#path][1] > now - DELAY)
     end
     if e.mode == "contact" or e.mode == "glide" or pending then
-        e.timer = math.max(math.floor(now / TICK + 1) * TICK, now + TICK / 2)
+        e.timer = math.max(grid(now), now + TICK / 2)
     elseif e.mode == "still" then
         -- Lift once both have rested STILL, and not before the glide or the
         -- rest began.
@@ -831,10 +983,51 @@ function M.give_up(tp)
 end
 
 
+-- The absinfo of a position axis with `scale` times its units: the same
+-- millimetres to libinput, finer steps. With the engine on, the plugin tells
+-- libinput this (EvdevDevice:set_absinfo) and multiplies every position, so
+-- a slow scroll moves in quarters of a touchpad unit, not whole ones.
+function M.scaled(absinfo, scale)
+    if not absinfo then
+        return nil
+    end
+    local out = {}
+    for k, v in pairs(absinfo) do
+        out[k] = v
+    end
+    for _, k in ipairs({ "minimum", "maximum", "resolution", "fuzz", "flat" }) do
+        if out[k] then
+            out[k] = out[k] * scale
+        end
+    end
+    return out
+end
+
+local SCALED = {
+    [ABS_MT_POSITION_X] = true, [ABS_MT_POSITION_Y] = true,
+    [evdev.ABS_X] = true, [evdev.ABS_Y] = true,
+}
+
+-- The touchpad's positions in the scaled units, in place.
+function M.scale_frame(tp, frame)
+    if tp.scale == 1 then
+        return false
+    end
+    local any = false
+    for _, e in ipairs(frame) do
+        if SCALED[e.usage] then
+            e.value = e.value * tp.scale
+            any = true
+        end
+    end
+    return any
+end
+
 -- Takes one evdev frame and returns it rewritten, or nil when libinput may
 -- have it as it is.
 function M.frame(tp, frame, time, now)
     local slots = tp.slots
+    local scaled = M.scale_frame(tp, frame)
 
     -- Where each finger was before this frame.
     local before = {}
@@ -905,7 +1098,9 @@ function M.frame(tp, frame, time, now)
         local pair = a.touch .. ":" .. b.touch
         if tp.pair ~= pair then
             tp.pair, tp.history = pair, {}
-            tp.start, tp.started = { a.x, a.y, b.x, b.y }, false
+            -- With the engine, libinput's millimetre is its kick's business
+            -- (kick()), and the curve applies from the start.
+            tp.start, tp.started = { a.x, a.y, b.x, b.y }, tp.engine ~= nil
         end
         accelerate(tp, a, b, before[known[1]], before[known[2]], time)
     elseif tp.pair then
@@ -1050,7 +1245,7 @@ function M.frame(tp, frame, time, now)
         frame = kept
     end
 
-    if changed then
+    if changed or scaled then
         return frame
     end
     return nil
@@ -1094,12 +1289,22 @@ if libinput then
             end
         end
         local absinfos = device:absinfos()
-        local tp = M.touchpad(absinfos[ABS_MT_POSITION_X], absinfos[ABS_MT_POSITION_Y], SPEED)
+        local engine = ENGINE and not engine_tp
+        local scale = engine and SCALE or 1
+        local absx = M.scaled(absinfos[ABS_MT_POSITION_X], scale)
+        local absy = M.scaled(absinfos[ABS_MT_POSITION_Y], scale)
+        local tp = M.touchpad(absx, absy, engine and ENGINE_SPEED or SPEED, scale)
         if not tp then
             libinput:log_info("Pear Up scroll acceleration: " .. device:name() .. " reports no resolution, left as it is")
             return
         end
-        if ENGINE and not engine_tp then
+        if engine then
+            -- Finer positions, the same millimetres: see M.scaled.
+            for usage, info in pairs(absinfos) do
+                if SCALED[usage] then
+                    device:set_absinfo(usage, M.scaled(info, scale))
+                end
+            end
             M.engine(tp)
             engine_tp, engine_device = tp, device
             libinput:log_info("Pear Up scroll acceleration with the Mac scroll engine: " .. device:name())
@@ -1111,7 +1316,23 @@ if libinput then
                 return nil
             end
             if not tp.engine then
-                return M.frame(tp, frame, time)
+                if tp.scale == 1 then
+                    return M.frame(tp, frame, time)
+                end
+                -- Scaled positions must stay scaled whatever happens: libinput
+                -- was told so, and would otherwise take every place as a
+                -- quarter of where it is.
+                local original = {}
+                for i, ev in ipairs(frame) do
+                    original[i] = { usage = ev.usage, value = ev.value }
+                end
+                local ok, result = pcall(M.frame, tp, frame, time)
+                if ok then
+                    return result
+                end
+                tp.slots, tp.pair, tp.history = {}, nil, {}
+                M.scale_frame(tp, original)
+                return original
             end
             local ok, result = pcall(M.frame, tp, frame, time, libinput:now())
             if not ok then

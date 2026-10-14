@@ -211,6 +211,9 @@ const SCROLL_PLUGIN_SPEED = /^local SPEED = ([0-9.]+)$/m;
 // switched on): the plugin then paces the scroll and glides itself, the same
 // for every app. A copy without the line is from before it, and has it off.
 const SCROLL_PLUGIN_ENGINE = /^local ENGINE = (true|false)$/m;
+// The speed the plugin scrolls at with the engine on (its ENGINE_SPEED): a
+// MacBook's, which the browsers' scale follows then.
+const SCROLL_ENGINE_SPEED = 0.34;
 const SCROLL_PLUGIN_OLD_GAIN = /^local SLOW_GAIN = ([0-9.]+)$/m;
 const PLUGINS_SHELL = 50;
 const PLUGINS_LIBINPUT = [1, 30];
@@ -1859,7 +1862,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             speeds.splice(SCROLL_SPEEDS.length, speeds.get_n_items() - SCROLL_SPEEDS.length,
                 custom ? [`Custom (${state.speed})`] : []);
             speedRow.set_selected(custom ? SCROLL_SPEEDS.length : index < 0 ? SCROLL_SPEED_DEFAULT : index);
-            speedRow.set_sensitive(state.installed);
+            // With the engine on the plugin scrolls as far as a MacBook,
+            // whatever the speed says: the speed was there to make up for the
+            // apps' short glides, and the engine glides itself.
+            speedRow.set_sensitive(state.installed && !state.engine);
             busy = false;
         };
         refresh();
@@ -1899,7 +1905,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         // The Mac scroll engine, in the same plugin: experimental, off.
         const engineSubtitle = 'Experimental. The plugin makes the whole scroll itself, as macOS does: the page ' +
             'moves evenly with the screen while the fingers move, glides on after a flick as a MacBook’s does, ' +
-            'and stops when a finger touches, the same in every app. Takes effect at the next login.';
+            'and stops when a finger touches, the same in every app. It scrolls as far as a MacBook, so Scroll ' +
+            'Speed rests while it is on. Takes effect at the next login.';
         const engineRow = new Adw.SwitchRow({ title: 'Mac Scroll Engine (Experimental)', subtitle: engineSubtitle });
         engineRow.set_subtitle_lines(0);
         group.add(engineRow);
@@ -1917,8 +1924,15 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             const state = this._scrollPluginState();
             if (engineBusy || !state.installed || state.speed === null || engineRow.active === state.engine)
                 return;
-            const failed = this._setScrollPlugin(state.speed, engineRow.active);
+            const before = this._scrollLevel();
+            let failed = this._setScrollPlugin(state.speed, engineRow.active);
+            const after = this._scrollLevel();
+            if (after !== before) {
+                for (const follow of followers)
+                    failed = follow(before, after) ?? failed;
+            }
             engineRow.set_subtitle(failed ?? engineSubtitle);
+            refresh();
             engineRefresh();
         });
 
@@ -1933,6 +1947,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // was 1 at 80 mm/s too.
     _scrollLevel() {
         const state = this._scrollPluginState();
+        if (state.installed && state.engine)
+            return SCROLL_ENGINE_SPEED;
         return state.installed && state.speed ? state.speed : 1;
     }
 

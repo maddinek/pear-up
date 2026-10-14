@@ -217,7 +217,8 @@ same amount every frame (libinput is told where they are on a fixed beat, not wh
 reports); after a flick the page glides on as a MacBook Air's measurably does — a little faster than
 the fingers at first, held for about 120 ms, then slowing with a 200 ms time constant — and a finger
 put down stops it, while two fingers carry on scrolling from it. Apps add no glide of their own on
-top. Takes effect at the next login. Its measurements against a MacBook are in
+top. It scrolls as far as a MacBook (Scroll Speed rests while it is on, and the browsers' scale
+follows). Takes effect at the next login. Its measurements against a MacBook are in
 [tests/scroll-e2e](tests/scroll-e2e/README.md).
 
 **Browsers that scroll smoothly.** Chromium on Wayland multiplies touchpad scrolling by 12, so
