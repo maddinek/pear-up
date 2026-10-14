@@ -52,9 +52,9 @@
 --   - anything but a touchpad.
 --
 -- Momentum after the fingers lift is the apps' own (GTK, Chromium and Firefox
--- each run one): a plugin could only fake fingers still moving, and they would
--- run off the edge of the touchpad. The apps start their momentum from the
--- speed the fingers had, so this curve shapes it too.
+-- each run one), and starts from the speed the fingers had, so this curve
+-- shapes it too. Unless the Mac scroll engine below is switched on (ENGINE),
+-- which paces the fingers and glides itself, the same for every app.
 --
 -- A finger keeps the offset it has gathered until it lifts, so that when the
 -- second finger lifts first the pointer does not jump. Fractions of a device
@@ -71,6 +71,10 @@
 -- The speed chosen in Pear Up's preferences: the gain at 80 mm/s, where the
 -- curve is 1. 1 is libinput's own rate there, 0.34 a MacBook's.
 local SPEED = 0.7
+
+-- Whether the Mac scroll engine is on (see "The Mac scroll engine" below), as
+-- Pear Up's preferences write it. Experimental.
+local ENGINE = false
 
 -- { mm/s, share of the 80 mm/s rate }, from the table above; linear between,
 -- the last value beyond the last point.
@@ -172,6 +176,8 @@ function M.touchpad(absx, absy, level)
         history = {},
         start = nil,     -- where they were when they came down together
         started = false, -- whether they have moved START_MM since
+        speed = 0,       -- how fast the two moved together last, mm/s
+        keys = {},       -- the kernel's keys, as last sent
     }
 end
 
@@ -214,6 +220,7 @@ local function accelerate(tp, a, b, a0, b0, time)
     local bx, by = last[4] - first[4], last[5] - first[5]
     local cx, cy = (ax + bx) / 2, (ay + by) / 2
     local speed = math.sqrt(cx * cx + cy * cy) / span * 1000000
+    tp.speed = speed
     -- Until one finger has moved START_MM, libinput is still deciding what
     -- the fingers do, and is left to.
     if not tp.started then
@@ -241,9 +248,592 @@ local function accelerate(tp, a, b, a0, b0, time)
     b.ox, b.oy = b.ox + shiftx, b.oy + shifty
 end
 
+-- The Mac scroll engine (experimental, ENGINE above; off unless switched on in
+-- Pear Up's preferences). macOS makes the whole scroll stream itself, the same
+-- for every app: while the fingers touch, one smooth step per screen frame;
+-- after they lift, a glide of its own (its "momentum phase"); and only then is
+-- the gesture over. On Linux libinput hands on whatever the touchpad reports,
+-- about every 7 ms, which against a 120 Hz screen lands one report in most
+-- frames and two in every fifth, and each app then glides on its own terms
+-- (GTK from a 150 ms average, Chromium from the speed before its scale, Electron
+-- and GTK 3 hardly). The engine makes the stream here instead, below every app:
+--
+--   - Paced: while two fingers scroll, libinput is told where they are on a
+--     fixed beat of TICK, four times a 120 Hz frame, at a point DELAY behind
+--     the touchpad and drawn between its last two reports, so every frame gets
+--     the same share of the movement.
+--   - Glide: when the fingers lift at MOMENTUM_FROM or faster, libinput is
+--     told they are still there, moving on as a MacBook Air glides (measured
+--     on one with an AppKit probe, 9 flicks, fitted): from GLIDE_START times
+--     the speed of the last LIFT_WINDOW, rising GLIDE_RISE over
+--     GLIDE_RISE_TIME, held until GLIDE_HOLD, then slowing with a time
+--     constant of GLIDE_TAU, until GLIDE_END.
+--   - Stop: then they rest STILL before libinput is told they lifted. Every
+--     app works out its own glide from the last 100 to 200 ms of scrolling
+--     before the stop (GTK 150 ms, Chromium 200 ms, Firefox 100 ms), so after
+--     a rest longer than that each of them adds nothing: the glide is the engine's
+--     alone, and the same in every app. A slow lift rests too, for the same
+--     reason, so no app glides where a Mac would not.
+--   - Touch: a finger put down during the glide or the rest stops it at once,
+--     as on a Mac, and is not shown to libinput yet. If it becomes two fingers
+--     in the same slots, they take over the resting ones and the scroll goes
+--     on as one gesture. A finger that points (POINTER_MM) or presses ends
+--     the resting fingers and is handed to libinput as it is at once (its
+--     quick hold then stops whatever glide an app starts); one that only
+--     rests is handed over once the resting fingers have been still STILL.
+--     A tap that only stops the glide reaches no app.
+--   - Edges: a glide goes further than the touchpad is long. When the resting
+--     fingers come within EDGE_MM of an edge they are moved back across it in
+--     one frame that carries nothing else. libinput takes a move that large as
+--     the touchpad jumping and scrolls nothing for it (evdev-mt-touchpad.c,
+--     tp_detect_jumps: over 20 mm in 12 ms), and logs it as a kernel bug, at
+--     most five times a day (its own rate limit).
+--
+-- Rubber-banding at the end of a page is left to the apps: they see fingers
+-- scrolling past the end, as they would with real ones.
+local TICK = 1000000 / 480   -- µs: 4 reports a frame at 120 Hz, 8 at 60
+local DELAY = 9000           -- µs the paced fingers trail the touchpad's reports
+local LIFT_WINDOW = 50000    -- µs the speed at lift is measured over
+local MOMENTUM_FROM = 28     -- mm/s of the fingers (before the curve) for a glide
+local GLIDE_START = 1.30     -- the glide's speed as it starts, over the lift speed
+local GLIDE_RISE = 0.10      -- how much faster it gets...
+local GLIDE_RISE_TIME = 50000 -- ...over this many µs
+local GLIDE_HOLD = 120000    -- µs after the lift it holds its speed
+local GLIDE_TAU = 200000     -- µs, the time constant it slows down with after
+local GLIDE_END = 1.5        -- mm/s at which it ends
+local STILL = 260000         -- µs the fingers rest before libinput lets them lift (Chromium: 200)
+local FROZEN_MAX = 100000    -- µs a new finger has to become a scroll
+local POINTER_MM = 1.5       -- a finger moved this far points
+local LEFTOVER_MAX = 300000  -- µs a finger left down after a lift is ignored
+local EDGE_MM = 6            -- how near an edge the resting fingers go
+local JUMP_MIN_MM = 20       -- the smallest move back libinput surely ignores
+local JUMP_FRESH = 10000     -- µs: a finger moved longer ago than this is not moved back
+local STEP_GROWTH = 0.8      -- mm a paced step may be longer than the one before
+local STEP_MAX = 3           -- mm a paced step may be at most
+
+local EV_KEY = 1
+
+-- A place on a finger's path at time `t`, drawn between the points either side.
+local function at(path, t)
+    local n = #path
+    if n == 0 then
+        return nil
+    end
+    if t <= path[1][1] then
+        return path[1][2], path[1][3]
+    end
+    for i = n - 1, 1, -1 do
+        local p, q = path[i], path[i + 1]
+        if t >= p[1] then
+            if t >= q[1] then
+                return q[2], q[3]
+            end
+            local s = (t - p[1]) / (q[1] - p[1])
+            return p[2] + (q[2] - p[2]) * s, p[3] + (q[3] - p[3]) * s
+        end
+    end
+    return path[n][2], path[n][3]
+end
+
+-- Drops the points of a path that are no longer needed to draw time `t`.
+local function trim(path, t)
+    while #path > 2 and path[2][1] <= t do
+        table.remove(path, 1)
+    end
+end
+
+-- How fast the glide goes `t` µs after the lift, as a share of where it began.
+function M.glide(t)
+    if t < GLIDE_HOLD then
+        return 1 + GLIDE_RISE * smoothstep(t / GLIDE_RISE_TIME)
+    end
+    return (1 + GLIDE_RISE * smoothstep(GLIDE_HOLD / GLIDE_RISE_TIME)) * math.exp(-(t - GLIDE_HOLD) / GLIDE_TAU)
+end
+
+function M.engine(tp)
+    tp.engine = {
+        mode = "idle",   -- idle, contact (paced), glide, still, frozen
+        slots = nil,     -- the two slots libinput is told about
+        path = {},       -- slot: { {time, x, y}, ... } in device units
+        outf = {},       -- slot: { x, y } paced so far, before rounding
+        view = {},       -- slot: { x, y } as libinput was last told
+        moved = {},      -- slot: when libinput last saw it move
+        keys = {},       -- the keys libinput was last told about
+        prepend = {},    -- frames to go before the current one
+        timer = nil,     -- when the plugin wants its timer
+    }
+    return tp.engine
+end
+
+local function copy(t)
+    local c = {}
+    for k, v in pairs(t) do
+        c[k] = v
+    end
+    return c
+end
+
+local function mm_speed(tp, vx, vy)
+    return math.sqrt((vx / tp.xres) ^ 2 + (vy / tp.yres) ^ 2) * 1000000
+end
+
+local function clampv(v, low, high)
+    return math.max(low, math.min(high, v))
+end
+
+-- Appends what libinput should be told now about the paced fingers to
+-- `events`, and returns whether anything moved.
+local function pace(tp, e, now, events)
+    local q = now - DELAY
+    local a, b = e.slots[1], e.slots[2]
+    local ax, ay = at(e.path[a], q)
+    local bx, by = at(e.path[b], q)
+    if not ax or not bx then
+        return false
+    end
+    trim(e.path[a], q - LIFT_WINDOW)
+    trim(e.path[b], q - LIFT_WINDOW)
+    -- Not faster than libinput takes for real movement: it drops a step of
+    -- more than 20 mm per 12 ms, or 7 mm per 12 ms more than the one before,
+    -- as the touchpad jumping. Should the touchpad's reports come late, the
+    -- fingers catch up over a few steps.
+    local fa, fb = e.outf[a], e.outf[b]
+    local dax, day, dbx, dby = ax - fa[1], ay - fa[2], bx - fb[1], by - fb[2]
+    local len = math.max(math.sqrt((dax / tp.xres) ^ 2 + (day / tp.yres) ^ 2),
+        math.sqrt((dbx / tp.xres) ^ 2 + (dby / tp.yres) ^ 2))
+    local limit = math.min((e.step or 0) + STEP_GROWTH, STEP_MAX)
+    local share = len > limit and limit / len or 1
+    if e.jumped then
+        share, e.jumped = 0, nil
+    end
+    e.step = len * share
+    fa[1], fa[2] = fa[1] + dax * share, fa[2] + day * share
+    fb[1], fb[2] = fb[1] + dbx * share, fb[2] + dby * share
+    ax, ay, bx, by = fa[1], fa[2], fb[1], fb[2]
+    -- As in M.frame: the second finger makes up what rounding took from the
+    -- first, so their sum, which libinput scrolls by, is within half a unit.
+    local out = {}
+    out[a] = { clampv(math.floor(ax + 0.5), tp.xmin, tp.xmax), clampv(math.floor(ay + 0.5), tp.ymin, tp.ymax) }
+    out[b] = {
+        clampv(math.floor(ax + bx + 0.5) - out[a][1], tp.xmin, tp.xmax),
+        clampv(math.floor(ay + by + 0.5) - out[a][2], tp.ymin, tp.ymax),
+    }
+    local moved = false
+    for _, slot in ipairs(e.slots) do
+        local v = e.view[slot]
+        local o = out[slot]
+        if v[1] ~= o[1] or v[2] ~= o[2] then
+            events[#events + 1] = { usage = ABS_MT_SLOT, value = slot }
+            if v[1] ~= o[1] then
+                events[#events + 1] = { usage = ABS_MT_POSITION_X, value = o[1] }
+            end
+            if v[2] ~= o[2] then
+                events[#events + 1] = { usage = ABS_MT_POSITION_Y, value = o[2] }
+            end
+            v[1], v[2] = o[1], o[2]
+            e.moved[slot] = now
+            moved = true
+        end
+    end
+    return moved
+end
+
+-- Moves the resting fingers' paths back across the touchpad when the next
+-- step would bring one within EDGE_MM of an edge. Only while both moved in
+-- the last JUMP_FRESH, so that libinput measures the move over a few ms.
+local function recentre(tp, e, now, vx, vy)
+    local lo = { x = tp.xmin + EDGE_MM * tp.xres, y = tp.ymin + EDGE_MM * tp.yres }
+    local hi = { x = tp.xmax - EDGE_MM * tp.xres, y = tp.bottom - EDGE_MM * tp.yres }
+    local v = { x = vx, y = vy }
+    local res = { x = tp.xres, y = tp.yres }
+    for axis, index in pairs({ x = 2, y = 3 }) do
+        if v[axis] ~= 0 then
+            local least, most = math.huge, -math.huge
+            for _, slot in ipairs(e.slots) do
+                local path = e.path[slot]
+                local p = path[#path][index]
+                least, most = math.min(least, p), math.max(most, p)
+            end
+            local shift = 0
+            if v[axis] < 0 and least < lo[axis] then
+                shift = hi[axis] - most
+            elseif v[axis] > 0 and most > hi[axis] then
+                shift = lo[axis] - least
+            end
+            local fresh = true
+            for _, slot in ipairs(e.slots) do
+                fresh = fresh and (e.moved[slot] or 0) >= now - JUMP_FRESH
+            end
+            if math.abs(shift) >= JUMP_MIN_MM * res[axis] and fresh then
+                for _, slot in ipairs(e.slots) do
+                    for _, p in ipairs(e.path[slot]) do
+                        p[index] = p[index] + shift
+                    end
+                    e.outf[slot][index - 1] = e.outf[slot][index - 1] + shift
+                end
+                -- libinput drops the whole frame of the jump, so it carries
+                -- nothing else: the step it would have made comes after.
+                e.jumped = true
+            end
+        end
+    end
+end
+
+-- The frame that lifts the resting fingers for libinput.
+local function lift_frame(tp, e)
+    local frame = {}
+    for _, slot in ipairs(e.slots) do
+        frame[#frame + 1] = { usage = ABS_MT_SLOT, value = slot }
+        frame[#frame + 1] = { usage = ABS_MT_TRACKING_ID, value = -1 }
+    end
+    for usage, value in pairs(e.keys) do
+        if value ~= 0 then
+            frame[#frame + 1] = { usage = usage, value = 0 }
+        end
+    end
+    if tp.slot then
+        frame[#frame + 1] = { usage = ABS_MT_SLOT, value = tp.slot }
+    end
+    e.keys, e.slots, e.path, e.view, e.moved = {}, nil, {}, {}, {}
+    e.mode = "idle"
+    return frame
+end
+
+-- The frame that puts down for libinput the fingers that are on the touchpad
+-- now, where they are, with the keys the kernel has down.
+local function touch_frame(tp, e)
+    local frame = {}
+    local order = {}
+    for slot, f in pairs(tp.slots) do
+        if f.down and f.x and f.y and f.id then
+            order[#order + 1] = slot
+        end
+    end
+    table.sort(order)
+    for _, slot in ipairs(order) do
+        local f = tp.slots[slot]
+        f.ox, f.oy = 0, 0
+        f.sentx, f.senty = f.x, f.y
+        frame[#frame + 1] = { usage = ABS_MT_SLOT, value = slot }
+        frame[#frame + 1] = { usage = ABS_MT_TRACKING_ID, value = f.id }
+        frame[#frame + 1] = { usage = ABS_MT_POSITION_X, value = f.x }
+        frame[#frame + 1] = { usage = ABS_MT_POSITION_Y, value = f.y }
+    end
+    for usage, value in pairs(tp.keys) do
+        if value ~= 0 then
+            frame[#frame + 1] = { usage = usage, value = value }
+        end
+    end
+    if tp.slot then
+        frame[#frame + 1] = { usage = ABS_MT_SLOT, value = tp.slot }
+    end
+    e.keys = copy(tp.keys)
+    tp.pair, tp.history = nil, {}
+    return frame
+end
+
+-- Ends the resting fingers and hands libinput the real ones.
+local function release(tp, e)
+    local lifted = lift_frame(tp, e)
+    local touched = touch_frame(tp, e)
+    if #touched > (tp.slot and 1 or 0) then
+        e.prepend[#e.prepend + 1] = lifted
+        return touched
+    end
+    return lifted
+end
+
+-- The fingers on the touchpad that came after the lift (not left over from it).
+local function newcomers(tp, e, time)
+    local list, all = {}, 0
+    for slot, f in pairs(tp.slots) do
+        if f.down then
+            all = all + 1
+            local seen = e.seen[f.touch]
+            if not seen and f.x and f.y then
+                seen = { f.x, f.y, time }
+                e.seen[f.touch] = seen
+            end
+            local new = not e.leftover[f.touch]
+            if not new and seen and f.x and f.y then
+                local d = math.max(math.abs(f.x - seen[1]) / tp.xres, math.abs(f.y - seen[2]) / tp.yres)
+                if d > POINTER_MM or time - e.lifted > LEFTOVER_MAX then
+                    e.leftover[f.touch] = nil
+                    new = true
+                end
+            end
+            if new then
+                list[#list + 1] = slot
+            end
+        end
+    end
+    return list, all
+end
+
+-- While the fingers glide or rest: what a frame from the touchpad, or the
+-- timer (frame nil), does. Returns the frame for libinput.
+local function resting(tp, e, time)
+    local more = tp.button
+    for _, on in pairs(tp.more) do
+        more = more or on
+    end
+    local new, all = newcomers(tp, e, time)
+    if #new > 0 and (e.mode == "glide" or e.mode == "still") then
+        e.mode, e.frozen = "frozen", time
+        -- The glide stops where libinput was last told it is.
+        for _, slot in ipairs(e.slots) do
+            local o = e.outf[slot]
+            e.path[slot] = { { time - DELAY, o[1], o[2] } }
+        end
+        e.step = 0
+    end
+    if e.mode ~= "frozen" then
+        return {}
+    end
+    if more or #new >= 3 then
+        return release(tp, e)
+    end
+    if all == 0 then
+        -- Touched and lifted: the glide only stopped.
+        e.mode, e.still = "still", e.frozen
+        return {}
+    end
+    if all == 2 then
+        local slots = {}
+        for slot, f in pairs(tp.slots) do
+            if f.down then
+                slots[#slots + 1] = slot
+            end
+        end
+        table.sort(slots)
+        local a, b = tp.slots[slots[1]], tp.slots[slots[2]]
+        if a.x and a.y and b.x and b.y then
+            local fits = not a.palm and not b.palm and a.y < tp.bottom and b.y < tp.bottom
+                and slots[1] == e.slots[1] and slots[2] == e.slots[2]
+            if not fits then
+                return release(tp, e)
+            end
+            -- They take over the resting fingers: libinput goes on seeing the
+            -- same two touches, now moved by these.
+            for _, slot in ipairs(slots) do
+                local f, v = tp.slots[slot], e.view[slot]
+                f.ox, f.oy = v[1] - f.x, v[2] - f.y
+                f.sentx, f.senty = v[1], v[2]
+                e.path[slot] = { { time, v[1], v[2] } }
+                e.outf[slot] = { v[1], v[2] }
+            end
+            tp.pair, tp.history = a.touch .. ":" .. b.touch, {}
+            tp.start, tp.started = { a.x, a.y, b.x, b.y }, true
+            e.mode, e.pair, e.since = "contact", tp.pair, time
+            e.timer = time + TICK
+            return {}
+        end
+    end
+    if #new == 1 then
+        local seen = e.seen[tp.slots[new[1]].touch]
+        local f = tp.slots[new[1]]
+        local d = 0
+        if seen and f.x and f.y then
+            d = math.max(math.abs(f.x - seen[1]) / tp.xres, math.abs(f.y - seen[2]) / tp.yres)
+        end
+        -- A finger that points is handed over at once: libinput's quick hold
+        -- (40 ms) then stops what glide the apps start from the last moments
+        -- of ours. One that only rests waits until the resting fingers have
+        -- been still for STILL, so that no app glides at all.
+        local last = e.frozen
+        for _, slot in ipairs(e.slots) do
+            last = math.max(last, e.moved[slot] or 0)
+        end
+        if d > POINTER_MM or (time - e.frozen >= FROZEN_MAX and time >= last + STILL) then
+            return release(tp, e)
+        end
+        e.timer = math.max(e.timer or 0, math.max(e.frozen + FROZEN_MAX, last + STILL))
+        return {}
+    end
+    e.timer = math.max(e.timer or 0, e.frozen + FROZEN_MAX)
+    return {}
+end
+
+-- The engine's part of M.frame, after the kernel's frame has been followed and
+-- the curve applied. Returns true and the frame for libinput when it decides
+-- it, or false to let M.frame write the frame (with the paced fingers' places).
+local function engine_frame(tp, e, frame, time, known)
+    e.prepend = {}
+    if e.mode == "glide" or e.mode == "still" or e.mode == "frozen" then
+        return true, resting(tp, e, time)
+    end
+    if e.mode == "contact" and tp.pair ~= e.pair then
+        local lifted = false
+        for _, slot in ipairs(e.slots) do
+            lifted = lifted or not tp.slots[slot].down
+        end
+        local more = tp.button
+        for _, on in pairs(tp.more) do
+            more = more or on
+        end
+        if lifted and not more and tp.started and not tp.pair then
+            -- The fingers lifted after scrolling: libinput is told they stay.
+            local a, b = e.slots[1], e.slots[2]
+            local pa, pb = e.path[a], e.path[b]
+            local t1 = pa[#pa][1]
+            local x1a, y1a = at(pa, t1)
+            local x1b, y1b = at(pb, t1)
+            local x0a, y0a = at(pa, t1 - LIFT_WINDOW)
+            local x0b, y0b = at(pb, t1 - LIFT_WINDOW)
+            local span = math.min(LIFT_WINDOW, t1 - e.since)
+            e.leftover, e.seen, e.lifted = {}, {}, time
+            for _, f in pairs(tp.slots) do
+                if f.down then
+                    e.leftover[f.touch] = true
+                end
+            end
+            if span > 0 and (tp.speed or 0) >= MOMENTUM_FROM then
+                local vx = (x1a + x1b - x0a - x0b) / 2 / span
+                local vy = (y1a + y1b - y0a - y0b) / 2 / span
+                e.vx, e.vy = vx * GLIDE_START, vy * GLIDE_START
+                e.mode, e.start = "glide", time
+                e.timer = time + TICK
+            else
+                e.mode, e.still = "still", time
+                e.timer = time + DELAY + TICK
+            end
+            return true, resting(tp, e, time)
+        end
+        -- Anything else ends the pacing; the fingers left are libinput's,
+        -- from where it was last told they are.
+        for _, slot in ipairs(e.slots) do
+            local f = tp.slots[slot]
+            if f.down then
+                f.sentx, f.senty = e.view[slot][1], e.view[slot][2]
+            end
+        end
+        e.mode, e.slots, e.path, e.view, e.pair = "idle", nil, {}, {}, nil
+        e.keys = copy(tp.keys)
+        return false
+    end
+    if tp.pair and e.mode == "idle" then
+        -- Two fingers came down together: from here they are paced.
+        e.mode, e.pair, e.since, e.fresh = "contact", tp.pair, time, true
+        e.slots = { known[1], known[2] }
+        e.path, e.view, e.moved = {}, {}, {}
+        e.outf, e.step = {}, 0
+        for _, slot in ipairs(e.slots) do
+            local f = tp.slots[slot]
+            e.view[slot] = { f.outx, f.outy }
+            e.outf[slot] = { f.outx, f.outy }
+        end
+    end
+    if e.mode == "contact" then
+        for _, slot in ipairs(e.slots) do
+            local f = tp.slots[slot]
+            local path = e.path[slot] or {}
+            e.path[slot] = path
+            path[#path + 1] = {
+                time,
+                clampv(f.x + f.ox, tp.xmin, tp.xmax),
+                clampv(f.y + f.oy, tp.ymin, tp.ymax),
+            }
+        end
+        e.timer = e.timer or time + TICK
+    end
+    e.keys = copy(tp.keys)
+    return false
+end
+
+-- The timer: the paced fingers' places, and the glide. Returns the frames for
+-- libinput (perhaps none).
+function M.tick(tp, now)
+    local e = tp.engine
+    e.timer = nil
+    e.prepend = {}
+    if not e.slots then
+        return {}
+    end
+    local frames = {}
+    if e.mode == "frozen" then
+        local frame = resting(tp, e, now)
+        for _, f in ipairs(e.prepend) do
+            frames[#frames + 1] = f
+        end
+        e.prepend = {}
+        if #frame > 0 then
+            frames[#frames + 1] = frame
+        end
+        if e.mode ~= "frozen" and e.mode ~= "contact" then
+            return frames
+        end
+    end
+    if e.mode == "glide" then
+        local f = M.glide(now - e.start)
+        local vx, vy = e.vx * f, e.vy * f
+        if mm_speed(tp, vx, vy) < GLIDE_END then
+            e.mode, e.still = "still", now
+        else
+            recentre(tp, e, now, vx, vy)
+            for _, slot in ipairs(e.slots) do
+                local path = e.path[slot]
+                local last = path[#path]
+                local dt = now - last[1]
+                if dt > 0 then
+                    path[#path + 1] = {
+                        now,
+                        clampv(last[2] + vx * dt, tp.xmin, tp.xmax),
+                        clampv(last[3] + vy * dt, tp.ymin, tp.ymax),
+                    }
+                end
+            end
+        end
+    end
+    local events = {}
+    pace(tp, e, now, events)
+    if #events > 0 then
+        if tp.slot then
+            events[#events + 1] = { usage = ABS_MT_SLOT, value = tp.slot }
+        end
+        frames[#frames + 1] = events
+    end
+    -- When to come back.
+    local pending = false
+    for _, slot in ipairs(e.slots or {}) do
+        local path = e.path[slot]
+        pending = pending or (#path > 0 and path[#path][1] > now - DELAY)
+    end
+    if e.mode == "contact" or e.mode == "glide" or pending then
+        e.timer = math.max(math.floor(now / TICK + 1) * TICK, now + TICK / 2)
+    elseif e.mode == "still" then
+        -- Lift once both have rested STILL, and not before the glide or the
+        -- rest began.
+        local last = e.still
+        for _, slot in ipairs(e.slots) do
+            last = math.max(last, e.moved[slot] or 0)
+        end
+        if now >= last + STILL then
+            frames[#frames + 1] = lift_frame(tp, e)
+            return frames
+        end
+        e.timer = last + STILL
+    end
+    if e.mode == "frozen" then
+        e.timer = math.min(e.timer or math.huge, e.frozen + FROZEN_MAX)
+    end
+    return frames
+end
+
+-- When the engine fails: the resting or paced fingers lift for libinput and the
+-- real ones are handed to it as they are. Returns the frames, in order.
+function M.give_up(tp)
+    local e = tp.engine
+    tp.engine = nil
+    if not e or not e.slots then
+        return {}
+    end
+    return { lift_frame(tp, e), touch_frame(tp, e) }
+end
+
+
 -- Takes one evdev frame and returns it rewritten, or nil when libinput may
 -- have it as it is.
-function M.frame(tp, frame, time)
+function M.frame(tp, frame, time, now)
     local slots = tp.slots
 
     -- Where each finger was before this frame.
@@ -265,6 +855,7 @@ function M.frame(tp, frame, time)
             if tp.slot then
                 local f = slot_state(tp, tp.slot)
                 f.ox, f.oy, f.palm = 0, 0, false
+                f.id = value
                 if value >= 0 then
                     tp.touches = tp.touches + 1
                     f.down, f.touch = true, tp.touches
@@ -287,6 +878,9 @@ function M.frame(tp, frame, time)
             tp.button = value ~= 0
         elseif MORE_FINGERS[usage] then
             tp.more[usage] = value ~= 0
+        end
+        if usage >> 16 == EV_KEY then
+            tp.keys[usage] = value
         end
     end
 
@@ -346,21 +940,63 @@ function M.frame(tp, frame, time)
         end
     end
 
-    -- The positions in the frame, rewritten.
+    -- With the engine on, it decides about this frame, or tells where the
+    -- fingers it paces are to be.
+    local e = tp.engine
+    if e then
+        -- The engine keeps time by libinput's clock, which its timer runs on;
+        -- a frame's time is when the touchpad measured it, a little earlier.
+        -- The least difference over a gesture is how much earlier (followed slowly
+        -- upwards, should the two clocks drift).
+        if now then
+            local lag = now - time
+            if e.mode == "idle" or not e.lag or lag < e.lag then
+                e.lag = lag
+            else
+                e.lag = e.lag + (lag - e.lag) * 0.1
+            end
+            if e.mode == "idle" and tp.pair and libinput then
+                libinput:log_debug(string.format("Pear Up scroll engine: touchpad clock %d us behind", math.floor(lag)))
+            end
+        end
+        local decided, result = engine_frame(tp, e, frame, time + (e.lag or 0), known)
+        if decided then
+            return result
+        end
+    end
+    local paced = (e and e.mode == "contact") and e.view or {}
+
+    -- The positions in the frame, rewritten. Those of the fingers the engine
+    -- paces are taken out: its timer moves them, and the touchpad's own
+    -- reports, a little earlier by their timestamps, would only make libinput
+    -- measure the timer's next step over too short a time.
     local changed = false
     local carried = {}
+    local drop = {}
     for _, p in ipairs(positions) do
         local index, slot, axis = p[1], p[2], p[3]
         local f = slots[slot]
         local value = frame[index].value
-        if f.down and f["out" .. axis] then
+        if paced[slot] and f.down and not e.fresh then
+            drop[index] = true
+            changed = true
+        elseif paced[slot] and f.down then
+            -- The frame the pair came down in: libinput needs their places.
+            value = paced[slot][axis == "x" and 1 or 2]
+            if value ~= frame[index].value then
+                frame[index].value = value
+                changed = true
+            end
+        elseif f.down and f["out" .. axis] then
             value = f["out" .. axis]
             if value ~= frame[index].value then
                 frame[index].value = value
                 changed = true
             end
         end
-        f["sent" .. axis] = value
+        if not drop[index] then
+            f["sent" .. axis] = value
+        end
         carried[slot .. axis] = true
     end
 
@@ -376,7 +1012,7 @@ function M.frame(tp, frame, time)
     table.sort(order)
     for _, slot in ipairs(order) do
         local f = slots[slot]
-        if f.down and f.outx and f.outy then
+        if f.down and f.outx and f.outy and not paced[slot] then
             local add = {}
             for _, axis in ipairs({ "x", "y" }) do
                 if not carried[slot .. axis] and f["out" .. axis] ~= f["sent" .. axis] then
@@ -401,6 +1037,18 @@ function M.frame(tp, frame, time)
     if selected ~= tp.slot then
         frame[#frame + 1] = { usage = ABS_MT_SLOT, value = tp.slot }
     end
+    if e then
+        e.fresh = nil
+    end
+    if next(drop) then
+        local kept = {}
+        for index, ev in ipairs(frame) do
+            if not drop[index] then
+                kept[#kept + 1] = ev
+            end
+        end
+        frame = kept
+    end
 
     if changed then
         return frame
@@ -410,6 +1058,31 @@ end
 
 if libinput then
     libinput:register({ 1 })
+    -- The engine runs for the first touchpad only: the plugin has one timer.
+    local engine_tp, engine_device = nil, nil
+    local function want_timer(e)
+        if e and e.timer then
+            libinput:timer_set_absolute(math.floor(e.timer))
+        end
+    end
+    local function give_up(err)
+        libinput:log_error("Pear Up scroll engine: " .. tostring(err) .. "; scrolling without it until the next login")
+        local ok, frames = pcall(M.give_up, engine_tp)
+        return ok and frames or {}
+    end
+    libinput:connect("timer-expired", function(now)
+        if not engine_tp or not engine_tp.engine then
+            return
+        end
+        local ok, frames = pcall(M.tick, engine_tp, now)
+        if not ok then
+            frames = give_up(frames)
+        end
+        for _, frame in ipairs(frames) do
+            engine_device:append_frame(frame)
+        end
+        want_timer(engine_tp.engine)
+    end)
     libinput:connect("new-evdev-device", function(device)
         if not device:udev_properties().ID_INPUT_TOUCHPAD then
             return
@@ -426,13 +1099,40 @@ if libinput then
             libinput:log_info("Pear Up scroll acceleration: " .. device:name() .. " reports no resolution, left as it is")
             return
         end
-        libinput:log_info("Pear Up scroll acceleration: " .. device:name())
+        if ENGINE and not engine_tp then
+            M.engine(tp)
+            engine_tp, engine_device = tp, device
+            libinput:log_info("Pear Up scroll acceleration with the Mac scroll engine: " .. device:name())
+        else
+            libinput:log_info("Pear Up scroll acceleration: " .. device:name())
+        end
         device:connect("evdev-frame", function(_, frame, time)
-            if tp then
+            if not tp then
+                return nil
+            end
+            if not tp.engine then
                 return M.frame(tp, frame, time)
             end
+            local ok, result = pcall(M.frame, tp, frame, time, libinput:now())
+            if not ok then
+                local frames = give_up(result)
+                for i = 1, #frames - 1 do
+                    device:prepend_frame(frames[i])
+                end
+                return frames[#frames]
+            end
+            for _, before in ipairs(tp.engine.prepend) do
+                device:prepend_frame(before)
+            end
+            tp.engine.prepend = {}
+            want_timer(tp.engine)
+            return result
         end)
         device:connect("device-removed", function()
+            if tp == engine_tp then
+                engine_tp, engine_device = nil, nil
+                libinput:timer_cancel()
+            end
             tp = nil
         end)
     end)

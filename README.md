@@ -211,6 +211,15 @@ the user's libinput plugins, and takes effect at the next login; the switch says
 older. Switching it off removes the one file it installed,
 `~/.config/libinput/plugins/10-pear-up-scroll-acceleration.lua`.
 
+**Mac Scroll Engine (experimental, off).** With the plugin installed, this switch has it make the
+whole scroll the way macOS does, the same in every app: while the fingers move, the page moves by the
+same amount every frame (libinput is told where they are on a fixed beat, not whenever the touchpad
+reports); after a flick the page glides on as a MacBook Air's measurably does — a little faster than
+the fingers at first, held for about 120 ms, then slowing with a 200 ms time constant — and a finger
+put down stops it, while two fingers carry on scrolling from it. Apps add no glide of their own on
+top. Takes effect at the next login. Its measurements against a MacBook are in
+[tests/scroll-e2e](tests/scroll-e2e/README.md).
+
 **Browsers that scroll smoothly.** Chromium on Wayland multiplies touchpad scrolling by 12, so
 Brave, Chromium and Chrome move the page about five times as far as GNOME's own apps for the same
 movement of the fingers — tens of pixels a frame, jumps instead of a glide. Smooth Browser Scrolling,
@@ -480,6 +489,17 @@ tests/run-libinput-tests.sh
 ```
 
 How they feel is another matter, and is for fingers on a real touchpad and keyboard to say.
+
+**Does scrolling match a Mac's, by the numbers?** Each gesture in `tests/scroll-e2e/gestures`
+(`libinput record` files; synthetic until real ones are recorded with `record-gestures.sh`) goes
+through the plugin and real libinput 1.31, then into a headless GNOME Shell 50 with Pear Up, where a
+GTK 4 probe and Chromium log what they draw each frame; the same measurements are taken of a MacBook
+Air's recorded stream, and `thresholds.py` holds the limits. See
+[tests/scroll-e2e/README.md](tests/scroll-e2e/README.md).
+
+```bash
+tests/run-scroll-e2e.sh            # report in tests/scroll-e2e/out/report.md
+```
 
 **Do the helpers that reach into settings behave?** The undo logic in uninstall.sh does string
 surgery on printed GVariant lists, and the dock script forwards its opt-outs through a quoted heredoc
