@@ -48,9 +48,8 @@ local absx = { minimum = 0, maximum = 2830, resolution = 24 }
 local absy = { minimum = 0, maximum = 1720, resolution = 24 }
 local tp
 if engine then
-    -- As the plugin registers itself with the engine on: finer positions
-    -- (libinput is told the scaled absinfo) and the Mac's speed.
-    tp = M.touchpad(M.scaled(absx, M.SCALE), M.scaled(absy, M.SCALE), M.ENGINE_SPEED, M.SCALE)
+    -- As the plugin registers itself with the engine on: the Mac's speed.
+    tp = M.touchpad(absx, absy, M.ENGINE_SPEED)
     M.engine(tp)
 else
     tp = M.touchpad(absx, absy)

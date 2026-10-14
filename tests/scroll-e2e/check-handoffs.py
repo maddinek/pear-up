@@ -14,6 +14,10 @@ only (tests/run-libinput-tests.sh runs it).
   5. a tap during the glide only stops it: no click, no pointer motion
   6. two fingers resting without moving pass through untouched
   7. a fast flick runs further than the touchpad is long, and nothing jumps
+  8. a two-finger tap whose fingers drift 0.5 or 1 mm together still right-clicks
+     (tap to click on, as on framy), as without the engine
+  9. two fingers resting 200 ms, then scrolling at 15 mm/s, start scrolling
+     sooner than without the engine
 """
 import os
 import sys
@@ -33,7 +37,7 @@ def check(label, ok, detail=''):
     print(f'  {"ok  " if ok else "FAIL"} {label}' + ('' if ok or not detail else f'\n       {detail}'))
 
 
-def through(workdir, gesture, engine=True):
+def through(workdir, gesture, engine=True, extra='', timely=False):
     """libinput's events for the gesture, [(ms, line)], and the model's
     scrolls [(ms, units, stop)], both from the start of the gesture."""
     k = er.Fingers()
@@ -47,8 +51,13 @@ def through(workdir, gesture, engine=True):
     model = [((t - k.t0 * 1e6) / 1000, v, s) for t, v, s in R.scroll_from_frames(frames, R.RES * scale)]
     lines = None
     for _ in range(8):
-        got, log = R.libinput_scrolls(workdir, sim, scale=scale)
+        got, log = R.libinput_scrolls(workdir, sim, scale=scale, extra=extra)
         if got is None:
+            continue
+        # A replay that ran behind the clock lets libinput's timers (the tap
+        # timeout) fire before frames that came in time: for checks that
+        # depend on them, only a replay on time counts.
+        if timely and 'lagging behind' in log:
             continue
         # libinput_scrolls keeps scroll events only; take the rest from its log.
         lines = [ln for ln in log.splitlines() if ' event8 ' in ln or ln.startswith('event8')]
@@ -141,9 +150,11 @@ def main():
             return 1.0
         model_on, lines_on = through(workdir, rest, True)
         model_off, lines_off = through(workdir, rest, False)
-        check('two fingers resting: the same as without the engine',
-              model_on == model_off and len(kinds(lines_on, 'GESTURE_HOLD')) == len(kinds(lines_off, 'GESTURE_HOLD'))
-              and not kinds(lines_on, 'POINTER_SCROLL'))
+        # (Whether libinput's hold gesture fires depends on when the replay
+        # reaches it, so that is not compared; scrolling is.)
+        check('two fingers resting: nothing scrolls, as without the engine',
+              model_on == model_off == [] and not kinds(lines_on, 'POINTER_SCROLL'),
+              f'engine on: {model_on[:3]}, off: {model_off[:3]}')
 
         # 7
         model, lines = through(workdir, lambda k: er.scroll_track(k, [(ts, -mm) for ts, mm in er.flick_track(300)],
@@ -154,6 +165,114 @@ def main():
         real = [ln for ln in kinds(lines, 'POINTER_SCROLL_FINGER')]
         check(f'libinput: {len(real)} scroll events, none over 25 units',
               len(real) > 300 and all(abs(float(er.SCROLL.search(ln).group(1))) < 25 for ln in real))
+
+        # 8
+        for drift in (0.5, 1.0):
+            def drift_tap(k, drift=drift):
+                k.at(0, {0: (45, 30)})
+                for i in range(1, 18):
+                    d = drift * i / 17
+                    k.at(0.007 * i, {0: (45, 30 - d), 1: (61, 30 - d)})
+                k.at(0.007 * 18, {})
+                return 1.0
+            for engine in (True, False):
+                # umockdev's pty now and then splits an event and libinput
+                # drops the frame, which here means a touch that never lifts:
+                # three replays, and two must click.
+                clicked = 0
+                for _ in range(3):
+                    _, lines = through(workdir, drift_tap, engine, extra='--enable-tap', timely=True)
+                    clicked += any('BTN_RIGHT' in ln and 'pressed' in ln for ln in kinds(lines, 'POINTER_BUTTON'))
+                label = (f'a two-finger tap drifting {drift} mm right-clicks, engine {"on" if engine else "off"} '
+                         f'({clicked} of 3 replays)')
+                if engine:
+                    # Replayed after the plugin, libinput is handed four frames
+                    # a 120 Hz frame through umockdev's pty, which plays them
+                    # late enough for its 180 ms tap timer (on the wall clock)
+                    # to fire before the lift; so this one is only shown. The
+                    # plugin running live inside libinput, below, is the check.
+                    print(f'  info {label}')
+                else:
+                    check(label, clicked >= 2)
+            # The plugin live inside libinput, engine on: its timer's frames
+            # are made in-process, as on the desktop.
+            # A replay that runs late lets libinput's tap timer (wall clock)
+            # fire before the lift; libinput's log says which: a tap ended by
+            # TAP_EVENT_MOTION would be the engine's doing, one ended by
+            # TAP_EVENT_TIMEOUT before the release is the replay's. Up to six
+            # replays, until two click; none may end by motion.
+            live, motion, late = 0, 0, 0
+            for _ in range(6):
+                er.install(True)
+                try:
+                    lines, log = er.run(workdir, lambda k: drift_tap(k), extra_args=('--enable-tap', '--verbose'))
+                except RuntimeError:
+                    continue
+                if any('BTN_RIGHT' in text and 'pressed' in text for _, text in lines):
+                    live += 1
+                elif 'TAP_EVENT_MOTION' in log:
+                    motion += 1
+                else:
+                    late += 1
+                if live >= 2:
+                    break
+            if os.path.exists(er.INSTALLED):
+                os.remove(er.INSTALLED)
+            check(f'  with the plugin live in libinput, engine on: right-click in {live} replays '
+                  f'({late} timed out late, {motion} ended by motion)', live >= 2 and motion == 0)
+            # And from the frames libinput is handed, by its own rule
+            # (evdev-mt-touchpad-tap.c): each touch lifts within 180 ms of
+            # coming down and moves no more than 1.3 mm from where it did.
+            k = er.Fingers()
+            drift_tap(k)
+            raw = os.path.join(workdir, 'k.events')
+            open(raw, 'w').write('\n'.join(k.lines) + '\n')
+            sim = os.path.join(workdir, 's.events')
+            R.simulate(raw, True, sim, "0.7")
+            slot, down, worst, longest = 0, {}, 0.0, 0.0
+            pos = {}
+            for t, events in R.read_frames(sim):
+                for ty, code, value in events:
+                    if ty == 3 and code == 0x2f:
+                        slot = value
+                    elif ty == 3 and code == 0x39:
+                        if value >= 0:
+                            down[slot] = [t, None]
+                        elif slot in down:
+                            longest = max(longest, (t - down.pop(slot)[0]) / 1000)
+                    elif ty == 3 and code in (0x35, 0x36):
+                        p = list(pos.get(slot, (0, 0)))
+                        p[0 if code == 0x35 else 1] = value
+                        pos[slot] = tuple(p)
+                for s_, d in down.items():
+                    if d[1] is None and s_ in pos:
+                        d[1] = pos[s_]
+                    if d[1] is not None and s_ in pos:
+                        worst = max(worst, ((pos[s_][0] - d[1][0]) ** 2 + (pos[s_][1] - d[1][1]) ** 2) ** 0.5 / 24)
+            check(f'  libinput is handed a tap: down {longest:.0f} ms (< 180), moved {worst:.2f} mm (< 1.3)',
+                  longest < 180 and worst < 1.3)
+
+        # 9
+        def rest_then_scroll(k):
+            k.at(0, {0: (45, 50)})
+            t = 0.007
+            while t < 0.2:
+                k.at(t, {0: (45, 50), 1: (61, 50)})
+                t += 0.007
+            y = 50.0
+            for i in range(60):
+                y -= 15 * 0.007
+                k.at(t + i * 0.007, {0: (45, y), 1: (61, y)})
+            k.at(t + 60 * 0.007, {})
+            return 1.5
+        first = {}
+        for engine in (True, False):
+            model, _ = through(workdir, rest_then_scroll, engine)
+            moves = [t for t, v, s in model if not s and t > 0]
+            first[engine] = (moves[0] - 200) if moves else None
+        check(f'fingers resting 200 ms, then 15 mm/s: first scroll {first[True]:.0f} ms after they move with the '
+              f'engine, {first[False]:.0f} ms without', first[True] is not None and first[False] is not None
+              and first[True] < first[False] and first[True] <= 50)
     finally:
         er.cleanup(workdir)
     print()

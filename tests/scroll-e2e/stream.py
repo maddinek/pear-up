@@ -42,9 +42,11 @@ PLUGIN = os.path.abspath(os.path.join(HERE, '..', '..', 'libinput', '10-pear-up-
 RES = 24
 UNITS_PER_MM = 10.5   # libinput 1.31.3's two-finger scroll, units per mm (no plugin; see agrees())
 # With the engine on the plugin scrolls at the Mac's speed whatever the speed
-# line says (ENGINE_SPEED), and tells libinput positions in quarter units.
+# line says (ENGINE_SPEED). SCALE stays for a plugin that tells libinput
+# finer positions than the touchpad's (this one does not).
 MODES = {'now': (False, '0.7'), 'engine': (True, '0.7')}
-SCALE = 8
+SCALE = 1
+REPEATS = int(os.environ.get('E2E_REPEATS', '5'))
 
 
 def simulate(events_in, engine, events_out, speed):
@@ -204,7 +206,7 @@ def device(workdir, scale):
     return path
 
 
-def libinput_scrolls(workdir, events_file, model=None, tries=10, scale=1):
+def libinput_scrolls(workdir, events_file, model=None, tries=10, scale=1, extra=''):
     """Real libinput, no plugin, on a frames file: [(ms, units, stop)], log."""
     if os.path.exists(er.INSTALLED):
         os.remove(er.INSTALLED)
@@ -228,7 +230,7 @@ def libinput_scrolls(workdir, events_file, model=None, tries=10, scale=1):
         span = last - first + 2.0
         inner = ('mkdir -p "$UMOCKDEV_DIR/run/udev/data" && '
                  'printf "I:1\\nE:ID_INPUT=1\\nE:ID_INPUT_TOUCHPAD=1\\n" > "$UMOCKDEV_DIR/run/udev/data/c13:72" && '
-                 f'exec timeout -s INT {span:.1f} libinput debug-events --device {er.cwl.DEV}')
+                 f'exec timeout -s INT {span:.1f} libinput debug-events {extra} --device {er.cwl.DEV}')
         try:
             dev = device(workdir, scale)
             r = subprocess.run(['umockdev-run', '-d', os.path.join(dev, 'touchpad.umockdev'),
@@ -299,6 +301,22 @@ def main():
                 }
                 print(f'  {gesture:18s} {mode:10s} {entry[mode]["stream_distance"]:8.1f} units, libinput '
                       f'{entry[mode]["libinput_distance"] if real else "(replay broken, left out)"}', flush=True)
+            # Run to run: the engine's beat falls differently against the
+            # touchpad's reports each time; the same gesture, shifted by a
+            # fraction of a tick, REPEATS times (model only), shows how much
+            # of a measure is that phase and how much the engine.
+            if 'engine' in modes:
+                runs = []
+                for k in range(REPEATS):
+                    shifted = G.evemu_lines(events, start + (k + 1) * 0.000_37)
+                    shifted = kernel[:2] + shifted
+                    open(raw, 'w').write('\n'.join(shifted) + '\n')
+                    sim = os.path.join(workdir, 'sim.events')
+                    simulate(raw, True, sim, MODES['engine'][1])
+                    t0k = int((start + (k + 1) * 0.000_37) * 1e6)
+                    model = scroll_from_frames(read_frames(sim), RES * SCALE)
+                    runs.append([((t - t0k) / 1000, v, s) for t, v, s in model])
+                entry['engine']['repeats'] = runs
             results[gesture] = entry
             json.dump(results, open(target, 'w'))
     finally:

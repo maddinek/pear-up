@@ -340,7 +340,9 @@ def measure_all(s):
             mm = abs(y2 - y1)
             speed = mm / max((t2 - t1) / 1000, 1e-3)
             expect += mm * MAC_PT_PER_MM * share(speed)
-        if expect > 5:
+        # Under 10 points a Mac's own rounding to whole points (and libinput's
+        # to its steps) is a third of it: no verdict on so short a nudge.
+        if expect > 10:
             m['distance_vs_mac'] = contact / expect
     return m
 
@@ -468,6 +470,29 @@ def main():
                         failed.setdefault((mode, view), []).append((g, key))
                     cells.append(f'{m[key]:.3g}{"" if ok else " **FAIL**"}')
                 lines.append(f'| {g} | ' + ' | '.join(cells) + ' |')
+    # Run to run, engine stream: the same gestures at other phases of the
+    # engine's beat against the touchpad's reports.
+    spread = {}
+    for g, entry in stream.items():
+        reps = entry.get('engine', {}).get('repeats') or []
+        for run in reps:
+            series = stream_series(entry, 'engine')
+            lifts = entry['fingers']['lifts']
+            lift = lifts[0] if lifts else 0
+            series['moves'] = [(t - lift, abs(v) * GTK_FACTOR) for t, v, s_ in run if not s_]
+            for key, value in measure(series, g).items():
+                if key in TH.LIMITS and applies(g, key):
+                    spread.setdefault((g, key), []).append(value)
+    if spread:
+        n = max(len(v) for v in spread.values())
+        lines += ['', f'## Run to run: engine stream at {n} phases of its beat', '',
+                  'Each gesture replayed with the engine\'s 480 Hz beat falling elsewhere against the touchpad\'s '
+                  'reports. A measure that moves a lot here is that phase, not the engine; failures counted per '
+                  'phase.', '', '| gesture | measure | min | max | fails |', '|---|---|---|---|---|']
+        for (g, key), vals in sorted(spread.items()):
+            fails = sum(1 for v in vals if not verdict(key, v))
+            if max(vals) - min(vals) > 0.05 * max(abs(max(vals)), 1e-9) or fails:
+                lines.append(f'| {g} | {key} | {min(vals):.3g} | {max(vals):.3g} | {fails}/{len(vals)} |')
     lines += ['', '## Failures by mode and view', '']
     for (mode, view), items in sorted(failed.items()):
         by = {}

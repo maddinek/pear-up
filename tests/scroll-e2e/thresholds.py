@@ -67,6 +67,7 @@ LIMITS = {
     # 80 mm/s; GTK's logical pixel is about a Mac point on framy's 2x screen).
     # "As on a MacBook" is meant to be 1.0; Medium is twice that on purpose
     # (scroll-feel.md), so it fails here by design and the line says so.
+    # Judged only where a Mac would scroll 10 points or more.
     'distance_vs_mac': (0.75, 1.33),
 
     # Continuity when the next flick comes during the glide: the largest

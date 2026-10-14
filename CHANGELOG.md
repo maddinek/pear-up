@@ -17,23 +17,23 @@ it back when they are switched off.
 - **Mac Scroll Engine (Experimental)** (Keyboard ▸ Trackpad, off). The scroll
   plugin makes the whole scroll stream itself, as macOS does, below every app:
   while two fingers scroll, libinput is told where they are on a fixed 480 Hz
-  beat (four steps a 120 Hz frame) in eighths of a touchpad unit, instead of
-  whole units at the touchpad's 7 ms, which landed one report in most frames
-  and two in every fifth; libinput's one-millimetre wait before a scroll is
-  spent at once, so a slow scroll starts as on a Mac. After a lift at 28 mm/s
-  or more the fingers are kept down for libinput and glide on as a MacBook
-  Air's measured momentum does (1.30 of the lift speed, held 120 ms, then
-  τ 200 ms); they rest 260 ms before the stop, so GTK, Chromium and Firefox
-  start no glide of their own (their windows are 150, 200 and 100 ms). A
-  finger down stops the glide; two take it over and the glide fades under
-  them while they get going, so a quick re-flick does not stall. At the pad's
-  edge the resting fingers are moved back in one jump libinput discards. With
-  the engine on the plugin scrolls at a MacBook's speed and Scroll Speed rests;
-  the browsers' scale follows. Written as an `ENGINE` line into the plugin,
-  kept by install.sh. New end-to-end test, `tests/run-scroll-e2e.sh`:
-  recorded gestures through the plugin, real libinput and a headless GNOME
-  Shell to a GTK 4 and a Chromium client, measured against a MacBook Air's own
-  stream.
+  beat (four steps a 120 Hz frame) instead of at the touchpad's 7 ms, which
+  landed one report in most frames and two in every fifth. Fingers that rest
+  past libinput's tap timeout and then scroll slowly are helped past its
+  one-millimetre wait, so the scroll starts as on a Mac; a two-finger tap
+  still right-clicks. After a lift at 28 mm/s or more the fingers are kept
+  down for libinput and glide on as a MacBook Air's measured momentum does
+  (1.30 of the lift speed, held 120 ms, then τ 200 ms); they rest 260 ms
+  before the stop, so GTK, Chromium and Firefox start no glide of their own
+  (their windows are 150, 200 and 100 ms). A finger down stops the glide; two
+  take it over and the glide fades under them while they get going. At the
+  pad's edge the resting fingers are moved back in one jump libinput
+  discards. With the engine on the plugin scrolls at a MacBook's speed and
+  Scroll Speed rests; the browsers' scale follows. Written as an `ENGINE`
+  line into the plugin, kept by install.sh. New end-to-end test,
+  `tests/run-scroll-e2e.sh`: recorded gestures through the plugin, real
+  libinput and a headless GNOME Shell to a GTK 4 and a Chromium client,
+  measured against a MacBook Air's own stream.
 - **Scrolling as on a MacBook** (Keyboard ▸ Trackpad). The scroll plugin's
   curve is now macOS's own (IOHIDPointerScrollFilter with a MacBook Air's
   table): 0.43 of the 80 mm/s rate at 10 mm/s, 0.64 at 20, 1.08 from 160,
