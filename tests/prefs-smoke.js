@@ -1678,6 +1678,10 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             calls.push([method, uuid]);
             if (!known.includes(uuid))
                 return Promise.resolve(false);
+            applyToLists(method, uuid);
+            return Promise.resolve(true);
+        };
+        const applyToLists = (method, uuid) => {
             const enabled = shell.get_strv('enabled-extensions').filter(item => item !== uuid);
             const disabled = shell.get_strv('disabled-extensions').filter(item => item !== uuid);
             if (method === 'EnableExtension') {
@@ -1687,17 +1691,25 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
                 shell.set_strv('enabled-extensions', enabled);
                 shell.set_strv('disabled-extensions', [...disabled, uuid]);
             }
-            return Promise.resolve(true);
         };
+        // A switch rests a moment before the shell is asked; a short one here.
         const prefsWithShell = fake => {
             const fresh = new Preferences(metadata);
             fresh._callShellExtensions = fake ?? fakeShell();
+            fresh._extensionSwitchSettleMs = 10;
             return fresh;
         };
-        // The answers arrive in later turns of the loop.
+        // The rest has passed and the answers have arrived, in later turns of
+        // the loop.
         const settle = async () => {
-            for (let turn = 0; turn < 8; turn++)
-                await null;
+            for (let round = 0; round < 2; round++) {
+                await new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, 40, () => {
+                    resolve();
+                    return GLib.SOURCE_REMOVE;
+                }));
+                for (let turn = 0; turn < 8; turn++)
+                    await null;
+            }
         };
         const resetShell = () => {
             shell.reset('enabled-extensions');
@@ -1771,29 +1783,75 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             });
         }));
         row.active = true;
+        await settle();
         shell.set_strv('disabled-extensions', ['unrelated@elsewhere']);
         expect('the genie switch while the shell is still working', row.active, true);
         release();
         await settle();
         expect('the genie switch once the shell has finished', row.active, true);
 
-        // Flipped back before the shell has answered: two requests, in order,
-        // and the switch shows the last while the first is answered.
+        // Flipped back before the shell has answered: one call at a time, the
+        // second once the first is answered, and the switch shows the last.
         resetShell();
         const queue = [];
         row = lamp(prefsWithShell((method, uuid) =>
             new Promise(resolve => queue.push(() => resolve(fakeShell()(method, uuid))))));
         row.active = true;
+        await settle();
         row.active = false;
-        expect('requests made before the shell answered', queue.length, 2);
+        await settle();
+        expect('requests out before the shell answered', queue.length, 1);
         queue[0]?.();
         await settle();
         expect('the genie switch when only the first request is answered', row.active, false);
+        expect('requests out once the first is answered', queue.length, 2);
         queue[1]?.();
         await settle();
         expect('the calls made, in order', calls, [['EnableExtension', LAMP_UUID], ['DisableExtension', LAMP_UUID]]);
         expect('the genie switch when both are answered', row.active, false);
         expect('disabled-extensions when both are answered', shell.get_strv('disabled-extensions'), [LAMP_UUID]);
+
+        // Quick flips are one call, and flips that end where they began none:
+        // each call that switches an extension off has the shell disable and
+        // enable every extension loaded after it.
+        resetShell();
+        row = lamp(prefsWithShell());
+        row.active = true;
+        row.active = false;
+        row.active = true;
+        await settle();
+        expect('the calls for three quick flips', calls, [['EnableExtension', LAMP_UUID]]);
+        expect('the genie switch after three quick flips', row.active, true);
+        calls.length = 0;
+        row.active = false;
+        row.active = true;
+        await settle();
+        expect('the calls for flips that end where they began', calls, []);
+        expect('the genie switch after flips that end where they began', row.active, true);
+
+        // The shell has said yes but its keys come later, as on 45 and 48:
+        // switched back on in between, the shell is asked again, rather than
+        // the old keys taken for the answer.
+        resetShell();
+        shell.set_strv('enabled-extensions', [LAMP_UUID]);
+        const lagging = [];
+        row = lamp(prefsWithShell((method, uuid) => {
+            calls.push([method, uuid]);
+            lagging.push(() => applyToLists(method, uuid));
+            return Promise.resolve(true);
+        }));
+        row.active = false;
+        await settle();
+        expect('the switch once the shell said yes, before its keys', row.active, false);
+        row.active = true;
+        await settle();
+        expect('the calls when switched back before the keys caught up', calls,
+            [['DisableExtension', LAMP_UUID], ['EnableExtension', LAMP_UUID]]);
+        for (const land of lagging)
+            land();
+        await settle();
+        expect('the genie switch once the keys caught up', row.active, true);
+        expect('enabled-extensions once the keys caught up', shell.get_strv('enabled-extensions'), [LAMP_UUID]);
 
         // A shell that does not know the extension, as when it was installed
         // after login: the switch goes back and says what to do.

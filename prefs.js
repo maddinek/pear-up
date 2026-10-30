@@ -437,6 +437,10 @@ const DOCK_FUNCTION_KEY_CONFLICTS = [
         "GNOME's help shortcut gives up Cmd+F1"],
 ];
 
+// How long an extension's switch rests before the shell is asked: a few quick
+// flips become one call, or none (see _addExtensionSwitchRow).
+const EXTENSION_SWITCH_SETTLE_MS = 400;
+
 // Schemas that live inside another extension rather than the system set.
 const EXTENSION_SCHEMA_OWNERS = {
     [DASH_TO_DOCK_SCHEMA]: DASH_TO_DOCK_UUID,
@@ -1472,6 +1476,15 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // on whenever the extension is, whoever switched it, follows them when they
     // change elsewhere, and is written only through the shell. A call the shell
     // does not carry out puts the switch back and says why.
+    //
+    // Neither helper has a setting of its own that switches its effect off —
+    // Magic Lamp's are the effect, its duration and tiles; Rounded Window
+    // Corners Reborn reads no global 'enabled' — so this is the only way. It is
+    // a costly one: the shell disables and enables again every extension
+    // loaded after the one switched off (extensionSystem.js, the "rebase"),
+    // rebuilding the dock and its blur. So flips are gathered: the shell is
+    // asked once the switch has rested a moment, one call at a time, and only
+    // for a state that differs from the one it already has.
     _addExtensionSwitchRow(group, { uuid, title, subtitle }) {
         const shell = this._settingsForSchema(SHELL_SCHEMA);
         if (!['enabled-extensions', 'disabled-extensions', 'disable-user-extensions']
@@ -1484,8 +1497,14 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         let problem = null;
         let busy = false;
-        let pending = 0;
         let gone = false;
+        // What the user asked for last and the shell has not been asked yet;
+        // whether a call is out; and the state the shell said yes to, until its
+        // keys say so too — they can come a moment after the reply.
+        let wanted = null;
+        let calling = false;
+        let confirmed = null;
+        let settleId = 0;
         // The subtitle and whether the switch can be used. Extensions switched
         // off as a whole are out of the switch's reach.
         const describe = () => {
@@ -1495,44 +1514,77 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 ? 'Extensions are switched off in GNOME’s Extensions app'
                 : problem ?? subtitle);
         };
-        // While a call is out the switch is the user's, not the keys': they
-        // change in two steps, and reading them between would flick it back.
+        // While a request is waiting or out the switch is the user's, not the
+        // keys': they change in two steps, and reading them between would
+        // flick it back.
         const refresh = () => {
-            if (busy || pending > 0 || gone)
+            if (confirmed !== null && this._extensionEnabled(uuid) === confirmed)
+                confirmed = null;
+            if (busy || wanted !== null || calling || gone)
                 return;
             busy = true;
-            row.set_active(this._extensionEnabled(uuid));
+            row.set_active(confirmed ?? this._extensionEnabled(uuid));
             describe();
             busy = false;
         };
         refresh();
 
-        row.connect('notify::active', () => {
-            if (busy)
+        // Asks the shell for the last flip, once the switch has rested and no
+        // call is out; a call that comes back while it rests leaves it to the
+        // rest's end.
+        const send = () => {
+            if (gone || calling || settleId || wanted === null)
                 return;
-            // Every flip is a request, also one made while another is out: they
-            // reach the shell in order, and the last one is what stands.
-            problem = null;
-            pending++;
-            this._setExtensionEnabled(uuid, row.active).then(reason => {
-                pending--;
-                problem = reason;
+            const asked = wanted;
+            wanted = null;
+            if (asked === (confirmed ?? this._extensionEnabled(uuid))) {
+                refresh();
+                return;
+            }
+            calling = true;
+            this._setExtensionEnabled(uuid, asked).then(reason => {
+                calling = false;
                 if (gone)
                     return;
-                // Done: the keys will say so in a moment, not yet — read at once,
-                // they still show the old state on 45 and 48, where the reply
-                // is ahead of dconf's notice. Refused: they say otherwise now.
-                if (reason === null)
-                    describe();
+                problem = reason;
+                if (reason !== null) {
+                    // Refused: the keys say what is so. Nothing more is sent
+                    // for flips made meanwhile; the switch goes back.
+                    wanted = null;
+                    confirmed = null;
+                    refresh();
+                    return;
+                }
+                confirmed = asked;
+                if (wanted !== null)
+                    send();
                 else
                     refresh();
             });
+        };
+
+        row.connect('notify::active', () => {
+            if (busy)
+                return;
+            problem = null;
+            wanted = row.active;
+            if (settleId)
+                GLib.source_remove(settleId);
+            settleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT,
+                this._extensionSwitchSettleMs ?? EXTENSION_SWITCH_SETTLE_MS, () => {
+                    settleId = 0;
+                    send();
+                    return GLib.SOURCE_REMOVE;
+                });
         });
 
         const watched = ['enabled-extensions', 'disabled-extensions', 'disable-user-extensions']
             .map(key => shell.connect(`changed::${key}`, refresh));
         row.connect('destroy', () => {
             gone = true;
+            if (settleId)
+                GLib.source_remove(settleId);
+            settleId = 0;
             for (const id of watched)
                 shell.disconnect(id);
         });
