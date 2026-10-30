@@ -166,6 +166,11 @@ const IFACE = `
       <arg type="s" direction="in" name="wmClass"/>
       <arg type="i" direction="out" name="closed"/>
     </method>
+    <method name="SetWindowsState">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="s" direction="in" name="state"/>
+      <arg type="i" direction="out" name="changed"/>
+    </method>
     <method name="CountWindows">
       <arg type="s" direction="in" name="wmClass"/>
       <arg type="i" direction="out" name="count"/>
@@ -1225,6 +1230,29 @@ export default class TestHookExtension extends Extension {
             .filter(window => window.get_wm_class() === wmClass);
         for (const window of windows)
             window.delete(global.get_current_time());
+        return windows.length;
+    }
+
+    // Minimizes, unminimizes, maximizes or unmaximizes the windows of a class,
+    // which the shell animates with ease()s of their own.
+    SetWindowsState(wmClass, state) {
+        const windows = global.display.list_all_windows()
+            .filter(window => window.get_wm_class() === wmClass);
+        for (const window of windows) {
+            if (state === 'minimize') {
+                window.minimize();
+            } else if (state === 'unminimize') {
+                window.unminimize();
+            } else {
+                // mutter 49 dropped the flags these took.
+                const method = state === 'maximize' ? 'maximize' : 'unmaximize';
+                try {
+                    window[method](Meta.MaximizeFlags.BOTH);
+                } catch {
+                    window[method]();
+                }
+            }
+        }
         return windows.length;
     }
 

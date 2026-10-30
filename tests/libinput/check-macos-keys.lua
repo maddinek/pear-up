@@ -51,8 +51,16 @@ local function read_plugin()
 end
 local SOURCE = read_plugin()
 
+-- The keys below are pressed where an Apple keyboard has them, which is the
+-- copy as shipped (SWAPPED false). A copy the preferences rewrote for a PC
+-- keyboard, as installed on a desktop with Alt and Cmd swapped, is checked
+-- with its SWAPPED line put back, so that the logic is the same either way;
+-- only the registration below loads the file as it is.
+local FILE_SWAPPED = SOURCE:match("\nlocal SWAPPED = (%a+)\n") == "true"
+local APPLE = (SOURCE:gsub("\nlocal SWAPPED = [^\n]+\n", "\nlocal SWAPPED = false\n"))
+
 local function load_plugin(extra, source)
-    local chunk, err = load(source or SOURCE, "=plugin", "t", sandbox(extra))
+    local chunk, err = load(source or APPLE, "=plugin", "t", sandbox(extra))
     assert(chunk, err)
     return chunk()
 end
@@ -501,7 +509,7 @@ end
 print("Registering with libinput")
 do
     local fake, calls = fake_libinput()
-    load_plugin({ libinput = fake })
+    load_plugin({ libinput = fake }, SOURCE)
     check("it registers for version 1 of the plugin API",
         calls.register and calls.register[1] == 1 and #calls.register == 1)
     check("and listens for new devices", type(calls["new-evdev-device"]) == "function")
@@ -522,9 +530,15 @@ do
     calls["new-evdev-device"](numpad)
     check("nor a keyboard without arrow keys", numpad.handlers["evdev-frame"] == nil)
 
-    check("the shipped copy is for an Apple keyboard, all three on: Option+← moves by word",
-        feed(keyboard, "LEFTALT LEFT -LEFT -LEFTALT") ==
-        "LEFTALT-down LEFTCTRL-down LEFTALT-up LEFT-down LEFT-up LEFTCTRL-up")
+    if FILE_SWAPPED then
+        check("this copy is for a PC keyboard, all three on: Option, the Windows key, + ← moves by word",
+            feed(keyboard, "LEFTMETA LEFT -LEFT -LEFTMETA") ==
+            "LEFTMETA-down LEFTCTRL-down LEFTMETA-up LEFT-down LEFT-up LEFTCTRL-up")
+    else
+        check("the shipped copy is for an Apple keyboard, all three on: Option+← moves by word",
+            feed(keyboard, "LEFTALT LEFT -LEFT -LEFTALT") ==
+            "LEFTALT-down LEFTCTRL-down LEFTALT-up LEFT-down LEFT-up LEFTCTRL-up")
+    end
     keyboard.handlers["device-removed"](keyboard)
     check("a removed keyboard's frames pass as they are",
         feed(keyboard, "LEFTALT LEFT -LEFT -LEFTALT") == "LEFTALT-down LEFT-down LEFT-up LEFTALT-up")
@@ -544,7 +558,7 @@ do
     end
 
     local function with(values)
-        local source = SOURCE
+        local source = APPLE
         for name, value in pairs(values) do
             source = source:gsub("\nlocal " .. name .. " = [^\n]+\n", "\nlocal " .. name .. " = " .. value .. "\n")
         end

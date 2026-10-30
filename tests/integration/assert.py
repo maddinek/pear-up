@@ -958,7 +958,7 @@ def window_animations():
     return json.loads(hook("GetWindowAnimations"))
 
 
-def open_and_close_test_window(close_at_once=False):
+def open_and_close_test_window(close_at_once=False, between=None):
     hook("WatchWindowAnimations", (TEST_WINDOW_CLASS, 4.0), "(sd)")
     process = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -968,6 +968,8 @@ def open_and_close_test_window(close_at_once=False):
         GLib.usleep((10 if close_at_once else 100) * 1000)
     if not close_at_once:
         GLib.usleep(2000 * 1000)
+    if between:
+        between()
     hook("CloseWindows", (TEST_WINDOW_CLASS,), "(s)")
     GLib.usleep(2500 * 1000)
     try:
@@ -1064,6 +1066,27 @@ try:
               f"{len(shrink)} samples over {span(shrink)} ms: {describe_samples(shrink)}")
         print(f"  note: at a quarter speed the opening moved for {span(grow)} ms "
               f"(stock {span(stock_open)} ms), the closing for {span(shrink)} ms")
+
+        # Minimizing, unminimizing and resizing are the shell's own animations,
+        # asked about with the same window types: they leave no stand-in ease()
+        # behind, and the closing that follows is still the macOS one.
+        churned = {}
+
+        def churn():
+            for state in ("minimize", "unminimize", "maximize", "unmaximize"):
+                hook("SetWindowsState", (TEST_WINDOW_CLASS, state), "(ss)")
+                GLib.usleep(2000 * 1000)
+            churned.update(window_animations())
+
+        after = open_and_close_test_window(between=churn)
+        check("minimizing, unminimizing and resizing leave no stand-in ease() behind",
+              churned.get("ownEase") == 0, f"ownEase={churned.get('ownEase')}")
+        closed_after = after["close"][0] if after["close"] else []
+        shrink_after = moving(closed_after)
+        check("and the window still closes the macOS way afterwards",
+              len(shrink_after) >= 3 and uniform(shrink_after) and centred(shrink_after)
+              and min(s["sx"] for s in shrink_after) >= 0.89,
+              f"{len(shrink_after)} samples: {describe_samples(shrink_after)}")
 
     rushed = open_and_close_test_window(close_at_once=True)
     check("a window closed while it opens is finished, nothing left behind",
