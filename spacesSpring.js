@@ -35,7 +35,8 @@
 //     them when it is made, so 45 to 48 get the spring and the bump but no
 //     rubber band under the fingers
 //   - Main.wm.setCustomKeybindingHandler() and _showWorkspaceSwitcher(), the
-//     handler the shell gives the switch-to-workspace-* bindings
+//     handler the shell gives the switch-to-workspace-* bindings, and
+//     _allowedKeybindings, the action modes each binding was given
 //   - WorkspaceAnimation.MonitorGroup, built for the bump as a switch builds it
 import Clutter from 'gi://Clutter';
 import Meta from 'gi://Meta';
@@ -43,6 +44,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as WorkspaceAnimation from 'resource:///org/gnome/shell/ui/workspaceAnimation.js';
+import { InstancePatch } from './shellTweaks.js';
 
 export const SPACES_SPRING_KEY = 'spaces-spring';
 
@@ -137,25 +139,45 @@ function translationProp() {
     return vertical() ? 'translation_y' : 'translation_x';
 }
 
+// The transitions already on the spring: each is put on it once.
+const sprung = new WeakSet();
+
 // Puts a progress transition the controller has just started on the spring.
 // GJS cannot hand a timeline a progress function (the value a JavaScript one
-// returns is lost), so the transition runs linearly and, once it has set its
-// value for the frame, the spring's value goes over it. It still ends where
-// it would, on the same frame, and its completion is still the shell's.
-function springTransition(group, transition, ms, start) {
+// returns is lost), so the transition runs linearly, and before it works out
+// its value for each frame its end point is moved to where a straight line
+// from its start, that far along, meets the spring: from + (to - from) * c(u)
+// at u is from + (to' - from) * u for to' = from + (to - from) * c(u) / u. The
+// shell's transition then sets the spring's value itself, once a frame; at the
+// last frame its end point goes back on `to` exactly, so it still ends
+// where it would, on the same frame, and its completion is still the shell's.
+// The shell reads where the desktops are from the group, never from the
+// transition's end point. Each transition's handlers go when it stops; turned
+// off in the middle, a slide finishes on the spring, as it began.
+function springTransition(transition, ms, start) {
+    if (sprung.has(transition))
+        return;
     const interval = transition.get_interval();
     const from = interval?.peek_initial_value();
     const to = interval?.peek_final_value();
     if (typeof from !== 'number' || typeof to !== 'number')
         return;
+    sprung.add(transition);
 
     const curve = springCurve(start);
     transition.set_duration(Math.max(1, Math.round(ms)));
     transition.set_progress_mode(Clutter.AnimationMode.LINEAR);
-    transition.connect_after('new-frame', () => {
-        const total = transition.get_duration();
-        const u = total > 0 ? clamp(transition.get_elapsed_time() / total, 0, 1) : 1;
-        group.progress = from + (to - from) * curve(u);
+    // Before the transition's own handler, which runs last.
+    const frameId = transition.connect('new-frame', () => {
+        const u = clamp(transition.get_progress(), 0, 1);
+        if (u >= 1)
+            transition.set_to(to);
+        else if (u > 0)
+            transition.set_to(from + (to - from) * curve(u) / u);
+    });
+    const stoppedId = transition.connect('stopped', () => {
+        transition.disconnect(frameId);
+        transition.disconnect(stoppedId);
     });
 }
 
@@ -166,7 +188,8 @@ export class SpacesSpring {
         this._controller = null;
         this._tracker = null;
         this._own = [];
-        this._bindings = false;
+        this._prepare = null;
+        this._bindings = null;
         this._swipe = null;
         this._release = null;
         this._springBack = null;
@@ -197,7 +220,7 @@ export class SpacesSpring {
             on: !!this._controller,
             keyboard: this._own.some(o => o.name === 'animateSwitch'),
             rubberBand: this._own.some(o => o.name === '_updateGesture'),
-            bump: this._bindings,
+            bump: !!this._bindings,
             stretch: this._swipe?.excess ?? 0,
             bumping: !!this._bump,
             springingBack: !!this._springBack,
@@ -219,21 +242,15 @@ export class SpacesSpring {
         console.warn(`[${this._uuid}] ${message}`);
     }
 
-    // An own property over the class's method, on the one object. Left alone if
-    // something else already put one there: that is theirs. The class's method
-    // is looked up at each call, so a patch to the class made later, as Blur my
-    // Shell makes to the switch's, is still called.
-    _override(object, name, make) {
-        if (typeof object[name] !== 'function' || Object.hasOwn(object, name))
-            return false;
-        const proto = Object.getPrototypeOf(object);
-        const replacement = make({
-            apply: (self, args) => proto[name].apply(self, args),
-            call: (self, ...args) => proto[name].apply(self, args),
-        });
-        object[name] = replacement;
-        this._own.push({ object, name, replacement });
-        return true;
+    // An own property over the class's method, on the one object, called as
+    // replacement(original, ...args); see InstancePatch for what is beneath
+    // it and how it comes off.
+    _override(object, name, replacement) {
+        const patch = new InstancePatch(object, name);
+        if (!patch.enable(replacement))
+            return null;
+        this._own.push({ name, patch });
+        return patch;
     }
 
     _enable() {
@@ -254,7 +271,7 @@ export class SpacesSpring {
         const self = this;
 
         // The keyboard switch, and any switch the shell animates itself.
-        this._override(controller, 'animateSwitch', original => function (...args) {
+        this._override(controller, 'animateSwitch', function (original, ...args) {
             self._stopBump();
             const result = original.apply(this, args);
             self._guard('springing the switch', () =>
@@ -264,7 +281,7 @@ export class SpacesSpring {
 
         // A swipe begun during a bump: the bump makes way first, so the swipe
         // gets a switch of its own with every desktop in it.
-        this._override(controller, '_prepareWorkspaceSwitch', original => function (...args) {
+        this._prepare = this._override(controller, '_prepareWorkspaceSwitch', function (original, ...args) {
             self._stopBump();
             return original.apply(this, args);
         });
@@ -303,7 +320,7 @@ export class SpacesSpring {
 
         // A swipe starts here, from the shell's begin handler; if it starts on a
         // desktop still springing back from a pull, it starts from that pull.
-        this._override(tracker, 'confirmSwipe', original => function (...args) {
+        this._override(tracker, 'confirmSwipe', function (original, ...args) {
             const result = original.apply(this, args);
             self._guard('starting a swipe', () => {
                 self._swipe = { excess: self._takeOverSpringBack() };
@@ -311,7 +328,7 @@ export class SpacesSpring {
             return result;
         });
 
-        this._override(tracker, '_reset', original => function (...args) {
+        this._override(tracker, '_reset', function (original, ...args) {
             self._swipe = null;
             return original.apply(this, args);
         });
@@ -320,7 +337,7 @@ export class SpacesSpring {
         // desktops let go, the pull past it kept apart from the progress the
         // shell sees, so its sums, snap points and the overview's adjustment
         // stay as they were. Clamps inside the row, one desktop per swipe, stay.
-        this._override(tracker, '_updateGesture', original => function (delta, distance) {
+        this._override(tracker, '_updateGesture', function (original, delta, distance) {
             const swipe = self._swipe;
             if (!swipe)
                 return original.call(this, delta, distance);
@@ -348,7 +365,7 @@ export class SpacesSpring {
         // Let go while pulled past the end: the shell is told where the fingers
         // really are, so it lands on the end desktop and takes time over it,
         // rather than finishing at once and dropping the stretched desktops.
-        this._override(tracker, '_endGesture', original => function (velocity, distance, ...rest) {
+        this._override(tracker, '_endGesture', function (original, velocity, distance, ...rest) {
             const swipe = self._swipe;
             if (swipe && swipe.excess !== 0 && distance > 0) {
                 self._release = { excess: swipe.excess, velocity: velocity / distance };
@@ -368,15 +385,30 @@ export class SpacesSpring {
             return;
         }
 
-        // The binding comes last: GNOME 45 passes no event before it.
-        const handler = (...args) => {
+        // The binding comes last: GNOME 45 passes no event before it. Off, the
+        // handler is the shell's alone and holds nothing of this, for anything
+        // that kept it.
+        const bindings = { owner: this, handler: null, modes: {}, claimed: new Set(), patch: null };
+        bindings.handler = (...args) => {
             const binding = args[args.length - 1];
-            this._guard('bumping at the end', () => this._maybeBump(binding?.get_name?.()));
+            const owner = bindings.owner;
+            owner?._guard('bumping at the end', () => owner._maybeBump(binding?.get_name?.()));
             wm._showWorkspaceSwitcher(...args);
         };
-        for (const name of Object.keys(BINDINGS))
-            wm.setCustomKeybindingHandler(name, BINDING_MODES, handler);
-        this._bindings = true;
+        for (const name of Object.keys(BINDINGS)) {
+            bindings.modes[name] = wm._allowedKeybindings?.[name] ?? BINDING_MODES;
+            wm.setCustomKeybindingHandler(name, BINDING_MODES, bindings.handler);
+        }
+        // Another handler set for one of them after this one is its owner's
+        // from then on, and stays when this goes.
+        const patch = new InstancePatch(wm, 'setCustomKeybindingHandler');
+        if (patch.enable(function (original, name, ...args) {
+            if (name in BINDINGS && args[args.length - 1] !== bindings.handler)
+                bindings.claimed.add(name);
+            return original.call(this, name, ...args);
+        }))
+            bindings.patch = patch;
+        this._bindings = bindings;
     }
 
     _disable() {
@@ -384,20 +416,28 @@ export class SpacesSpring {
         this._stopSpringBack(true);
         this._guard('putting the stretch back', () => this._stretch(0));
 
-        if (this._bindings) {
-            this._bindings = false;
+        // Back to the shell's handler, with the modes each had, unless
+        // something else has taken it since. Meta cannot say whose handler a
+        // binding had before this one took it, so one set by another extension
+        // before Pear Up came on goes back to the shell's.
+        const bindings = this._bindings;
+        if (bindings) {
+            this._bindings = null;
+            bindings.owner = null;
+            bindings.patch?.disable();
             const wm = Main.wm;
             for (const name of Object.keys(BINDINGS)) {
+                if (bindings.claimed.has(name))
+                    continue;
                 this._guard(`giving ${name} back to the shell`, () =>
-                    wm.setCustomKeybindingHandler(name, BINDING_MODES,
+                    wm.setCustomKeybindingHandler(name, bindings.modes[name],
                         wm._showWorkspaceSwitcher.bind(wm)));
             }
         }
 
-        for (const { object, name, replacement } of this._own.splice(0)) {
-            if (Object.hasOwn(object, name) && object[name] === replacement)
-                delete object[name];
-        }
+        for (const { patch } of this._own.splice(0))
+            patch.disable();
+        this._prepare = null;
 
         for (const target of [this._tracker, Main.overview]) {
             try {
@@ -421,8 +461,8 @@ export class SpacesSpring {
     _retime(ms, startFor) {
         for (const group of this._groups()) {
             const transition = group.get_transition('progress');
-            if (transition)
-                springTransition(group, transition, ms, startFor(transition));
+            if (transition && !sprung.has(transition))
+                springTransition(transition, ms, startFor(transition));
         }
     }
 
@@ -576,14 +616,16 @@ export class SpacesSpring {
     _startBump(direction, index) {
         this._stopBump();
 
+        // Past this one's own wrapper, which would stop the bump, to whatever
+        // is beneath it: the shell's, or another extension's.
         const controller = this._controller;
-        const proto = Object.getPrototypeOf(controller);
-        proto._prepareWorkspaceSwitch.call(controller, [index]);
+        const prepare = this._prepare?.original ?? controller._prepareWorkspaceSwitch;
+        prepare.call(controller, [index]);
         const switchData = controller._switchData;
         const groups = switchData?.monitors ?? [];
         if (!groups.length || !groups.every(g => g._container)) {
             if (switchData)
-                proto._finishWorkspaceSwitch.call(controller, switchData);
+                controller._finishWorkspaceSwitch(switchData);
             return;
         }
 
@@ -634,6 +676,6 @@ export class SpacesSpring {
         bump.timeline.stop();
         const controller = this._controller;
         if (controller && controller._switchData === bump.switchData)
-            Object.getPrototypeOf(controller)._finishWorkspaceSwitch.call(controller, bump.switchData);
+            controller._finishWorkspaceSwitch(bump.switchData);
     }
 }
