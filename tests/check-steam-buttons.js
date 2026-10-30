@@ -2,15 +2,20 @@
 // Steam: Buttons on the Left, against a Steam installation made up here: the
 // patch has to be the original's size, import it unchanged, give the original
 // back byte for byte, survive a Steam update and leave Adwaita for Steam's
-// patch alone.
+// patch alone. Then the extension's keeper, which does the same work
+// asynchronously: the same files, nothing left connected when it fails part
+// way, and nothing written for a request that was dropped.
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import system from 'system';
 import {
     PATCH_HEADER,
+    SteamButtonsKeeper,
     applySteamButtons,
+    applySteamButtonsSteps,
     buttonsCss,
     restoreSteamButtons,
+    runAsync,
     steamRoots,
     steamState,
     titleBarClasses,
@@ -151,6 +156,18 @@ check('off after an update keeps Steam\'s new file and drops the old original',
     read(`${css}/library.css`) === LIBRARY && !exists(`${css}/library.pear-up-original.css`) &&
     read(`${css}/gamerecording.css`) === RECORDING);
 
+// The other process half way through patching: Steam's file still its own,
+// with its copy already beside it. Restoring then leaves the copy for the
+// patch that is about to land, which a later restore takes back properly.
+write(`${css}/library.pear-up-original.css`, LIBRARY);
+restoreSteamButtons(root);
+check('a copy of Steam\'s file beside it, a patch about to land, is left for it',
+    read(`${css}/library.pear-up-original.css`) === LIBRARY && read(`${css}/library.css`) === LIBRARY);
+applySteamButtons(root, LEFT);
+restoreSteamButtons(root);
+check('and the restore after that patch gives Steam\'s file back and takes the copy away',
+    read(`${css}/library.css`) === LIBRARY && !exists(`${css}/library.pear-up-original.css`));
+
 // A file too small to hold the patch is left as it is.
 write(`${css}/gamerecording.css`, '.a{}');
 applySteamButtons(root, LEFT);
@@ -184,6 +201,195 @@ check('off under Adwaita for Steam keeps the original its chain imports',
     read(`${css}/library.pear-up-original.css`) === LIBRARY && read(`${css}/library.css`) === ADWAITA);
 check('while gamerecording.css, not patched over, is restored', read(`${css}/gamerecording.css`) === RECORDING);
 check('and the rules are gone, so the chain moves nothing', !exists(`${root}/steamui/pear-up/window-buttons.css`));
+
+
+// ------------------------------------------------------------- the keeper
+// A Steam installation of its own for each case, made as above.
+let installs = 0;
+const install = () => {
+    const at = `${base}/keeper-${installs++}/Steam`;
+    write(`${at}/steamui/css/library.css`, LIBRARY);
+    write(`${at}/steamui/css/gamerecording.css`, RECORDING);
+    write(`${at}/steamui/chunk~2dcc5aaf7.js`, `var a=1;${SCRIPT};var b=2;`);
+    return at;
+};
+const fakeSettings = on => ({ on, get_boolean() { return this.on; } });
+const fakeWm = () => ({
+    handlers: new Map(),
+    next: 1,
+    connect(signal, handler) {
+        this.handlers.set(this.next, handler);
+        return this.next++;
+    },
+    disconnect(id) {
+        this.handlers.delete(id);
+    },
+    get_string() {
+        return LEFT;
+    },
+});
+const realMonitor = path => Gio.File.new_for_path(path).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, null);
+// A look for Steam that waits to be let go, and says when it has been asked,
+// so that a case can act while the keeper's pass is really in the middle.
+const later = () => {
+    let release;
+    const gate = { entered: false };
+    const promise = new Promise(resolve => {
+        release = resolve;
+    });
+    gate.find = roots => () => {
+        gate.entered = true;
+        return promise.then(() => roots);
+    };
+    gate.release = () => release();
+    gate.reached = async () => {
+        for (let turn = 0; turn < 100 && !gate.entered; turn++)
+            await null;
+        return gate.entered;
+    };
+    return gate;
+};
+
+{
+    // Constructed, it does nothing at all; started, it patches as the
+    // synchronous functions do, byte for byte; switched off, it restores.
+    const at = install();
+    const same = install();
+    const wmFake = fakeWm();
+    const settings = fakeSettings(true);
+    const keeper = new SteamButtonsKeeper('test', settings,
+        { findRoots: async () => [at], monitorDirectory: realMonitor, wm: wmFake });
+    check('the keeper connects nothing until it is started', wmFake.handlers.size === 0);
+    keeper.start();
+    check('started, it watches the layout', wmFake.handlers.size === 1);
+    await keeper.settled;
+    applySteamButtons(same, LEFT);
+    check('the keeper patches as the synchronous functions do',
+        steamState(at).on && read(`${at}/steamui/css/library.css`) === read(`${same}/steamui/css/library.css`) &&
+        read(`${at}/steamui/pear-up/window-buttons.css`) === read(`${same}/steamui/pear-up/window-buttons.css`) &&
+        read(`${at}/steamui/css/library.pear-up-original.css`) === LIBRARY);
+    check('and watches the stylesheets', keeper._monitors.length === 1);
+    settings.on = false;
+    keeper.sync();
+    await keeper.settled;
+    check('switched off, the keeper puts Steam\'s files back',
+        read(`${at}/steamui/css/library.css`) === LIBRARY && !exists(`${at}/steamui/pear-up`) &&
+        !exists(`${at}/steamui/css/library.pear-up-original.css`));
+    check('and stops watching them', keeper._monitors.length === 0);
+    keeper.destroy();
+    check('destroyed, it leaves nothing connected', wmFake.handlers.size === 0);
+}
+
+{
+    // A monitor that cannot be made: the ones made before it are taken back,
+    // none is kept, the patch is still made, and destroy disconnects all.
+    const first = install();
+    const second = install();
+    const wmFake = fakeWm();
+    const made = [];
+    const keeper = new SteamButtonsKeeper('test', fakeSettings(true), {
+        findRoots: async () => [first, second],
+        monitorDirectory: path => {
+            if (made.length > 0)
+                throw new Error('no more inotify watches');
+            const monitor = realMonitor(path);
+            made.push(monitor);
+            return monitor;
+        },
+        wm: wmFake,
+    });
+    keeper.start();
+    await keeper.settled;
+    check('a monitor that fails takes back the one made before it',
+        made.length === 1 && made[0].is_cancelled() && keeper._monitors.length === 0);
+    check('and both installations are patched all the same', steamState(first).on && steamState(second).on);
+    keeper.destroy();
+    check('destroyed after a failed watch, nothing is left connected', wmFake.handlers.size === 0);
+    restoreSteamButtons(first);
+    restoreSteamButtons(second);
+}
+
+{
+    // Destroyed while its first look for Steam is still out: nothing written.
+    const at = install();
+    const wmFake = fakeWm();
+    const slow = later();
+    const keeper = new SteamButtonsKeeper('test', fakeSettings(true),
+        { findRoots: slow.find([at]), monitorDirectory: realMonitor, wm: wmFake });
+    keeper.start();
+    check('the first pass is under way', await slow.reached());
+    keeper.destroy();
+    slow.release();
+    await keeper.settled;
+    check('destroyed while reading, it writes nothing',
+        !steamState(at).on && read(`${at}/steamui/css/library.css`) === LIBRARY && !exists(`${at}/steamui/pear-up`));
+    check('and leaves nothing connected', wmFake.handlers.size === 0 && keeper._monitors.length === 0);
+}
+
+{
+    // Switched on and off again while the first pass is still reading: the
+    // first pass is dropped, the last request is what stands.
+    const at = install();
+    const settings = fakeSettings(true);
+    const slow = later();
+    const keeper = new SteamButtonsKeeper('test', settings,
+        { findRoots: slow.find([at]), monitorDirectory: realMonitor, wm: fakeWm() });
+    keeper.start();
+    check('the pass switching on is under way', await slow.reached());
+    settings.on = false;
+    keeper.sync();
+    slow.release();
+    await keeper.settled;
+    check('on then off while reading leaves Steam\'s files as they were',
+        !steamState(at).on && read(`${at}/steamui/css/library.css`) === LIBRARY && !exists(`${at}/steamui/pear-up`));
+    check('and watches nothing', keeper._monitors.length === 0);
+    keeper.destroy();
+}
+
+{
+    // The shell reads a file asynchronously and patches it a moment later; the
+    // preferences may have patched it in between. The patch checks the file
+    // is still what was read, and leaves one patched since alone.
+    const at = install();
+    function* meanwhile(steps, act) {
+        let step = steps.next();
+        while (!step.done) {
+            if (step.value.op === 'patch')
+                act();
+            step = steps.next(yield step.value);
+        }
+        return step.value;
+    }
+    let acted = false;
+    await runAsync(meanwhile(applySteamButtonsSteps(at, LEFT), () => {
+        if (!acted)
+            applySteamButtons(at, LEFT);
+        acted = true;
+    }));
+    check('a file patched by the other process meanwhile is left as it patched it',
+        steamState(at).on && read(`${at}/steamui/css/library.pear-up-original.css`) === LIBRARY &&
+        read(`${at}/steamui/css/gamerecording.pear-up-original.css`) === RECORDING);
+    restoreSteamButtons(at);
+    check('and restores cleanly', read(`${at}/steamui/css/library.css`) === LIBRARY &&
+        !exists(`${at}/steamui/css/library.pear-up-original.css`));
+}
+
+{
+    // A start that fails part way undoes itself.
+    const wmFake = fakeWm();
+    wmFake.connect = () => {
+        throw new Error('no such signal');
+    };
+    const keeper = new SteamButtonsKeeper('test', fakeSettings(true),
+        { findRoots: async () => [], monitorDirectory: realMonitor, wm: wmFake });
+    let threwOnStart = false;
+    try {
+        keeper.start();
+    } catch {
+        threwOnStart = true;
+    }
+    check('a start that fails throws and leaves the keeper destroyed', threwOnStart && keeper._settings === null);
+}
 
 GLib.spawn_command_line_sync(`rm -rf ${base}`);
 

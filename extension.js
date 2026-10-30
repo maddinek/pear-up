@@ -288,6 +288,7 @@ export default class GlobalMenuExtension extends Extension {
         // patched again when a Steam update writes its stylesheets afresh.
         this._guard('watching Steam\'s window buttons', () => {
             this._steamButtons = new SteamButtonsKeeper(this.metadata.uuid, this._settings);
+            this._steamButtons.start();
         });
 
         // GNOME can close a window from the keyboard but has nothing that
