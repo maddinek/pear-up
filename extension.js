@@ -129,6 +129,7 @@ export default class GlobalMenuExtension extends Extension {
         this._indicatorPaddingId = 0;
         this._menuSyncId = 0;
         this._menuSyncDeadline = 0;
+        this._shellGone = false;
         this._hiddenSpacers = [];
         this._gapped = new Set();
         this._padded = new Set();
@@ -175,6 +176,17 @@ export default class GlobalMenuExtension extends Extension {
         this._spotlightMoved = null;
         this._overviewHidden = false;
         this._menuSyncDeadline = 0;
+        this._shellGone = false;
+
+        // At logout the shell's own shutdown handler destroys uiGroup — the
+        // panel with it — and then runs a main loop of its own while it saves
+        // the session history. Idles queued here would run in that loop
+        // against actors already disposed, which is the "already disposed"
+        // and GC-sweep noise in the journal at every logout. The destroy
+        // arrives before that loop, so stop queuing and drop what is queued
+        // there. Nothing is touched from the handler itself.
+        Main.layoutManager.uiGroup.connectObject('destroy', () => this._onShellGone(), this);
+        Main.panel.connectObject('destroy', () => this._onShellGone(), this);
 
         this._menuManager = new MenuManager(this.metadata.uuid, this._settings);
 
@@ -575,13 +587,13 @@ export default class GlobalMenuExtension extends Extension {
     // when it arrives — its extension keeps building it for a moment longer — so
     // waiting for idle lets it settle, and one pass covers a burst of them.
     _queueIndicatorPadding() {
-        if (this._indicatorPaddingId)
+        if (this._indicatorPaddingId || this._shellGone)
             return;
 
         this._indicatorPaddingId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._indicatorPaddingId = 0;
             // A queued signal can still arrive after disable() has run.
-            if (this._settings)
+            if (this._settings && !this._shellGone)
                 this._guard('padding a late indicator', () => this._applyIconPadding());
             return GLib.SOURCE_REMOVE;
         });
@@ -792,13 +804,13 @@ export default class GlobalMenuExtension extends Extension {
     // The system item is built asynchronously while the shell starts, and
     // nothing announces its arrival, so poll briefly rather than give up.
     _retryHidePowerButton() {
-        if (this._powerRetryId || this._powerRetries >= PANEL_RETRY_LIMIT)
+        if (this._powerRetryId || this._powerRetries >= PANEL_RETRY_LIMIT || this._shellGone)
             return;
 
         this._powerRetries++;
         this._powerRetryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
             this._powerRetryId = 0;
-            if (this._settings?.get_boolean('hide-power-button'))
+            if (!this._shellGone && this._settings?.get_boolean('hide-power-button'))
                 this._guard('hiding the power icon', () => this._hidePowerButton());
             return GLib.SOURCE_REMOVE;
         });
@@ -827,12 +839,13 @@ export default class GlobalMenuExtension extends Extension {
 
     // Re-apply the tweaks once the current batch of panel changes has settled.
     _queuePanelResync() {
-        if (this._resyncId)
+        if (this._resyncId || this._shellGone)
             return;
 
         this._resyncId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._resyncId = 0;
-            this._guard('re-applying panel tweaks', () => this._syncPanelTweaks());
+            if (!this._shellGone)
+                this._guard('re-applying panel tweaks', () => this._syncPanelTweaks());
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -932,12 +945,13 @@ export default class GlobalMenuExtension extends Extension {
     // actor tree during a signal can abort the shell. Our own rebuilds move it
     // too, and the check on idle finds it where it belongs and does nothing.
     _queueClockHold() {
-        if (this._clockHoldId)
+        if (this._clockHoldId || this._shellGone)
             return;
 
         this._clockHoldId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._clockHoldId = 0;
-            this._guard('keeping the clock on the right', () => this._holdClock());
+            if (!this._shellGone)
+                this._guard('keeping the clock on the right', () => this._holdClock());
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -1137,13 +1151,14 @@ export default class GlobalMenuExtension extends Extension {
 
     // Roughly ten seconds of waiting for the button to turn up.
     _retryHideOverviewButton() {
-        if (this._overviewRetryId || this._overviewRetries >= PANEL_RETRY_LIMIT)
+        if (this._overviewRetryId || this._overviewRetries >= PANEL_RETRY_LIMIT || this._shellGone)
             return;
 
         this._overviewRetries++;
         this._overviewRetryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
             this._overviewRetryId = 0;
-            this._guard('hiding the Activities button', () => this._syncOverviewButton());
+            if (!this._shellGone)
+                this._guard('hiding the Activities button', () => this._syncOverviewButton());
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -1178,7 +1193,7 @@ export default class GlobalMenuExtension extends Extension {
     // used to rebuild the menu synchronously. Coalesce them onto an idle so
     // the work happens once per burst instead of once per signal.
     _queueMenuSync() {
-        if (this._menuSyncId)
+        if (this._menuSyncId || this._shellGone)
             return;
 
         this._menuSyncId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
@@ -1194,6 +1209,9 @@ export default class GlobalMenuExtension extends Extension {
     // read when the sync finally runs, so a hold never shows a stale one. The
     // limit counts from the first hold and is not extended by later signals.
     _runMenuSync() {
+        if (this._shellGone)
+            return;
+
         if (this._workspaceSwitching()) {
             const now = GLib.get_monotonic_time();
             if (!this._menuSyncDeadline)
@@ -1222,6 +1240,13 @@ export default class GlobalMenuExtension extends Extension {
         } catch {
             return false;
         }
+    }
+
+    // See _enable(): the shell is going away under us. Only bookkeeping here —
+    // the actors are mid-destroy.
+    _onShellGone() {
+        this._shellGone = true;
+        this._dropQueuedSources();
     }
 
     _dropQueuedSources() {
@@ -1301,6 +1326,10 @@ export default class GlobalMenuExtension extends Extension {
         }
 
         this._dropQueuedSources();
+        this._guard('unwatching the shell', () => {
+            Main.layoutManager.uiGroup?.disconnectObject(this);
+            Main.panel?.disconnectObject(this);
+        });
 
         if (this._quitBound) {
             Main.wm.removeKeybinding('quit-app');
