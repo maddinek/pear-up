@@ -20,7 +20,7 @@
 // The swipes covered: the desktop switcher's, the overview's (up and down), the
 // overview's desktops, the app grid's pages and its folders' pages. Folders are
 // made and remade with the app grid, so the trackers are looked for again each
-// time the overview opens. The on-screen keyboard's and the lock screen's
+// time the overview opens and each time the grid says it has loaded its view. The on-screen keyboard's and the lock screen's
 // swipes are left as they are.
 //
 // Springy Desktop Switching (spacesSpring.js) wraps methods of the desktop
@@ -34,7 +34,8 @@
 //   - the trackers at Main.wm._workspaceAnimation._swipeTracker,
 //     Main.overview._swipeTracker, and on Main.overview._overview.controls its
 //     _workspacesDisplay._swipeTracker, _appDisplay._swipeTracker and each of
-//     _appDisplay._folderIcons' view._swipeTracker
+//     _appDisplay._folderIcons' view._swipeTracker, and the app grid's
+//     'view-loaded' signal
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 export const GESTURE_DIRECTION_KEY = 'macos-gesture-direction';
@@ -44,13 +45,15 @@ const NATURAL = 'natural-scroll';
 // One line per shell session, not one per unlock.
 const told = new Set();
 
-// The real settings, with Natural Scrolling always on. Everything else is the
-// real object's, called on it.
-function followingFingers(real) {
+// The real settings, with Natural Scrolling always on while state.on is.
+// Everything else is the real object's, called on it. Off, it is the real
+// settings through and through: something that took the gesture's settings
+// over since keeps this one beneath theirs, and it must not go on answering on.
+function followingFingers(real, state) {
     return new Proxy(real, {
         get(target, name) {
             if (name === 'get_boolean')
-                return key => key === NATURAL || target.get_boolean(key);
+                return key => (state.on && key === NATURAL) || target.get_boolean(key);
             const value = target[name];
             return typeof value === 'function' ? value.bind(target) : value;
         },
@@ -117,9 +120,11 @@ export class GestureDirection {
         if (!this._on) {
             this._on = true;
             // Folders come and go with the app grid; the overview opening is
-            // the earliest a new one can be swiped.
-            Main.overview.connectObject('showing', () =>
-                this._guard('turning the swipes the macOS way', () => this._patchAll()), this);
+            // the earliest a new one can be swiped, and the grid says when it
+            // has remade them, which can be later or while it is open.
+            const patchAll = () => this._guard('turning the swipes the macOS way', () => this._patchAll());
+            Main.overview.connectObject('showing', patchAll, this);
+            Main.overview._overview?.controls?._appDisplay?.connectObject('view-loaded', patchAll, this);
         }
         this._patchAll();
     }
@@ -139,9 +144,10 @@ export class GestureDirection {
             }
             if (this._patched.has(gesture))
                 continue;
-            const shim = followingFingers(real);
+            const state = { on: true };
+            const shim = followingFingers(real, state);
             gesture._touchpadSettings = shim;
-            this._patched.set(gesture, { name, real, shim });
+            this._patched.set(gesture, { name, real, shim, state });
         }
 
         // Folders the app grid has let go of since: not held on to.
@@ -160,10 +166,12 @@ export class GestureDirection {
     _disable() {
         if (this._on) {
             this._on = false;
-            try {
-                Main.overview.disconnectObject(this);
-            } catch {
-                // Gone with the shell, at logout.
+            for (const target of [Main.overview, Main.overview?._overview?.controls?._appDisplay]) {
+                try {
+                    target?.disconnectObject(this);
+                } catch {
+                    // Gone with the shell, at logout.
+                }
             }
         }
 
@@ -174,8 +182,9 @@ export class GestureDirection {
     }
 
     _restore(gesture) {
-        const { real, shim } = this._patched.get(gesture);
+        const { real, shim, state } = this._patched.get(gesture);
         this._patched.delete(gesture);
+        state.on = false;
         if (gesture._touchpadSettings === shim)
             gesture._touchpadSettings = real;
     }

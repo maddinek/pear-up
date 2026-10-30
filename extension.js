@@ -13,6 +13,7 @@ import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
 import { SpacesSpring, SPACES_SPRING_KEY } from './spacesSpring.js';
 import { GestureDirection, GESTURE_DIRECTION_KEY } from './gestureDirection.js';
+import { OverviewSwipeGuard } from './overviewSwipeGuard.js';
 import { ScreenshotThumbnail, SCREENSHOT_THUMBNAIL_KEY } from './screenshotThumbnail.js';
 import { WindowAnimations, WINDOW_ANIMATIONS_KEY } from './windowAnimations.js';
 import { SteamButtonsKeeper, STEAM_BUTTONS_KEY } from './steamButtons.js';
@@ -114,6 +115,7 @@ export default class GlobalMenuExtension extends Extension {
         this._smoothBrightness = null;
         this._spacesSpring = null;
         this._gestureDirection = null;
+        this._overviewSwipeGuard = null;
         this._screenshotThumbnail = null;
         this._windowAnimations = null;
         this._steamButtons = null;
@@ -270,6 +272,12 @@ export default class GlobalMenuExtension extends Extension {
         // sets the brightness itself (GNOME 49 on).
         this._guard('smoothing automatic brightness', () => {
             this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
+        });
+
+        // Not an option: a fix for the shell, which throws at the end of a
+        // swipe that never opened the overview and leaves it half made.
+        this._guard('guarding the overview swipe', () => {
+            this._overviewSwipeGuard = new OverviewSwipeGuard(this.metadata.uuid);
         });
 
         // The shell's swipes follow the fingers, as Spaces and Mission Control
@@ -1319,6 +1327,9 @@ export default class GlobalMenuExtension extends Extension {
 
         this._guard('giving the swipes back their direction', () => this._gestureDirection?.destroy());
         this._gestureDirection = null;
+
+        this._guard('removing the overview swipe guard', () => this._overviewSwipeGuard?.destroy());
+        this._overviewSwipeGuard = null;
 
         // Takes away a thumbnail still showing, and the notification it held back.
         this._guard('removing the screenshot thumbnail', () => this._screenshotThumbnail?.destroy());
