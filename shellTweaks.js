@@ -157,7 +157,7 @@ export class InstancePatch {
     // What was beneath this patch, to call past it; the object's own method
     // while there is no patch.
     get original() {
-        if (this._installed)
+        if (this._installed?.owner === this)
             return this._installed.original;
         const name = this._name;
         return function (...args) {
@@ -172,10 +172,13 @@ export class InstancePatch {
         if (!object)
             return false;
 
+        // One of ours already there is this patch's from now on: another
+        // patch that still has it loses it, and its disable() does nothing.
         const own = Object.getOwnPropertyDescriptor(object, name);
         const ours = typeof own?.value === 'function' ? instanceWrappers.get(own.value) : null;
-        if (ours) {
+        if (ours && ours.object === object && ours.name === name) {
             ours.state.impl = replacement;
+            ours.owner = this;
             this._installed = ours;
             return true;
         }
@@ -200,7 +203,7 @@ export class InstancePatch {
             configurable: true,
             enumerable: own?.enumerable ?? true,
         });
-        this._installed = { wrapper, state, original, own };
+        this._installed = { object, name, wrapper, state, original, own, owner: this };
         instanceWrappers.set(wrapper, this._installed);
         return true;
     }
@@ -211,7 +214,10 @@ export class InstancePatch {
         if (!installed)
             return false;
         this._installed = null;
+        if (installed.owner !== this)
+            return false;
 
+        installed.owner = null;
         installed.state.impl = null;
         const object = this._object;
         const name = this._name;
