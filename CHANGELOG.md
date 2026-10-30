@@ -14,6 +14,12 @@ it back when they are switched off.
 
 ### Added
 
+- **Swipe Between Desktops Like macOS** (Keyboard ▸ Trackpad, off by default).
+  Three-finger swipes follow the fingers whatever Natural Scrolling says, as
+  Spaces and Mission Control do: left brings in the desktop on the right, up
+  opens the overview (and again the app grid), down goes back. Natural
+  Scrolling itself is not touched. Folders made while the overview is open
+  follow too.
 - **Scrolling as on a MacBook** (Keyboard ▸ Trackpad). The scroll plugin's
   curve is now macOS's own (IOHIDPointerScrollFilter with a MacBook Air's
   table): 0.43 of the 80 mm/s rate at 10 mm/s, 0.64 at 20, 1.08 from 160,
@@ -606,6 +612,27 @@ it back when they are switched off.
 
 ### Changed
 
+- **The menu bar stays put while you move between windows of the same app**,
+  instead of being rebuilt on every focus change (about 13 ms each time, now
+  under half a millisecond). Its menus are built the first time they open, and
+  a desktop switch updates the bar once the slide is over.
+- **Dock magnification rests when the pointer does.** Once the swell settles the
+  frame clock stops; pointer motion, hover, menus, drags or Dash to Dock changes
+  start it again. Dock bounce runs no frames while the dock is hidden or
+  sliding, and stops drawing while the magnifier is already drawing the hop.
+- With Blur my Shell's dock blur on, the magnified dock keeps its shelf at its
+  own size, so the tint and the blur stay together.
+- **Switches that write GNOME's, Dash to Dock's or Blur my Shell's settings keep
+  a record of exactly what they changed.** Off hands back only that, and only
+  while the key still holds what Pear Up wrote: a binding you had before, or a
+  key changed since, stays. A switch with no record says so instead of
+  resetting to GNOME's default. Notes in the old format are taken over.
+- The Genie Effect and Rounded Corners switches gather quick flips into one
+  call (switching a helper off makes GNOME restart every extension loaded after
+  it).
+- **Springy Desktop Switching** sets the desktops' position once a frame, lets
+  another extension's wrappers and switch-key handlers be, and on switching off
+  gives the keys back with the modes they had.
 - **Window Buttons on the Left is on the Windows page**, not General.
 
 - **The preferences window opens at 820px wide, up from 680.** With eight pages
@@ -659,6 +686,22 @@ it back when they are switched off.
 
 ### Fixed
 
+- **A three-finger swipe the closing way from the desktop no longer throws**
+  "Invalid overview shown transition from HIDDEN to HIDING" or leaves the
+  overview half made behind the desktop (a GNOME 48.3+/49+ bug, from
+  gnome-shell fb30a942). Always on while Pear Up is; it changes nothing you see.
+- Recent Items in the System Menu is read in the background, so a document on a
+  hung network drive can no longer freeze the desktop when you open the menu.
+- Logging out no longer leaves Pear Up's panel, dock magnification or bounce
+  work running against an already-closed shell (the "already disposed" warnings
+  in the journal).
+- Restore GNOME Window Keys no longer resets a custom binding. A note that
+  can't be saved, or a key that can't be written, shows in the row and changes
+  nothing.
+- Steam Buttons on the Left reads Steam's files without blocking the shell, and
+  cleans up after itself when a folder can't be watched. Window animations no
+  longer take a stack trace on every window event.
+- The packed zip now ships every module the extension imports.
 - **Slow scrolls step evenly with scroll acceleration on.** The plugin rounded
   both fingers' shifted positions alike, so libinput's average moved in whole
   units and, at the slow gain, one frame scrolled twice as far as the next.
