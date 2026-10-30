@@ -16,13 +16,19 @@
 --                                           GNOME's own shortcut for it
 --   Cmd+C, V, X …    Ctrl+C, V, X …         copy, paste, cut …; with Shift
 --                                           too, so Cmd+Shift+Z redoes
+--   Cmd+C           Ctrl+Insert            copy, with INSERT_COPY on
+--   Cmd+V           Shift+Insert           paste, with INSERT_COPY on
 --
 -- Each of the three can be switched off, below. Everything else is left as
 -- it is: Option, Cmd or Ctrl tapped alone, with any other key, or together
 -- (Cmd+Option+←, Ctrl+Shift+←, which Linux apps take as select by word);
 -- Cmd+Q, which Pear Up quits apps with in the shell; ↑ and ↓; and any key
--- not on the Cmd list. In a terminal Cmd+C is then Ctrl+C, which interrupts
--- rather than copies, since nothing down here knows which app is in front.
+-- not on the Cmd list. Without INSERT_COPY, in a terminal Cmd+C is Ctrl+C,
+-- which interrupts rather than copies. With it, Ctrl+Insert copies, and
+-- Shift+Insert pastes; Pear Up configures Ptyxis to paste the clipboard,
+-- since VTE otherwise pastes PRIMARY. Nothing here knows the app in front.
+-- Cmd+Shift+C/V still send Ctrl+Shift+C/V, and Cmd+X stays Ctrl+X: the
+-- alternative, Shift+Delete, permanently deletes files in file managers.
 --
 -- Option is the key GNOME takes as Alt and Cmd the one it takes as Super. On
 -- an Apple keyboard those are the keys printed so. On a PC keyboard with
@@ -62,7 +68,11 @@
 -- before the arrow, Ctrl before the arrow — and libinput ends with what the
 -- keyboard holds, never a modifier left down. A translation whose modifier
 -- is let go while its key is still held ends there, and the key goes on as
--- a plain one, as it does on macOS. A modifier pressed for real while
+-- a plain one, as it does on macOS. C/V sent as Insert are the exception:
+-- letting Cmd go lets go of Insert with it, since a bare Insert held would
+-- repeat and toggle overwrite, and the key's own release is then dropped. With INSERT_COPY, left Shift is
+-- managed like Ctrl for paste, with a real Shift kept down for as long
+-- as the keyboard holds it. A modifier pressed for real while
 -- libinput holds it for a translation, Ctrl during Cmd+C, is let go and
 -- pressed again, so that the press is seen.
 --
@@ -76,8 +86,9 @@
 -- Switching all three off there removes this file.
 
 -- Pear Up's preferences write the next lines when they install this file:
--- whether the Alt/Cmd swap is on, which of the three translations are, and
--- the keys Cmd turns into Ctrl, by their names in linux/input-event-codes.h
+-- whether the Alt/Cmd swap is on, which of the three translations are,
+-- whether plain C/V use Insert, and the keys Cmd turns into Ctrl, by their
+-- names in linux/input-event-codes.h
 -- without KEY_. Those are key positions, not letters: on a layout where Z and
 -- Y trade places, KEY_Z is the key that types Y. install.sh keeps them all
 -- when it replaces this file with a newer one.
@@ -85,6 +96,7 @@ local SWAPPED = false
 local WORDS = true
 local DESKTOPS = true
 local SHORTCUTS = true
+local INSERT_COPY = false
 local SHORTCUT_KEYS = "C V X Z A S F T W N"
 
 local EV_KEY = 1
@@ -98,6 +110,9 @@ local KEY_LEFTMETA = evdev.KEY_LEFTMETA
 local KEY_RIGHTMETA = evdev.KEY_RIGHTMETA
 local KEY_LEFT = evdev.KEY_LEFT
 local KEY_RIGHT = evdev.KEY_RIGHT
+local KEY_INSERT = evdev.KEY_INSERT
+local KEY_C = evdev.KEY_C
+local KEY_V = evdev.KEY_V
 
 local ARROWS = { [KEY_LEFT] = true, [KEY_RIGHT] = true }
 local SHIFTS = { [KEY_LEFTSHIFT] = true, [KEY_RIGHTSHIFT] = true }
@@ -127,6 +142,8 @@ end
 
 -- The state of one keyboard. `options` holds swapped, words, desktops, and
 -- shortcuts: the usages Cmd turns into Ctrl, as M.keys gives them.
+-- insert_copy opts plain C/V into Insert, only on a device that has both
+-- Insert and left Shift; registration checks those before passing it in.
 function M.keyboard(options)
     local option = options.swapped and KEY_LEFTMETA or KEY_LEFTALT
     local cmd = options.swapped and KEY_LEFTALT or KEY_LEFTMETA
@@ -136,16 +153,23 @@ function M.keyboard(options)
         words = options.words and true or false,
         desktops = options.desktops and true or false,
         shortcuts = options.shortcuts or {},
+        insert_copy = options.insert_copy and true or false,
         -- The modifiers whose state this plugin tells libinput, rather than
         -- passing on what the keyboard says. The order is the order downs
         -- and ups are sent in.
-        managed = { KEY_LEFTCTRL, option, cmd },
+        -- Left Shift only with insert_copy, which sends it for paste: without,
+        -- a real Shift passes as it always has.
+        managed = options.insert_copy and { KEY_LEFTCTRL, KEY_LEFTSHIFT, option, cmd }
+            or { KEY_LEFTCTRL, option, cmd },
         down = {},     -- usage = true for every key the keyboard holds
         sent = {},     -- usage = true for each managed key libinput holds
         lent = {},     -- option or cmd = true while held and lent
         word = {},     -- arrows held as Ctrl+arrow
         desktop = {},  -- arrows held as Ctrl+Option+arrow
-        shortcut = {}, -- keys held as Ctrl+key
+        shortcut = {}, -- keys held as Ctrl+key, including Ctrl+Insert for copy
+        paste = {},    -- keys held as Shift+Insert
+        insert = {},   -- physical C/V sent as Insert until they come up
+        swallow = {},  -- C/V whose Insert ended early: their release is dropped
     }
 end
 
@@ -171,6 +195,9 @@ local function translation(kb, usage)
         end
     elseif kb.shortcuts[usage] then
         if kb.down[kb.cmd] and not ctrl and not any_down(kb, ALTS_AND_SUPERS, kb.cmd) then
+            if kb.insert_copy and usage == KEY_V and not kb.down[KEY_LEFTSHIFT] and not kb.down[KEY_RIGHTSHIFT] then
+                return "paste"
+            end
             return "shortcut"
         end
     end
@@ -181,6 +208,8 @@ end
 local function wanted(kb, usage)
     if usage == KEY_LEFTCTRL then
         return (kb.down[usage] or next(kb.word) ~= nil or next(kb.shortcut) ~= nil) and true or false
+    elseif usage == KEY_LEFTSHIFT then
+        return (kb.down[usage] or next(kb.paste) ~= nil) and true or false
     elseif usage == kb.option then
         return (kb.down[usage] and not kb.lent[usage]) or next(kb.desktop) ~= nil
     end
@@ -223,6 +252,7 @@ local function finish(kb, modifier)
     if modifier == kb.cmd or modifier == nil then
         kb.lent[kb.cmd] = nil
         kb.shortcut = {}
+        kb.paste = {}
     end
     if modifier == nil then
         kb.desktop = {}
@@ -230,15 +260,54 @@ local function finish(kb, modifier)
 end
 
 local function is_managed(kb, usage)
-    return usage == KEY_LEFTCTRL or usage == kb.option or usage == kb.cmd
+    return usage == KEY_LEFTCTRL or (usage == KEY_LEFTSHIFT and kb.insert_copy)
+        or usage == kb.option or usage == kb.cmd
+end
+
+-- C and V, and a real Insert as well, can overlap. libinput has only one
+-- Insert to hold: another press is an up/down pair so the new chord is seen,
+-- and only the last release lets it go. The physical-to-sent key choice
+-- outlives finish(), which ends modifiers but cannot change a held key.
+local function insert_held(kb, except)
+    for usage in pairs(kb.insert) do
+        if usage ~= except then
+            return true
+        end
+    end
+    return except ~= KEY_INSERT and kb.down[KEY_INSERT] or false
+end
+
+-- Lets go of the Insert of every C/V whose translation is over, or with
+-- `all` of every one: Cmd let go, another key, or a new Insert chord. A bare
+-- Insert must not stay down, since GNOME repeats a held key itself and each
+-- repeat would toggle overwrite in a text editor. The key itself is still
+-- held, so its release is dropped later, as it was sent already. `pressed`,
+-- a real Insert just going down, is not one that holds it.
+local function end_inserts(kb, out, all, pressed)
+    local ended = false
+    for usage in pairs(kb.insert) do
+        if all or not (kb.shortcut[usage] or kb.paste[usage]) then
+            kb.insert[usage], kb.shortcut[usage], kb.paste[usage] = nil, nil, nil
+            kb.swallow[usage] = true
+            ended = true
+        end
+    end
+    if ended and not insert_held(kb, pressed) then
+        out[#out + 1] = { usage = KEY_INSERT, value = 0 }
+    end
 end
 
 -- One key event, with what libinput is to be told of it appended to `out`.
 local function key(kb, out, usage, value)
     if value == 2 then
         -- The kernel's key repeat, which libinput ignores and GNOME does
-        -- itself. A managed key libinput is not holding has none.
-        if not is_managed(kb, usage) or kb.sent[usage] then
+        -- itself. A managed key libinput is not holding has none, and nor
+        -- does a C/V whose Insert was let go early.
+        if kb.insert[usage] then
+            out[#out + 1] = { usage = KEY_INSERT, value = value }
+        elseif kb.swallow[usage] then
+            return
+        elseif not is_managed(kb, usage) or kb.sent[usage] then
             out[#out + 1] = { usage = usage, value = value }
         end
         return
@@ -250,19 +319,31 @@ local function key(kb, out, usage, value)
         local kind = translation(kb, usage)
         if kind then
             kb[kind][usage] = true
+            if kind == "paste" or (kind == "shortcut" and kb.insert_copy and usage == KEY_C
+                and not kb.down[KEY_LEFTSHIFT] and not kb.down[KEY_RIGHTSHIFT]) then
+                -- A new copy or paste ends the one still held, so Cmd+C held
+                -- and then V is Shift+Insert alone, not Ctrl+Shift+Insert.
+                end_inserts(kb, out, true, usage)
+                kb.insert[usage] = true
+            end
             if kind == "word" then
                 kb.lent[kb.option] = true
-            elseif kind == "shortcut" then
+            elseif kind == "shortcut" or kind == "paste" then
                 kb.lent[kb.cmd] = true
             end
         elseif not SHIFTS[usage] then
             -- Anything but Shift, which selecting needs, gets the keys the
             -- keyboard holds, as it would without this plugin.
             finish(kb)
+            end_inserts(kb, out, false, usage)
         end
         sync(kb, out, is_managed(kb, usage) and usage or nil)
         if not is_managed(kb, usage) then
-            out[#out + 1] = { usage = usage, value = value }
+            local sent = kb.insert[usage] and KEY_INSERT or usage
+            if sent == KEY_INSERT and insert_held(kb, usage) then
+                out[#out + 1] = { usage = sent, value = 0 }
+            end
+            out[#out + 1] = { usage = sent, value = value }
         elseif held then
             -- libinput held it already, for a translation. It hears the press
             -- all the same, after whatever came back with it: Cmd+C held and
@@ -274,16 +355,21 @@ local function key(kb, out, usage, value)
         return
     end
 
+    local sent = kb.insert[usage] and KEY_INSERT or usage
+    local swallowed = kb.swallow[usage]
+    kb.insert[usage], kb.swallow[usage] = nil, nil
     kb.down[usage] = nil
+    kb.paste[usage] = nil
     kb.word[usage], kb.desktop[usage], kb.shortcut[usage] = nil, nil, nil
     if usage == kb.option or usage == kb.cmd then
         finish(kb, usage)
+        end_inserts(kb, out)
     end
     if not any_down(kb, CTRLS) then
         kb.desktop = {}
     end
-    if not is_managed(kb, usage) then
-        out[#out + 1] = { usage = usage, value = value }
+    if not is_managed(kb, usage) and not swallowed and (sent ~= KEY_INSERT or not insert_held(kb)) then
+        out[#out + 1] = { usage = sent, value = value }
     end
     sync(kb, out)
 end
@@ -319,6 +405,20 @@ end
 function M.release(kb, out)
     finish(kb)
     sync(kb, out)
+    -- Before passing keys through after an error, give held C/V back their
+    -- own presses, and release the Insert we sent for them. Later physical
+    -- releases then match, even though this keyboard has left the plugin.
+    for usage in pairs(kb.insert) do
+        out[#out + 1] = { usage = usage, value = 1 }
+    end
+    if next(kb.insert) ~= nil and not kb.down[KEY_INSERT] then
+        out[#out + 1] = { usage = KEY_INSERT, value = 0 }
+    end
+    -- Likewise a C/V whose Insert was let go early, still held.
+    for usage in pairs(kb.swallow) do
+        out[#out + 1] = { usage = usage, value = 1 }
+    end
+    kb.insert, kb.swallow = {}, {}
     return out
 end
 
@@ -350,13 +450,16 @@ if libinput then
                 shortcuts[usage] = usages[usage]
             end
         end
-        local kb = M.keyboard({ swapped = SWAPPED, words = WORDS, desktops = DESKTOPS, shortcuts = shortcuts })
+        -- A keyboard without either key keeps the ordinary Ctrl translation,
+        -- rather than having libinput silently drop half of the chord.
+        local kb = M.keyboard({ swapped = SWAPPED, words = WORDS, desktops = DESKTOPS, shortcuts = shortcuts,
+            insert_copy = INSERT_COPY and usages[KEY_INSERT] and usages[KEY_LEFTSHIFT] })
         libinput:log_info("Pear Up macOS keys: " .. device:name())
         device:connect("evdev-frame", function(_, frame)
             if not kb then
                 return nil
             end
-            local down, sent = copy(kb.down), copy(kb.sent)
+            local down, sent, insert, swallow = copy(kb.down), copy(kb.sent), copy(kb.insert), copy(kb.swallow)
             local ok, out = pcall(M.frame, kb, frame)
             if ok then
                 return out
@@ -365,7 +468,7 @@ if libinput then
                 " is left as it is until the next login")
             -- Back to before this frame, so that the modifiers libinput holds
             -- are known, and from there to what the keyboard holds.
-            kb.down, kb.sent = down, sent
+            kb.down, kb.sent, kb.insert, kb.swallow = down, sent, insert, swallow
             local reset = M.release(kb, {})
             kb = nil
             for _, e in ipairs(frame) do

@@ -13,8 +13,8 @@ check-with-libinput.py: a uinput keyboard would type into the desktop the test
 is run from.
 
 The keyboard is framy's, the laptop's own "AT Translated Set 2 keyboard". The
-plugin is installed twice, as Pear Up's preferences would write it with the
-Alt/Cmd swap on and with it off, and once not at all, which has to give back
+plugin is installed as Pear Up's preferences would write it with the Alt/Cmd
+swap on and off, with Insert copy/paste on and off, and not at all, which gives
 exactly the keys pressed. Kernel key repeats are sent where a key is held;
 libinput drops those itself, and so does what it reports.
 """
@@ -43,7 +43,7 @@ CODES = {
     'ESC': 1, '1': 2, 'BACKSPACE': 14, 'TAB': 15, 'Q': 16, 'W': 17, 'T': 20, 'A': 30, 'S': 31, 'F': 33,
     'L': 38, 'Z': 44, 'X': 45, 'C': 46, 'V': 47, 'B': 48, 'N': 49, 'LEFTCTRL': 29, 'LEFTSHIFT': 42,
     'RIGHTSHIFT': 54, 'LEFTALT': 56, 'SPACE': 57, 'RIGHTCTRL': 97, 'RIGHTALT': 100, 'UP': 103,
-    'LEFT': 105, 'RIGHT': 106, 'DOWN': 108, 'LEFTMETA': 125, 'F24': 194,
+    'LEFT': 105, 'RIGHT': 106, 'DOWN': 108, 'INSERT': 110, 'LEFTMETA': 125, 'F24': 194,
 }
 # A laptop keyboard has the whole main block; the rest of the codes up to the
 # arrows are set too, so the device looks like one to libinput.
@@ -271,6 +271,51 @@ def scenarios(option, cmd):
     ]
 
 
+
+def insert_scenarios(option, cmd):
+    """The same shortcut paths with Insert enabled, and paste's left Shift
+    held for libinput until either V or Cmd is let go. Expected repeats are
+    absent because libinput itself drops the kernel's value 2."""
+    def k(text):
+        return text.replace('OPTION', option).replace('CMD', cmd)
+    # Where another key ends the copy, Insert goes up then and there, and
+    # C's own release is dropped: a bare Insert held would repeat.
+    ended = {
+        'Cmd+C held and then Ctrl, let go in any order':
+            k('CMD-down LEFTCTRL-down CMD-up INSERT-down INSERT-up CMD-down LEFTCTRL-up LEFTCTRL-down CMD-up '
+              'LEFTCTRL-up'),
+    }
+    cases = []
+    for title, keys, wanted in scenarios(option, cmd):
+        if title in ended:
+            wanted = ended[title]
+        elif wanted is not None:
+            wanted = wanted.replace('C-down', 'INSERT-down').replace('C-up', 'INSERT-up')
+        cases.append((title.replace('then the C', 'then Insert'), keys, wanted))
+    cases += [
+        ('Insert copy, Cmd released first', k('CMD C -CMD +C -C'),
+         k('CMD-down LEFTCTRL-down CMD-up INSERT-down INSERT-up LEFTCTRL-up')),
+        ('Insert paste held and repeating', k('CMD V +V +V -V -CMD'),
+         k('CMD-down LEFTSHIFT-down CMD-up INSERT-down INSERT-up LEFTSHIFT-up')),
+        ('Insert paste, Cmd released first', k('CMD V -CMD +V -V'),
+         k('CMD-down LEFTSHIFT-down CMD-up INSERT-down INSERT-up LEFTSHIFT-up')),
+        ('a real Shift stays after paste', k('CMD V LEFTSHIFT -V -CMD -LEFTSHIFT'),
+         k('CMD-down LEFTSHIFT-down CMD-up INSERT-down LEFTSHIFT-up LEFTSHIFT-down INSERT-up LEFTSHIFT-up')),
+        ('a real Shift released first leaves paste held', k('CMD V LEFTSHIFT -LEFTSHIFT +V -V -CMD'),
+         k('CMD-down LEFTSHIFT-down CMD-up INSERT-down LEFTSHIFT-up LEFTSHIFT-down INSERT-up LEFTSHIFT-up')),
+        ('Cmd+Shift+C keeps its letter', k('CMD LEFTSHIFT C -C -LEFTSHIFT -CMD'),
+         k('CMD-down LEFTSHIFT-down LEFTCTRL-down CMD-up C-down C-up LEFTCTRL-up LEFTSHIFT-up')),
+        ('Cmd+Shift+V keeps its letter', k('CMD LEFTSHIFT V -V -LEFTSHIFT -CMD'),
+         k('CMD-down LEFTSHIFT-down LEFTCTRL-down CMD-up V-down V-up LEFTCTRL-up LEFTSHIFT-up')),
+        ('Cmd+X keeps Ctrl+X', k('CMD X -X -CMD'),
+         k('CMD-down LEFTCTRL-down CMD-up X-down X-up LEFTCTRL-up')),
+        ('a paste while the copy is held is Shift+Insert alone', k('CMD C V -C +V -V -CMD'),
+         k('CMD-down LEFTCTRL-down CMD-up INSERT-down INSERT-up LEFTSHIFT-down LEFTCTRL-up INSERT-down '
+           'INSERT-up LEFTSHIFT-up')),
+    ]
+    return cases
+
+
 def meaning(swapped, option, cmd):
     """What xkb makes of the keys the plugin sends, with the layout framy has
     and Pear Up's swap on or off, and whether GNOME 50 binds what Ctrl+← is
@@ -370,6 +415,17 @@ def main():
         for (title, keys, wanted), reported in zip(cases, got):
             wanted = wanted if wanted is not None else as_reported(keys)
             check(f'{title}: {reported}', reported == wanted and balanced(reported),
+                  f'pressed: {keys}\n       wanted:  {wanted}')
+
+        cases = insert_scenarios(option, cmd)
+        text = templated(source, swapped).replace('local INSERT_COPY = false', 'local INSERT_COPY = true')
+        got, log = clean(cases, text)
+        check('Insert copy/paste loaded without an error',
+              f'Pear Up macOS keys: {NAME}' in log and 'unloading after error' not in log
+              and 'Failed to load' not in log, log[-1500:])
+        for (title, keys, wanted), reported in zip(cases, got):
+            wanted = wanted if wanted is not None else as_reported(keys)
+            check(f'Insert enabled, {title}: {reported}', reported == wanted and balanced(reported),
                   f'pressed: {keys}\n       wanted:  {wanted}')
 
     print('  GNOME 50')

@@ -74,19 +74,27 @@ if [[ -f "$PLUGIN_PATH" ]] && grep -q 'Pear Up' "$PLUGIN_PATH"; then
 fi
 
 # The macOS keys plugin likewise: an installed copy is replaced by this
-# version's, keeping the five lines the preferences write into it — the Alt/Cmd
-# swap, the three switches and the Cmd key list, edited by hand or not. A copy
-# without each of those lines once, as the preferences write them, or without
+# version's, keeping the six lines the preferences write into it — the Alt/Cmd
+# swap, the three switches, Insert copy/paste and the Cmd key list, edited
+# by hand or not. The Insert line may be absent in an older copy; a copy
+# without each of the others once, as the preferences write them, or without
 # a mention of Pear Up, is not Pear Up's and is left alone.
 KEYS_PLUGIN_NAME="10-pear-up-macos-keys.lua"
 KEYS_PLUGIN_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/libinput/plugins/$KEYS_PLUGIN_NAME"
-KEYS_PLUGIN_LINES='^local (SWAPPED|WORDS|DESKTOPS|SHORTCUTS) = (true|false)$|^local SHORTCUT_KEYS = "[A-Za-z0-9_ ]*"$'
+KEYS_PLUGIN_LINES='^local (SWAPPED|WORDS|DESKTOPS|SHORTCUTS|INSERT_COPY) = (true|false)$|^local SHORTCUT_KEYS = "[A-Za-z0-9_ ]*"$'
 keys_plugin_is_pear_ups() {
     [[ -f "$1" ]] && grep -q 'Pear Up' "$1" || return 1
     local name
     for name in SWAPPED WORDS DESKTOPS SHORTCUTS SHORTCUT_KEYS; do
         [[ "$(grep -E "$KEYS_PLUGIN_LINES" "$1" | grep -c "^local $name = ")" == 1 ]] || return 1
     done
+    # Older copies have no Insert option; the new copy leaves it off. A
+    # present line must still be a single boolean, as the preferences write.
+    if grep -q '^local INSERT_COPY' "$1"; then
+        [[ "$(grep -c '^local INSERT_COPY' "$1")" == 1 ]] &&
+            [[ "$(grep -Ec '^local INSERT_COPY = (true|false)$' "$1")" == 1 ]] || return 1
+    fi
+    return 0
 }
 if keys_plugin_is_pear_ups "$KEYS_PLUGIN_PATH"; then
     echo "⌨️ Updating the macOS keys plugin..."

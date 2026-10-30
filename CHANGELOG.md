@@ -14,6 +14,19 @@ it back when they are switched off.
 
 ### Added
 
+- **Copy and Paste with Insert** (Keyboard ▸ Inside Apps, off by default).
+  Plain Cmd+C/V can send Ctrl+Insert and Shift+Insert, the classic copy/paste
+  keys, while Cmd+X and Cmd+Shift+C/V keep their usual translation. Ptyxis
+  gets clipboard alternatives alongside its own shortcuts, with what was
+  there put back on switching off; other terminals are not configured and
+  may paste PRIMARY. A keyboard without Insert or left Shift keeps Ctrl+C/V.
+  Letting Cmd go first lets go of Insert with it, so a bare Insert never
+  repeats and toggles overwrite; a paste while a copy is held is Shift+Insert
+  alone; a real Shift is never lost. The option and the user's Cmd list
+  survive plugin updates, and uninstall.sh takes out the Ptyxis alternatives
+  it added.
+
+
 - **Scrolling as on a MacBook** (Keyboard ▸ Trackpad). The scroll plugin's
   curve is now macOS's own (IOHIDPointerScrollFilter with a MacBook Air's
   table): 0.43 of the 80 mm/s rate at 10 mm/s, 0.64 at 20, 1.08 from 160,

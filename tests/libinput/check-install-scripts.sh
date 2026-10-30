@@ -81,6 +81,7 @@ KEYS_SOURCE="$SRC/libinput/10-pear-up-macos-keys.lua"
 written() {     # the shipped plugin with the preferences' lines as given
     sed -e "s/^local SWAPPED = .*$/local SWAPPED = $1/" -e "s/^local WORDS = .*$/local WORDS = $2/" \
         -e "s/^local DESKTOPS = .*$/local DESKTOPS = $3/" -e "s/^local SHORTCUTS = .*$/local SHORTCUTS = $4/" \
+        -e "s/^local INSERT_COPY = .*$/local INSERT_COPY = ${6:-false}/" \
         -e "s/^local SHORTCUT_KEYS = .*$/local SHORTCUT_KEYS = \"$5\"/" "$KEYS_SOURCE"
 }
 rm -f "$KEYS"
@@ -91,11 +92,31 @@ check "the extension carries the macOS keys plugin" \
 
 # An older copy, swapped, words off, a key list of the user's own: replaced,
 # all of that kept.
-{ written true false true true "C V Q"; echo '-- an older line'; } > "$KEYS"
+{ written true false true true "C V Q" true; echo '-- an older line'; } > "$KEYS"
 quiet bash "$SRC/install.sh"
 check "install.sh replaces an older macOS keys copy, keeping the swap, the switches and the key list" \
-    "$(cmp -s <(written true false true true "C V Q") "$KEYS" && echo current || echo stale)" current
+    "$(cmp -s <(written true false true true "C V Q" true) "$KEYS" && echo current || echo stale)" current
 check "and leaves the other plugins alone" "$(cat "$XDG_CONFIG_HOME/libinput/plugins/20-of-my-own.lua")" 'libinput:register({1})'
+
+# The new line is optional in copies from before the feature, and defaults
+# to off when the shipped copy supplies it. Existing choices still survive.
+written true false true true "C V Q" | sed '/^local INSERT_COPY = /d' > "$KEYS"
+quiet bash "$SRC/install.sh"
+check "a copy from before Insert copy/paste upgrades with the option off" \
+    "$(cmp -s <(written true false true true "C V Q") "$KEYS" && echo current || echo stale)" current
+
+# An ambiguous or malformed option is not a copy the preferences could write.
+{ written false true true true "C V"; echo 'local INSERT_COPY = true'; } > "$KEYS"
+cp "$KEYS" "$WORK/duplicate-keys.lua"
+quiet bash "$SRC/install.sh"
+check "duplicate Insert lines are left alone" \
+    "$(cmp -s "$WORK/duplicate-keys.lua" "$KEYS" && echo untouched || echo rewritten)" untouched
+written false true true true "C V" | sed 's/^local INSERT_COPY = .*/local INSERT_COPY = perhaps/' > "$KEYS"
+cp "$KEYS" "$WORK/malformed-keys.lua"
+quiet bash "$SRC/install.sh"
+check "a malformed Insert line is left alone" \
+    "$(cmp -s "$WORK/malformed-keys.lua" "$KEYS" && echo untouched || echo rewritten)" untouched
+written true false true true "C V Q" true > "$KEYS"
 
 quiet bash "$SRC/uninstall.sh"
 check "uninstall.sh removes Pear Up's macOS keys plugin" "$([[ -e $KEYS ]] && echo yes || echo no)" no

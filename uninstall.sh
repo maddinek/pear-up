@@ -97,6 +97,19 @@ if $RESET_SETTINGS; then
         remove_accel "$D2D_SCHEMA" "app-hotkey-$i" "<Super>F$i" --schemadir "$D2D_SCHEMAS"
     done
 
+    # Ptyxis's clipboard shortcuts, which Copy and Paste with Insert appends
+    # an alternative to. Only those the preferences noted in displaced-settings
+    # as theirs: an Insert alternative the user set up is left alone. The
+    # extension's schema is gone by now, but dconf still holds the note.
+    # Without Ptyxis installed, the get fails and nothing is done.
+    displaced_settings="$(dconf read /org/gnome/shell/extensions/pear-up/displaced-settings 2>/dev/null)" || displaced_settings=""
+    if [[ "$displaced_settings" == *'org.gnome.Ptyxis.Shortcuts:copy-clipboard'* ]]; then
+        remove_alternative org.gnome.Ptyxis.Shortcuts copy-clipboard '<ctrl>Insert'
+    fi
+    if [[ "$displaced_settings" == *'org.gnome.Ptyxis.Shortcuts:paste-clipboard'* ]]; then
+        remove_alternative org.gnome.Ptyxis.Shortcuts paste-clipboard '<shift>Insert'
+    fi
+
     # Outright overwrites: reset only if untouched since prefs wrote them.
     reset_if_matches "$D2D_SCHEMA" hot-keys 'false' --schemadir "$D2D_SCHEMAS"
     reset_if_matches "$D2D_SCHEMA" shortcut '[]' --schemadir "$D2D_SCHEMAS"

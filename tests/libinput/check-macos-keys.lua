@@ -19,7 +19,7 @@ local CODES = {
     A = 30, S = 31, F = 33, L = 38, Z = 44, X = 45, C = 46, V = 47, B = 48, N = 49,
     LEFTCTRL = 29, LEFTSHIFT = 42, RIGHTSHIFT = 54, LEFTALT = 56, SPACE = 57,
     RIGHTCTRL = 97, RIGHTALT = 100, UP = 103, LEFT = 105, RIGHT = 106, DOWN = 108,
-    LEFTMETA = 125, RIGHTMETA = 126,
+    INSERT = 110, LEFTMETA = 125, RIGHTMETA = 126,
 }
 local evdev, NAME = { MSC_SCAN = (EV_MSC << 16) | 4 }, {}
 for name, code in pairs(CODES) do
@@ -322,6 +322,69 @@ for _, layout in ipairs({
         rig(), "CMD C -CMD -C",
         "CMD-down LEFTCTRL-down CMD-up C-down LEFTCTRL-up C-up")
 
+    expect("Insert copy: Ctrl down before Cmd comes up, then Insert, including repeats",
+        rig({ insert_copy = true }), "CMD C +C +C -C -CMD",
+        "CMD-down LEFTCTRL-down CMD-up INSERT-down INSERT-repeat INSERT-repeat INSERT-up LEFTCTRL-up",
+        function(seen) return seen.INSERT == "LEFTCTRL" and seen.C == nil end)
+    expect("Insert paste: Shift down before Cmd comes up, then Insert, including repeats",
+        rig({ insert_copy = true }), "CMD V +V +V -V -CMD",
+        "CMD-down LEFTSHIFT-down CMD-up INSERT-down INSERT-repeat INSERT-repeat INSERT-up LEFTSHIFT-up",
+        function(seen) return seen.INSERT == "LEFTSHIFT" and seen.V == nil end)
+    expect("Insert copy with Cmd released first: Insert goes up with it, C's release is dropped",
+        rig({ insert_copy = true }), "CMD C -CMD +C -C",
+        "CMD-down LEFTCTRL-down CMD-up INSERT-down INSERT-up LEFTCTRL-up")
+    expect("Insert paste with Cmd released first: Insert goes up with it, V's release is dropped",
+        rig({ insert_copy = true }), "CMD V -CMD +V -V",
+        "CMD-down LEFTSHIFT-down CMD-up INSERT-down INSERT-up LEFTSHIFT-up")
+    expect("Insert copy and paste with Cmd held throughout",
+        rig({ insert_copy = true }), "CMD C -C V -V -CMD",
+        "CMD-down LEFTCTRL-down CMD-up INSERT-down INSERT-up LEFTCTRL-up LEFTSHIFT-down INSERT-down INSERT-up LEFTSHIFT-up")
+    expect("Cmd+X is still Ctrl+X, never Shift+Delete",
+        rig({ insert_copy = true }), "CMD X -X -CMD",
+        "CMD-down LEFTCTRL-down CMD-up X-down X-up LEFTCTRL-up")
+    for _, shift in ipairs({ "LEFTSHIFT", "RIGHTSHIFT" }) do
+        for _, letter in ipairs({ "C", "V" }) do
+            expect("Cmd+" .. shift .. "+" .. letter .. " keeps Ctrl+Shift and the letter",
+                rig({ insert_copy = true }), "CMD " .. shift .. " " .. letter .. " -" .. letter .. " -" .. shift .. " -CMD",
+                "CMD-down " .. shift .. "-down LEFTCTRL-down CMD-up " .. letter .. "-down " .. letter ..
+                "-up LEFTCTRL-up " .. shift .. "-up")
+        end
+    end
+    expect("a real left Shift pressed during paste is heard and stays after Insert is let go",
+        rig({ insert_copy = true }), "CMD V LEFTSHIFT -V -CMD -LEFTSHIFT",
+        "CMD-down LEFTSHIFT-down CMD-up INSERT-down LEFTSHIFT-up LEFTSHIFT-down INSERT-up LEFTSHIFT-up")
+    expect("a real left Shift released during paste leaves synthetic Shift held",
+        rig({ insert_copy = true }), "CMD V LEFTSHIFT -LEFTSHIFT +V -V -CMD",
+        "CMD-down LEFTSHIFT-down CMD-up INSERT-down LEFTSHIFT-up LEFTSHIFT-down INSERT-repeat INSERT-up LEFTSHIFT-up")
+    expect("a real left Shift outlives Cmd released during paste",
+        rig({ insert_copy = true }), "CMD V LEFTSHIFT -CMD +V -V -LEFTSHIFT",
+        "CMD-down LEFTSHIFT-down CMD-up INSERT-down LEFTSHIFT-up LEFTSHIFT-down INSERT-up LEFTSHIFT-up")
+    expect("a real right Shift outlives the synthetic left Shift",
+        rig({ insert_copy = true }), "CMD V RIGHTSHIFT -CMD -V -RIGHTSHIFT",
+        "CMD-down LEFTSHIFT-down CMD-up INSERT-down RIGHTSHIFT-down INSERT-up LEFTSHIFT-up RIGHTSHIFT-up")
+    expect("another key ends the paste, Insert with it",
+        rig({ insert_copy = true }), "CMD V B -B +V -V -CMD",
+        "CMD-down LEFTSHIFT-down CMD-up INSERT-down INSERT-up CMD-down LEFTSHIFT-up B-down B-up CMD-up")
+    expect("a paste while the copy is held ends the copy: Shift+Insert alone",
+        rig({ insert_copy = true }), "CMD C V -C +V -V -CMD",
+        "CMD-down LEFTCTRL-down CMD-up INSERT-down INSERT-up LEFTSHIFT-down LEFTCTRL-up INSERT-down " ..
+        "INSERT-repeat INSERT-up LEFTSHIFT-up",
+        function(seen) return seen.INSERT == "LEFTSHIFT" end)
+    expect("a real Insert and translated V share a balanced press and release",
+        rig({ insert_copy = true }), "INSERT CMD V -INSERT -CMD +V -V",
+        "INSERT-down CMD-down LEFTSHIFT-down CMD-up INSERT-up INSERT-down INSERT-up LEFTSHIFT-up")
+    expect("a real Insert pressed during paste ends the translation, with no duplicate press",
+        rig({ insert_copy = true }), "CMD V INSERT -V -INSERT -CMD",
+        "CMD-down LEFTSHIFT-down CMD-up INSERT-down INSERT-up CMD-down LEFTSHIFT-up INSERT-down INSERT-up CMD-up")
+    as_before("Insert copy/paste does nothing with shortcuts off", "CMD C -C V -V -CMD",
+        { insert_copy = true, shortcuts = {} })
+    expect("Insert copy/paste only uses keys on the list",
+        rig({ insert_copy = true, shortcuts = P.keys("V") }), "CMD C -C V -V -CMD",
+        "CMD-down C-down C-up LEFTSHIFT-down CMD-up INSERT-down INSERT-up LEFTSHIFT-up")
+    expect("Insert copy/paste explicitly off keeps Ctrl+V",
+        rig({ insert_copy = false }), "CMD V +V -V -CMD",
+        "CMD-down LEFTCTRL-down CMD-up V-down V-repeat V-up LEFTCTRL-up")
+
     as_before("with word jumps off, Option+← is Option+←", "OPTION LEFT -LEFT -OPTION", { words = false })
     as_before("with desktops off, Ctrl+← is Ctrl+←", "LEFTCTRL LEFT -LEFT -LEFTCTRL", { desktops = false })
     as_before("with shortcuts off, Cmd+C is Cmd+C", "CMD C -C -CMD", { shortcuts = {} })
@@ -453,6 +516,43 @@ do
         runs, events), problem == nil, problem)
 end
 
+-- Insert is shared by two translated keys and a physical key. Exercise
+-- their overlaps with real modifiers, including presses after Cmd was lent,
+-- and check the key bookkeeping at every step and after all release orders.
+print("Insert copy/paste in any order")
+do
+    math.randomseed(20261030)
+    local pool = { "LEFTCTRL", "RIGHTCTRL", "LEFTSHIFT", "RIGHTSHIFT", "LEFTALT", "LEFTMETA",
+        "C", "V", "X", "INSERT", "LEFT", "RIGHT", "B" }
+    local problem
+    for run = 1, 1000 do
+        local r = new_rig({ swapped = run % 2 == 0, words = true, desktops = true,
+            shortcuts = P.keys("C V X"), insert_copy = true })
+        local log = {}
+        local function step(name, value)
+            log[#log + 1] = (value == 0 and "-" or value == 2 and "+" or "") .. name
+            press(r, name, value)
+        end
+        for _ = 1, 40 do
+            local name = pool[math.random(#pool)]
+            step(name, r.held[K[name]] and (math.random(3) == 1 and 2 or 0) or 1)
+        end
+        local left = {}
+        for _, name in ipairs(pool) do
+            if r.held[K[name]] then left[#left + 1] = name end
+        end
+        while #left > 0 do
+            step(table.remove(left, math.random(#left)), 0)
+        end
+        if not clean(r) then
+            problem = "run " .. run .. ": " .. table.concat(log, " ") .. "\n       " ..
+                table.concat(r.mistakes, ", ") .. "\n       told: " .. told(r)
+            break
+        end
+    end
+    check("1000 runs: shared Insert and synthetic Shift leave no key held or unmatched", problem == nil, problem)
+end
+
 ---------------------------------------------------------------------------
 -- libinput's side: registration, devices, the lines Pear Up writes.
 
@@ -483,7 +583,7 @@ end
 
 local FULL = { "LEFTCTRL", "RIGHTCTRL", "LEFTSHIFT", "RIGHTSHIFT", "LEFTALT", "RIGHTALT", "LEFTMETA",
     "RIGHTMETA", "LEFT", "RIGHT", "UP", "DOWN", "C", "V", "X", "Z", "A", "S", "F", "T", "W", "N", "Q", "B",
-    "TAB", "SPACE", "L", "1" }
+    "TAB", "SPACE", "L", "1", "INSERT" }
 
 local function feed(d, keys)
     local list = {}
@@ -535,7 +635,7 @@ print("The lines Pear Up's preferences write")
 do
     local LINES = {
         { "SWAPPED", "true|false" }, { "WORDS", "true|false" }, { "DESKTOPS", "true|false" },
-        { "SHORTCUTS", "true|false" }, { "SHORTCUT_KEYS", '"[^"\n]*"' },
+        { "SHORTCUTS", "true|false" }, { "INSERT_COPY", "true|false" }, { "SHORTCUT_KEYS", '"[^"\n]*"' },
     }
     for _, line in ipairs(LINES) do
         local count = 0
@@ -543,17 +643,36 @@ do
         check("there is exactly one " .. line[1] .. " line, as prefs.js and install.sh expect", count == 1)
     end
 
-    local function with(values)
+    local function with(values, codes)
         local source = SOURCE
         for name, value in pairs(values) do
             source = source:gsub("\nlocal " .. name .. " = [^\n]+\n", "\nlocal " .. name .. " = " .. value .. "\n")
         end
         local fake, calls = fake_libinput()
         local module = load_plugin({ libinput = fake }, source)
-        local d = device({ ID_INPUT_KEYBOARD = "1" }, FULL)
+        local d = device({ ID_INPUT_KEYBOARD = "1" }, codes or FULL)
         calls["new-evdev-device"](d)
         return d, module, calls
     end
+
+    local inserted = with({ INSERT_COPY = "true" })
+    check("INSERT_COPY true reaches the keyboard's copy and paste paths",
+        feed(inserted, "LEFTMETA C -C V -V -LEFTMETA") ==
+        "LEFTMETA-down LEFTCTRL-down LEFTMETA-up INSERT-down INSERT-up LEFTCTRL-up " ..
+        "LEFTSHIFT-down INSERT-down INSERT-up LEFTSHIFT-up")
+    for _, missing in ipairs({ "INSERT", "LEFTSHIFT" }) do
+        local codes = {}
+        for _, name in ipairs(FULL) do
+            if name ~= missing then codes[#codes + 1] = name end
+        end
+        local limited = with({ INSERT_COPY = "true" }, codes)
+        check("without " .. missing .. " the device keeps Ctrl+C/V",
+            feed(limited, "LEFTMETA C -C V -V -LEFTMETA") ==
+            "LEFTMETA-down LEFTCTRL-down LEFTMETA-up C-down C-up LEFTCTRL-up LEFTCTRL-down V-down V-up LEFTCTRL-up")
+    end
+    local disabled = with({ INSERT_COPY = "true", SHORTCUTS = "false" })
+    check("INSERT_COPY cannot enable shortcuts on its own",
+        feed(disabled, "LEFTMETA C -C V -V -LEFTMETA") == "LEFTMETA-down C-down C-up V-down V-up LEFTMETA-up")
 
     local d = with({ SWAPPED = "true" })
     check("SWAPPED true: Option is the Windows key, so Win+← moves by word",
@@ -614,6 +733,25 @@ do
         "before: " .. first .. "\n       at the error: " .. after)
     check("and from then on the keys pass as they are",
         later == "LEFTALT-up LEFTALT-down LEFT-down LEFT-up LEFTALT-up", later)
+end
+
+print("After an error with Insert held")
+for _, letter in ipairs({ "C", "V" }) do
+    local fake, calls = fake_libinput()
+    local module = load_plugin({ libinput = fake }, SOURCE:gsub("local INSERT_COPY = false", "local INSERT_COPY = true"))
+    local d = device({ ID_INPUT_KEYBOARD = "1" }, FULL)
+    calls["new-evdev-device"](d)
+    feed(d, "LEFTMETA " .. letter)
+    local frame = module.frame
+    module.frame = function(kb, f)
+        frame(kb, f)
+        error("a fault after translating the release")
+    end
+    local after = feed(d, "-" .. letter)
+    local modifier = letter == "C" and "LEFTCTRL" or "LEFTSHIFT"
+    check("error during " .. letter .. " release restores its press before passing the physical release",
+        after == "LEFTMETA-down " .. modifier .. "-up " .. letter .. "-down INSERT-up " .. letter .. "-up", after)
+    check("Cmd is released normally after the plugin steps aside", feed(d, "-LEFTMETA") == "LEFTMETA-up")
 end
 
 print()

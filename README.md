@@ -177,17 +177,36 @@ on every keyboard with arrow keys:
 | `Option+←` / `Option+→` | `Ctrl+←` / `Ctrl+→` | A word left or right; with `Shift`, select by word |
 | `Ctrl+←` / `Ctrl+→` | `Ctrl+Option+←` / `→` | The desktop beside, through GNOME's own default shortcut |
 | `Cmd+C`, `V`, `X`, `Z`, `A`, `S`, `F`, `T`, `W`, `N` | `Ctrl+` the same key | Copy, paste, cut, undo …; with `Shift` too, so `Cmd+Shift+Z` redoes |
+| Plain `Cmd+C`, `Cmd+V`, with Copy and Paste with Insert on | `Ctrl+Insert`, `Shift+Insert` | Copy and paste, for C/V on the Cmd list |
 
 Everything else reaches the apps as it did: `Option`, `Cmd` or `Ctrl` tapped alone, with any other key
 (`Cmd+Space`, `Cmd+Tab`, `Cmd+Q`, which Pear Up quits apps with), or together, such as `Ctrl+Shift+←`,
 which Linux apps still select by word with. A modifier goes to libinput the moment it is pressed, as
-always; only when one of the keys above follows is it lent to the translation, with `Ctrl` pressed
-before it is let go, so no app or GNOME ever sees a lone tap of it that you did not make. Held, a key
+always; only when one of the keys above follows is it lent to the translation, with `Ctrl` (or `Shift`
+for Insert paste) pressed before it is let go, so no app or GNOME ever sees a lone tap of it that you
+did not make. Held, a key
 repeats as its translation; let go in any order, nothing is left held. Which physical key is `Option`
 and which `Cmd` follows the Swap Alt and Cmd switch, written into the plugin when either changes.
-Things to know: in a terminal `Cmd+C` becomes `Ctrl+C`, which interrupts rather than copies, since
-nothing that low knows which app is in front; GNOME's own `Super+A`, `S`, `V` and `N` give way to the
-apps' shortcuts; only the left-hand `Option` and `Cmd` count; and the list is of key positions, so on
+
+**Copy and Paste with Insert**, off by default, sends plain `Cmd+C` as `Ctrl+Insert` and plain
+`Cmd+V` as `Shift+Insert` while macOS Shortcuts in Apps is on and C/V are on its list. GTK3/4 text
+widgets, Firefox, Chromium and Electron apps (VS Code, Cursor, Joplin), Qt, LibreOffice and Nautilus
+accept these classic copy/paste keys. `Cmd+X` stays `Ctrl+X`: `Shift+Delete` permanently deletes
+files in file managers. `Cmd+Shift+C/V` stay `Ctrl+Shift+C/V`, including paste without formatting
+in browsers. A keyboard without Insert or left Shift keeps the ordinary Ctrl translation. Letting Cmd
+go first lets go of Insert too, since a bare Insert held would repeat and toggle overwrite; C/V then
+type nothing until let go. A paste while a copy is still held is `Shift+Insert` alone. A real Shift is kept for as long as the user holds it.
+
+Only **Ptyxis** is configured: Pear Up appends `<ctrl>Insert` to its copy-clipboard shortcut and
+`<shift>Insert` to paste-clipboard, keeping whatever shortcuts are there. Ptyxis captures these before
+VTE, whose own `Shift+Insert` pastes PRIMARY rather than the clipboard. Switching this option or app
+shortcuts off restores the displaced values, even after reopening preferences; newer changes made
+elsewhere are left alone, and `uninstall.sh` takes out the alternatives Pear Up added. If Ptyxis's schema is absent, the row says so and skips it. Other terminals
+(kitty, GNOME Console and others) are not configured and may paste PRIMARY on `Shift+Insert`.
+
+Things to know: without this option, in a terminal `Cmd+C` becomes `Ctrl+C`, which interrupts rather
+than copies, since nothing that low knows which app is in front; GNOME's own `Super+A`, `S`, `V` and `N`
+give way to the apps' shortcuts; only the left-hand `Option` and `Cmd` count; and the list is of key positions, so on
 a layout that swaps Z and Y it is the key printed Y that undoes. `Option+Backspace` is not translated:
 in a terminal `Alt+Backspace` already deletes a word and `Ctrl+Backspace` would erase one character.
 If an [input-remapper](https://github.com/sezanzeb/input-remapper) preset already maps these keys,

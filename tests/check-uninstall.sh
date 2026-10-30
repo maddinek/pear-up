@@ -96,6 +96,31 @@ reset_if_matches org.test touched 'false'
 check "user-modified value is left alone" "$(cat "$STATE/org.test|touched")" "true"
 check "left-alone case is reported" "${#RESTORED[@]}" "1"
 
+# --- remove_alternative -----------------------------------------------------
+put 'org.test|copy' "'<ctrl><shift>c|<ctrl>Insert'"
+RESTORED=()
+remove_alternative org.test copy '<ctrl>Insert'
+check "appended alternative removed" "$(cat "$STATE/org.test|copy")" "'<ctrl><shift>c'"
+check "removal is reported" "${#RESTORED[@]}" "1"
+
+put 'org.test|mid' "'a|<shift>Insert|b'"
+remove_alternative org.test mid '<shift>Insert'
+check "middle alternative removed" "$(cat "$STATE/org.test|mid")" "'a|b'"
+
+put 'org.test|only' "'<shift>Insert'"
+remove_alternative org.test only '<shift>Insert'
+check "sole alternative resets the key" "$(cat "$STATE/org.test|only" 2>/dev/null || echo RESET)" "RESET"
+
+put 'org.test|lookalike' "'<ctrl><shift>Insert'"
+RESTORED=()
+remove_alternative org.test lookalike '<shift>Insert'
+check "a longer alternative is not matched" "$(cat "$STATE/org.test|lookalike")" "'<ctrl><shift>Insert'"
+check "nothing reported when absent" "${#RESTORED[@]}" "0"
+
+RESTORED=()
+remove_alternative org.test missing '<shift>Insert'
+check "missing key is skipped" "${#RESTORED[@]}" "0"
+
 if [[ $failed -eq 0 ]]; then
     echo "uninstall helpers: all checks passed"
 else

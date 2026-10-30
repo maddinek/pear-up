@@ -2566,8 +2566,8 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         print('  Firefox momentum: writes its block into each profile, follows the speed, puts prefs.js back, waits for Firefox to quit');
 }
 
-// The macOS keys are one file too, with a line for each of three switches,
-// the Alt/Cmd swap written in as it is set, and the Cmd key list kept as found.
+// The macOS keys are one file too, with a line for each translation and the
+// Insert option, the Alt/Cmd swap as it is set, and the Cmd list kept as found.
 // All three off removes it; nothing else in the directory is touched. An
 // input-remapper preset that translates the same keys gets a warning, read
 // from a fixture laid out as framy's, and is only ever read.
@@ -2577,22 +2577,23 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
     // A copy of the plugin is told by the lines Pear Up writes, and by
     // whether the rest is the same, rather than printed whole.
     const brief = value => typeof value === 'string' && value.includes('\nlocal SWAPPED = ')
-        ? `${value.match(/^local (SWAPPED|WORDS|DESKTOPS|SHORTCUTS|SHORTCUT_KEYS) = .*$/gm).join('; ')}` +
+        ? `${value.match(/^local (SWAPPED|WORDS|DESKTOPS|SHORTCUTS|INSERT_COPY|SHORTCUT_KEYS) = .*$/gm).join('; ')}` +
             ` (${value.length} characters)`
         : JSON.stringify(value);
     const expect = (label, got, wanted) => {
         if (JSON.stringify(got) !== JSON.stringify(wanted))
             problems.push(`macOS keys: ${label} is ${brief(got)}, expected ${brief(wanted)}`);
     };
-    const TITLES = ['Option+←/→ Moves by Word', 'Ctrl+←/→ Switches Desktops', 'macOS Shortcuts in Apps'];
+    const TITLES = ['Option+←/→ Moves by Word', 'Ctrl+←/→ Switches Desktops', 'macOS Shortcuts in Apps',
+        'Copy and Paste with Insert'];
     const titled = (type, title) => widget => widget instanceof type && widget.title === title;
     const groupOf = (prefs = new Preferences(metadata)) => {
         const page = prefs._buildKeyboardPage();
         windowsKept.push(page);
-        const [words, desktops, shortcuts] = TITLES.map(title => findWidget(page, titled(Adw.SwitchRow, title)));
+        const [words, desktops, shortcuts, insert] = TITLES.map(title => findWidget(page, titled(Adw.SwitchRow, title)));
         const remapper = findWidget(page, titled(Adw.ActionRow, 'input-remapper Translates These Keys Too'));
         const status = findWidget(page, widget => widget.get_name() === 'pear-up-app-keys-status');
-        return { words, desktops, shortcuts, remapper, status, page };
+        return { words, desktops, shortcuts, insert, remapper, status, page };
     };
     const configDir = GLib.get_user_config_dir();
     const ours = smokeConfig && smokeConfig === configDir &&
@@ -2616,16 +2617,16 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             text = text.replace(new RegExp(`^local ${name} = .*$`, 'm'), `local ${name} = ${value}`);
         return text;
     };
-    const plugin = values => shipped({ SWAPPED: false, WORDS: false, DESKTOPS: false, SHORTCUTS: false, ...values });
+    const plugin = values => shipped({ SWAPPED: false, WORDS: false, DESKTOPS: false, SHORTCUTS: false, INSERT_COPY: false, ...values });
     const input = new Gio.Settings({ schema_id: 'org.gnome.desktop.input-sources' });
     const wm = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
     const swap = on => input.set_strv('xkb-options', on ? ['altwin:swap_alt_win'] : []);
 
     const first = groupOf();
-    if (!first.words || !first.desktops || !first.shortcuts || !first.status) {
-        problems.push('the Keyboard page has no Inside Apps group with three switches and a status row');
+    if (!first.words || !first.desktops || !first.shortcuts || !first.insert || !first.status) {
+        problems.push('the Keyboard page has no Inside Apps group with four switches and a status row');
     } else if (shell < 50) {
-        for (const row of [first.words, first.desktops, first.shortcuts])
+        for (const row of [first.words, first.desktops, first.shortcuts, first.insert])
             expect(`"${row.title}" on GNOME ${shell}, sensitive`, row.sensitive, false);
         expect('the status row on GNOME ' + shell, first.status.visible, true);
         if (!/GNOME 50/.test(first.status.subtitle ?? '') || !/keyd/.test(first.status.subtitle ?? ''))
@@ -2653,6 +2654,11 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             [false, false, false]);
         expect('the switches sensitive', [rows.words.sensitive, rows.desktops.sensitive, rows.shortcuts.sensitive],
             [true, true, true]);
+        expect('Insert copy/paste starts off', rows.insert.active, false);
+        expect('Insert copy/paste needs app shortcuts', rows.insert.sensitive, false);
+        rows.insert.active = true;
+        expect('the insensitive Insert switch cannot install the plugin', read(target), null);
+        expect('Insert stays off without shortcuts', rows.insert.active, false);
         expect('the status row with nothing to say', rows.status.visible, false);
         expect('the input-remapper row with no presets', rows.remapper.visible, false);
         if (!/Cmd\+C, V, X, Z, A, S, F, T, W and N/.test(rows.shortcuts.subtitle ?? '') ||
@@ -2663,6 +2669,13 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         expect('the plugin after switching on word jumps', read(target), plugin({ WORDS: true }));
         rows.shortcuts.active = true;
         expect('and the shortcuts', read(target), plugin({ WORDS: true, SHORTCUTS: true }));
+        expect('Insert becomes available with shortcuts', rows.insert.sensitive, true);
+        rows.insert.active = true;
+        expect('Insert written alongside the shortcuts', read(target),
+            plugin({ WORDS: true, SHORTCUTS: true, INSERT_COPY: true }));
+        expect('the Insert switch reopened', groupOf().insert.active, true);
+        rows.insert.active = false;
+        expect('Insert off keeps the other switches', read(target), plugin({ WORDS: true, SHORTCUTS: true }));
         rows.desktops.active = true;
         rows.words.active = false;
         expect('desktops on, words off', read(target), plugin({ DESKTOPS: true, SHORTCUTS: true }));
@@ -2724,6 +2737,22 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         rows.words.active = false;
         expect('the older copy after switching off', read(target), null);
 
+        // A copy from before Insert copy/paste still belongs to Pear Up,
+        // with the missing option off; the next write supplies the new line.
+        write(target, plugin({ SHORTCUTS: true }).replace(/^local INSERT_COPY = .*\n/m, ''));
+        rows = groupOf();
+        expect('shortcuts in a copy without the Insert line', rows.shortcuts.active, true);
+        expect('Insert in a copy without the line', rows.insert.active, false);
+        rows.insert.active = true;
+        expect('the old copy after enabling Insert', read(target), plugin({ SHORTCUTS: true, INSERT_COPY: true }));
+        rows.shortcuts.active = false;
+        expect('all translations off removes the file even with Insert set', read(target), null);
+        expect('Insert goes off with the removed file', rows.insert.active, false);
+        expect('duplicate Insert lines are rejected',
+            preferences._keysPluginValues(source + 'local INSERT_COPY = true\n'), null);
+        expect('a malformed Insert line is rejected',
+            preferences._keysPluginValues(source.replace('local INSERT_COPY = false', 'local INSERT_COPY = perhaps')), null);
+
         // A file of the same name that is not Pear Up's is never touched.
         write(target, 'print("mine")\n');
         rows = groupOf();
@@ -2778,10 +2807,124 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         write(`${presets}/Apple Keyboard/broken.json`, '{ not json');
         expect('the input-remapper row with nothing of the kind', groupOf().remapper.visible, false);
 
+        // A settings stand-in, with real GVariants and GTK parsing: Ptyxis
+        // is covered even where the container has no such app. A new prefs
+        // object has to recover the saved note as a reopened window does.
+        reset();
+        const ptyxisSchema = 'org.gnome.Ptyxis.Shortcuts';
+        const defaults = { 'copy-clipboard': '<ctrl><shift>c', 'paste-clipboard': '<ctrl><shift>v' };
+        const user = new Map();
+        let locked = false;
+        const ptyxis = {
+            settings_schema: { has_key: key => Object.hasOwn(defaults, key) },
+            is_writable: () => !locked,
+            get_string: key => user.get(key) ?? defaults[key],
+            get_user_value: key => user.has(key) ? new GLib.Variant('s', user.get(key)) : null,
+            get_default_value: key => new GLib.Variant('s', defaults[key]),
+            set_string: (key, value) => { user.set(key, value); return true; },
+            set_value: (key, value) => { user.set(key, value.deep_unpack()); return true; },
+            reset: key => user.delete(key),
+        };
+        const prefsForPtyxis = (settings = ptyxis) => {
+            const prefs = new Preferences(metadata);
+            prefs._schemaCache = new Map([[ptyxisSchema, settings]]);
+            return prefs;
+        };
+        const value = key => ptyxis.get_string(key);
+        const notes = () => Object.fromEntries(Object.entries(
+            JSON.parse(preferences.getSettings().get_string('displaced-settings')))
+            .filter(([id]) => id.startsWith(ptyxisSchema + ':')));
+        let terminal = prefsForPtyxis();
+        rows = groupOf(terminal);
+        rows.shortcuts.active = true;
+        rows.insert.active = true;
+        expect('Ptyxis copy alternatives', value('copy-clipboard'), '<ctrl><shift>c|<ctrl>Insert');
+        expect('Ptyxis paste alternatives', value('paste-clipboard'), '<ctrl><shift>v|<shift>Insert');
+        for (const key of Object.keys(defaults))
+            expect('GTK parses the Ptyxis alternatives for ' + key, !!Gtk.ShortcutTrigger.parse_string(value(key)), true);
+        expect('Ptyxis defaults are recorded as defaults', notes(),
+            { [ptyxisSchema + ':copy-clipboard']: null, [ptyxisSchema + ':paste-clipboard']: null });
+        terminal = prefsForPtyxis();
+        rows = groupOf(terminal);
+        expect('reopening does not append twice', value('paste-clipboard'), '<ctrl><shift>v|<shift>Insert');
+        rows.insert.active = false;
+        expect('Ptyxis copy returns to its default', ptyxis.get_user_value('copy-clipboard'), null);
+        expect('Ptyxis paste returns to its default', ptyxis.get_user_value('paste-clipboard'), null);
+        expect('restoring Ptyxis clears its notes', notes(), {});
+
+        ptyxis.set_string('copy-clipboard', '<alt>c|<ctrl><shift>c');
+        ptyxis.set_string('paste-clipboard', '<alt>v');
+        rows.insert.active = true;
+        expect('a custom copy string is extended', value('copy-clipboard'), '<alt>c|<ctrl><shift>c|<ctrl>Insert');
+        expect('a custom paste string is extended', value('paste-clipboard'), '<alt>v|<shift>Insert');
+        rows = groupOf(prefsForPtyxis());
+        rows.words.active = true;
+        rows.shortcuts.active = false;
+        expect('shortcuts off restores custom copy', value('copy-clipboard'), '<alt>c|<ctrl><shift>c');
+        expect('shortcuts off restores custom paste', value('paste-clipboard'), '<alt>v');
+        expect('Insert preference survives while word jumps keep the file', read(target),
+            plugin({ WORDS: true, INSERT_COPY: true }));
+        rows.shortcuts.active = true;
+        expect('shortcuts on reapplies the retained Insert option', value('paste-clipboard'), '<alt>v|<shift>Insert');
+        rows.insert.active = false;
+        rows.words.active = false;
+
+        // Existing alternatives, including another spelling of Ctrl, belong
+        // to the user and survive switching off without a displaced note.
+        ptyxis.set_string('copy-clipboard', '<Control>Insert|<alt>c');
+        ptyxis.set_string('paste-clipboard', '<shift>Insert');
+        rows.insert.active = true;
+        expect('equivalent copy is not duplicated', value('copy-clipboard'), '<Control>Insert|<alt>c');
+        expect('existing paste is not duplicated', value('paste-clipboard'), '<shift>Insert');
+        expect('existing alternatives need no note', notes(), {});
+        rows.insert.active = false;
+        expect('the existing Insert paste survives off', value('paste-clipboard'), '<shift>Insert');
+
+        user.clear();
+        rows.insert.active = true;
+        ptyxis.set_string('paste-clipboard', '<alt>p');
+        rows.insert.active = false;
+        expect('a newer choice outside Pear Up is kept', value('paste-clipboard'), '<alt>p');
+        expect('its old note is cleared', notes(), {});
+
+        user.clear();
+        terminal = prefsForPtyxis();
+        const onlyCopy = { SHORTCUTS: true, INSERT_COPY: true, SHORTCUT_KEYS: 'C' };
+        expect('only C on the list can be configured', terminal._syncPtyxisInsertShortcuts(onlyCopy), null);
+        expect('C on the list gets its alternative', value('copy-clipboard'), '<ctrl><shift>c|<ctrl>Insert');
+        expect('V absent from the list leaves paste alone', ptyxis.get_user_value('paste-clipboard'), null);
+        expect('changing the list is reconciled',
+            terminal._syncPtyxisInsertShortcuts({ ...onlyCopy, SHORTCUT_KEYS: 'V' }), null);
+        expect('C removed from the list is restored', ptyxis.get_user_value('copy-clipboard'), null);
+        terminal._syncPtyxisInsertShortcuts(null);
+        ptyxis.set_string('copy-clipboard', '');
+        ptyxis.set_string('paste-clipboard', 'never');
+        terminal._syncPtyxisInsertShortcuts({ ...onlyCopy, SHORTCUT_KEYS: 'C V' });
+        expect('an empty shortcut gets no leading separator', value('copy-clipboard'), '<ctrl>Insert');
+        expect('a disabled shortcut gains an alternative', value('paste-clipboard'), 'never|<shift>Insert');
+        expect('GTK parses the disabled shortcut with its alternative',
+            !!Gtk.ShortcutTrigger.parse_string(value('paste-clipboard')), true);
+        terminal._syncPtyxisInsertShortcuts(null);
+        expect('an explicitly empty shortcut comes back', value('copy-clipboard'), '');
+        expect('a disabled shortcut comes back', value('paste-clipboard'), 'never');
+
+        locked = true;
+        expect('locked Ptyxis keys report a failure',
+            terminal._syncPtyxisInsertShortcuts(onlyCopy)?.includes('locked'), true);
+        expect('a failed write has no displaced note', notes(), {});
+        locked = false;
+        const absent = prefsForPtyxis(null);
+        expect('an absent Ptyxis schema is skipped', absent._syncPtyxisInsertShortcuts(onlyCopy), null);
+        expect('an absent Ptyxis schema is explained',
+            absent._appKeysSubtitle('INSERT_COPY', onlyCopy).includes('not installed'), true);
+        rows = groupOf(terminal);
+        rows.shortcuts.active = false;
+        expect('no Ptyxis notes left after all switches are off', notes(), {});
+
         reset();
         swap(false);
         if (problems.length === problemsBefore)
-            print('  macOS keys: three switches in one file, following the swap and keeping the key list; ' +
+            print('  macOS keys: translation switches and Insert copy/paste, keeping the swap and key list; ' +
                 'removes only its own file; warns of framy\'s input-remapper preset without touching it');
     }
 }

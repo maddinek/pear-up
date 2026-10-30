@@ -316,7 +316,8 @@ const FIREFOX_DIRS = [
 // desktop, Cmd+C and its kind — are libinput/10-pear-up-macos-keys.lua. Apps
 // read their own keys, so no GNOME shortcut changes what those do: they have to
 // be different before they arrive. Like the scroll plugin it needs GNOME 50 and
-// libinput 1.30, and the file is all the state there is. Each switch is one of
+// libinput 1.30. The file keeps the translation options; Ptyxis alternatives
+// also keep their displaced strings in settings. Each switch is one of
 // its true/false lines; SWAPPED follows the Alt/Cmd swap in xkb-options and is
 // written again when that changes while this window is open, or is found out of
 // step when it opens; SHORTCUT_KEYS is kept as found, so a list edited by hand
@@ -328,9 +329,19 @@ const KEYS_PLUGIN_LINES = {
     WORDS: /^local WORDS = (true|false)$/m,
     DESKTOPS: /^local DESKTOPS = (true|false)$/m,
     SHORTCUTS: /^local SHORTCUTS = (true|false)$/m,
+    INSERT_COPY: /^local INSERT_COPY = (true|false)$/m,
     SHORTCUT_KEYS: /^local SHORTCUT_KEYS = "([A-Za-z0-9_ ]*)"$/m,
 };
 const KEYS_PLUGIN_SWITCHES = ['WORDS', 'DESKTOPS', 'SHORTCUTS'];
+// Ptyxis captures these before VTE, whose Shift+Insert pastes PRIMARY. Its
+// string-valued shortcuts accept alternatives separated by |, so the user's
+// existing shortcuts stay alongside ours, and the displaced value comes back
+// when Insert copy/paste or app shortcuts are switched off.
+const PTYXIS_SHORTCUTS_SCHEMA = 'org.gnome.Ptyxis.Shortcuts';
+const PTYXIS_INSERT_SHORTCUTS = [
+    ['copy-clipboard', 'C', '<ctrl>Insert'],
+    ['paste-clipboard', 'V', '<shift>Insert'],
+];
 // GNOME's own Super+letter shortcuts, which give way to Cmd+letter in apps.
 const GNOME_SUPER_LETTERS = ['A', 'S', 'V', 'N'];
 // What the desktop switch is turned into, which only helps while GNOME binds it.
@@ -2445,8 +2456,9 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             WORDS: 'Option+←/→ Moves by Word',
             DESKTOPS: 'Ctrl+←/→ Switches Desktops',
             SHORTCUTS: 'macOS Shortcuts in Apps',
+            INSERT_COPY: 'Copy and Paste with Insert',
         };
-        const rows = KEYS_PLUGIN_SWITCHES.map(line => {
+        const rows = [...KEYS_PLUGIN_SWITCHES, 'INSERT_COPY'].map(line => {
             const row = new Adw.SwitchRow({ title: titles[line] });
             row.set_subtitle_lines(0);
             group.add(row);
@@ -2476,7 +2488,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             for (const [line, row] of rows) {
                 const on = state.installed && values[line];
                 row.set_active(on);
-                row.set_sensitive(!state.foreign && (unsupported === null || on));
+                row.set_sensitive(!state.foreign && (unsupported === null || on) &&
+                    (line !== 'INSERT_COPY' || values.SHORTCUTS || on));
                 row.set_subtitle(this._appKeysSubtitle(line, values));
             }
 
@@ -2518,7 +2531,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                     return;
                 const state = this._keysPluginState();
                 if (state.foreign || row.active === (state.installed && state.values[line]) ||
-                    (row.active && unsupported !== null)) {
+                    (row.active && (unsupported !== null || (line === 'INSERT_COPY' && !state.values?.SHORTCUTS)))) {
                     refresh();
                     return;
                 }
@@ -2534,6 +2547,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             const state = this._keysPluginState();
             if (state.installed && state.values.SWAPPED !== swapped())
                 problem = this._setKeysPlugin({ ...state.values, SWAPPED: swapped() });
+            else if (!state.foreign)
+                problem = this._syncPtyxisInsertShortcuts(state.values);
             refresh();
         };
         const watched = input.connect('changed::xkb-options', realign);
@@ -2548,6 +2563,18 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     }
 
     _appKeysSubtitle(line, values) {
+        if (line === 'INSERT_COPY') {
+            const ptyxis = this._settingsForSchema(PTYXIS_SHORTCUTS_SCHEMA);
+            const available = PTYXIS_INSERT_SHORTCUTS.every(([key]) => this._schemaHasKey(ptyxis, key));
+            const writable = available && PTYXIS_INSERT_SHORTCUTS.every(([key]) => ptyxis.is_writable(key));
+            return 'Plain Cmd+C/V send Ctrl+Insert and Shift+Insert, for keys on the Cmd list. ' +
+                'Cmd+X and Cmd+Shift+C/V keep their usual translation. Needs macOS Shortcuts in Apps ' +
+                'and a keyboard with Insert and left Shift; otherwise C/V still use Ctrl. ' +
+                (writable ? 'Ptyxis gets alternatives for the clipboard; off puts its shortcuts back.'
+                    : available ? 'Ptyxis shortcuts are locked and cannot be configured.'
+                        : 'Ptyxis shortcuts are not installed, so no terminal is configured.') +
+                ' Other terminals may paste PRIMARY with Shift+Insert.';
+        }
         if (line === 'WORDS') {
             return 'With Shift it selects by word, as on a Mac. Apps are sent Ctrl+←/→, which is how ' +
                 'Linux apps move by word.';
@@ -2567,8 +2594,11 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         const giveWay = gnome.length === 0 ? ''
             : ` GNOME’s own Cmd+${gnome.length === 1 ? gnome[0]
                 : `${gnome.slice(0, -1).join(', ')} and ${gnome.at(-1)}`} ${gnome.length === 1 ? 'gives' : 'give'} way.`;
-        return `Cmd+${list} act as Ctrl with the same key, also with Shift. In a terminal Cmd+C ` +
-            `becomes Ctrl+C, which interrupts rather than copies.${giveWay}`;
+        const copy = values.INSERT_COPY
+            ? ' Plain C/V on the list use Insert for copy/paste where the keyboard supports it.'
+            : ' In a terminal Cmd+C becomes Ctrl+C, which interrupts rather than copies; ' +
+                'Copy and Paste with Insert offers another way.';
+        return `Cmd+${list} act as Ctrl with the same key, also with Shift.${copy}${giveWay}`;
     }
 
     // Whether GNOME binds Ctrl+Option+← and →, which is what Ctrl+←/→ is
@@ -2594,11 +2624,21 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     }
 
     // The values of the plugin's lines in `text`, or null where one is missing
-    // or there twice.
+    // or there twice. Copies from before Insert copy/paste have no such line;
+    // they are still ours, with that option off until the user asks for it.
     _keysPluginValues(text) {
         const values = {};
         for (const [name, line] of Object.entries(KEYS_PLUGIN_LINES)) {
             const all = text.match(new RegExp(line.source, 'gm'));
+            if (name === 'INSERT_COPY') {
+                const present = text.match(/^local INSERT_COPY\b.*$/gm);
+                if (!present) {
+                    values[name] = false;
+                    continue;
+                }
+                if (present.length !== 1)
+                    return null;
+            }
             if (all?.length !== 1)
                 return null;
             const value = text.match(line)[1];
@@ -2615,7 +2655,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         } catch {
             // No shipped copy: nothing to offer either.
         }
-        return { SWAPPED: swapped, WORDS: false, DESKTOPS: false, SHORTCUTS: false, SHORTCUT_KEYS: keys };
+        return { SWAPPED: swapped, WORDS: false, DESKTOPS: false, SHORTCUTS: false, INSERT_COPY: false, SHORTCUT_KEYS: keys };
     }
 
     // The plugin as this version of Pear Up ships it, with `values` written in.
@@ -2669,16 +2709,83 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             if (remove) {
                 if (state.installed)
                     file.delete(null);
-                return null;
+                return this._syncPtyxisInsertShortcuts(null);
             }
             const text = this._keysPluginText(values);
             const dir = GLib.path_get_dirname(path);
             if (GLib.mkdir_with_parents(dir, 0o755) !== 0)
                 throw new Error(`${this._tildePath(dir)} cannot be created`);
             file.replace_contents(new TextEncoder().encode(text), null, false, Gio.FileCreateFlags.NONE, null);
-            return null;
+            return this._syncPtyxisInsertShortcuts(values);
         } catch (e) {
             return `Could not ${remove ? 'remove' : 'write'} ${this._tildePath(path)}: ${e.message}`;
+        }
+    }
+
+    // The plugin cannot see the app in front, and VTE's Shift+Insert is not
+    // clipboard paste. Ptyxis can capture it first. Keep its whole old string,
+    // including a default (null), in the same store as the appearance switches.
+    // An alternative already there belongs to the user and needs no note.
+    // On reopening, a note is never replaced by the string we wrote ourselves.
+    _syncPtyxisInsertShortcuts(values) {
+        const settings = this._settingsForSchema(PTYXIS_SHORTCUTS_SCHEMA);
+        if (!settings)
+            return null;
+        const displaced = this._getDisplacedMap(DISPLACED_SETTINGS);
+        const keys = (values?.SHORTCUT_KEYS ?? '').toUpperCase().split(/\s+/);
+        let changed = false;
+        const append = (text, alternative) => {
+            const [ok, keyval, mods] = Gtk.accelerator_parse(alternative);
+            const has = text.split('|').some(part => {
+                const [valid, key, modifiers] = Gtk.accelerator_parse(part.trim());
+                return ok && valid && key === keyval && modifiers === mods;
+            });
+            return has ? text : text ? `${text}|${alternative}` : alternative;
+        };
+        try {
+            for (const [key, letter, alternative] of PTYXIS_INSERT_SHORTCUTS) {
+                if (!this._schemaHasKey(settings, key))
+                    continue;
+                const id = `${PTYXIS_SHORTCUTS_SCHEMA}:${key}`;
+                const current = settings.get_string(key);
+                const on = values?.SHORTCUTS && values.INSERT_COPY && keys.includes(letter);
+                if (on) {
+                    const next = append(current, alternative);
+                    if (next === current)
+                        continue;
+                    if (!settings.is_writable(key))
+                        throw new Error(`${key} is locked`);
+                    if (!displaced.has(id)) {
+                        displaced.set(id, settings.get_user_value(key));
+                        this._saveDisplacedMap(DISPLACED_SETTINGS);
+                    }
+                    if (!settings.set_string(key, next))
+                        throw new Error(`${key} could not be written`);
+                } else if (displaced.has(id)) {
+                    const before = displaced.get(id);
+                    const original = (before ?? settings.get_default_value(key)).deep_unpack();
+                    // As with the other displaced settings, a newer choice
+                    // made elsewhere stays. Only our own value is handed back.
+                    if (current === append(original, alternative)) {
+                        if (!settings.is_writable(key))
+                            throw new Error(`${key} is locked`);
+                        if (before) {
+                            if (!settings.set_value(key, before))
+                                throw new Error(`${key} could not be restored`);
+                        } else {
+                            settings.reset(key);
+                        }
+                    }
+                    displaced.delete(id);
+                    changed = true;
+                }
+            }
+            return null;
+        } catch (e) {
+            return `Could not configure Ptyxis clipboard shortcuts: ${e.message}`;
+        } finally {
+            if (changed)
+                this._saveDisplacedMap(DISPLACED_SETTINGS);
         }
     }
 

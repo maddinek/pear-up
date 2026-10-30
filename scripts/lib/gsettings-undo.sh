@@ -36,3 +36,26 @@ reset_if_matches() {
         RESTORED+=("$schema $key: left alone (not the value this extension wrote)")
     fi
 }
+
+# Remove one |-separated alternative from a string key, the form Ptyxis's
+# shortcuts take ('<ctrl><shift>c|<ctrl>Insert'), leaving the others. A key
+# left empty is reset, since an empty shortcut would mean none at all.
+remove_alternative() {
+    local schema="$1" key="$2" alt="$3"
+    shift 3
+    local current inner updated
+    current="$(gsettings get "$@" "$schema" "$key" 2>/dev/null)" || return 0
+    [[ "$current" == \'*\' ]] || return 0
+    inner="${current:1:${#current}-2}"
+    [[ "|$inner|" == *"|$alt|"* ]] || return 0
+    updated="|$inner|"
+    updated="${updated//"|$alt|"/|}"
+    updated="${updated#|}"
+    updated="${updated%|}"
+    if [[ -z "$updated" ]]; then
+        gsettings reset "$@" "$schema" "$key"
+    else
+        gsettings set "$@" "$schema" "$key" "'$updated'"
+    fi
+    RESTORED+=("$schema $key: removed '$alt'")
+}
