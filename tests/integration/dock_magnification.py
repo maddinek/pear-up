@@ -19,6 +19,8 @@ from gi.repository import GLib
 DOCK_UUID = "dash-to-dock@micxgx.gmail.com"
 DOCK_SCHEMA = "org.gnome.shell.extensions.dash-to-dock"
 OVERLAY = "pearup-dock-magnifier"
+BLUR_UUID = "blur-my-shell@aunetx"
+BLUR_SCHEMA = "org.gnome.shell.extensions.blur-my-shell.dash-to-dock"
 
 # Frames a resting shell may still run over a count, beyond what it ran with
 # nothing on screen moving: a hover label finishing its fade, say. A swell
@@ -152,13 +154,14 @@ class DockChecks:
         self._baseline = {self._key(item): (item["opacity"], item["siblingOpacities"])
                           for item in dock["items"]}
         self._baseline["background"] = dock["backgroundOpacity"]
+        self._baseline["blur"] = dock.get("blur")
 
     @staticmethod
     def _key(item):
         return item["id"] or f"{item['kind']}@{round(item['slot'][0])},{round(item['slot'][1])}"
 
     # ------------------------------------------------------------------ checks
-    def _check_magnified(self, state, pointer, max_scale, where):
+    def _check_magnified(self, state, pointer, max_scale, where, frosted=False):
         check = self._check
         dock = self._dock(state)
         if not check(f"[{where}] the dock is still there", dock):
@@ -274,7 +277,20 @@ class DockChecks:
         margin = 64
         pieces = [child for child in overlays[0]["children"]
                   if child["type"] == "clone" and child["clip"]]
-        if dock["background"] and pieces:
+        if frosted:
+            # Blur my Shell's blur cannot be stretched with the tint, so
+            # neither is: the dock's own shelf is drawn, at its own size.
+            blur = dock.get("blur") or {}
+            rest = self._baseline.get("blur") or {}
+            check(f"[{where}] under Blur my Shell's blur the shelf keeps its size",
+                  not pieces and dock["backgroundOpacity"] == self._baseline.get("background"),
+                  f"{len(pieces)} stretched pieces, background opacity "
+                  f"{self._baseline.get('background')} -> {dock['backgroundOpacity']}")
+            check(f"[{where}] and the blur stays where it was, under the shelf",
+                  blur.get("visible") and blur.get("box") == rest.get("box") and
+                  blur.get("clip") == rest.get("clip"),
+                  f"blur {blur} (was {rest})")
+        elif dock["background"] and pieces:
             spans = []
             for piece in pieces:
                 start = piece["box"][axis]
@@ -406,6 +422,59 @@ class DockChecks:
         self.move(*pointer)
         GLib.usleep(SETTLE)
 
+    def _check_frosted(self):
+        """With Blur my Shell's dock blur on, static as on framy and dynamic,
+        the magnified icons still grow, and the shelf with its blur and tint
+        stays together at its own size."""
+        check = self._check
+        info = self._extension_info(BLUR_UUID)
+        if not info:
+            print("  note: Blur my Shell is not installed here; skipping the blur checks")
+            return
+        self._gsettings(BLUR_SCHEMA, "blur", "true")
+        try:
+            for static in ("true", "false"):
+                kind = "static" if static == "true" else "dynamic"
+                self._gsettings(BLUR_SCHEMA, "static-blur", static)
+                if static == "true":
+                    self._call("org.gnome.Shell", "/org/gnome/Shell",
+                               "org.gnome.Shell.Extensions", "EnableExtension",
+                               (BLUR_UUID,), "(s)")
+                self._away()
+                blurred = None
+                for _ in range(40):
+                    blurred = (self._dock(self.state()) or {}).get("blur")
+                    if blurred and blurred["visible"]:
+                        break
+                    GLib.usleep(250 * 1000)
+                info = self._extension_info(BLUR_UUID)
+                if not check(f"Blur my Shell blurs the dock ({kind})",
+                             blurred and blurred["visible"],
+                             f"state={info.get('state')} error={info.get('error')} blur={blurred}"):
+                    continue
+                # Settled before it is taken as the shelf to compare with.
+                GLib.usleep(SETTLE)
+                self._record_baseline(self._dock(self.state()))
+                _, pointer = self._hover()
+                self._check_magnified(self.state(), pointer, 1.75, f"blur-{kind}", frosted=True)
+                if static == "true":
+                    self._capture("dock-magnified-blur.png")
+                self._away()
+                self.check_left_nothing(f"the pointer leaves the blurred dock ({kind})")
+        finally:
+            try:
+                self._call("org.gnome.Shell", "/org/gnome/Shell",
+                           "org.gnome.Shell.Extensions", "DisableExtension",
+                           (BLUR_UUID,), "(s)")
+            except GLib.Error as exc:
+                print(f"  note: could not disable Blur my Shell: {exc.message.splitlines()[0]}")
+            for _ in range(40):
+                if not (self._dock(self.state()) or {}).get("blur"):
+                    break
+                GLib.usleep(250 * 1000)
+            self._away()
+            self._record_baseline(self._dock(self.state()))
+
     # -------------------------------------------------------------- the run
     def run(self):
         check = self._check
@@ -506,6 +575,9 @@ class DockChecks:
         state = self.state()
         check("switching magnification back on magnifies the hovered dock",
               len(state["overlays"]) == 1, f"{len(state['overlays'])} overlays")
+
+        # ---- Blur my Shell's dock blur, as framy has it
+        self._check_frosted()
 
         # ---- bottom edge: Dash to Dock rebuilds its dock, which must be found
         self._away()

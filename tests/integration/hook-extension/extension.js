@@ -1430,9 +1430,20 @@ export default class TestHookExtension extends Extension {
                     };
                 });
                 const next = children[children.indexOf(dock) + 1];
+                // Blur my Shell's dock blur, beside the dash; its background
+                // is clipped to where the blur is drawn.
+                const blur = dash.get_parent()?.get_children()
+                    .find(child => child.name === 'bms-dash-backgroundgroup');
+                const blurred = blur?.get_first_child();
                 return {
                     position: dock._position,
                     slideX: dock._slider?.slideX ?? null,
+                    blur: blur ? {
+                        visible: blur.visible,
+                        box: stageBox(blur),
+                        clip: blurred?.has_clip ? blurred.get_clip() : null,
+                        clipOrigin: blurred ? [...blurred.get_transformed_position()] : null,
+                    } : null,
                     box: stageBox(dock),
                     background: dash._background ? stageBox(dash._background) : null,
                     backgroundOpacity: dash._background?.opacity ?? null,

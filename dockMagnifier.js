@@ -19,7 +19,10 @@
 // scaled down, which stays sharp. Everything that is not the icon image — the
 // running dots, badges, the separator — is a Clutter.Clone instead: those are
 // drawn at their own size, only moved, so a clone is exact. The dock's
-// background is cloned too, and stretched to take in the grown icons.
+// background is cloned too, and stretched to take in the grown icons — except
+// under Blur my Shell's dock blur, which is drawn beside the dash where the
+// overlay cannot stretch it; a tint grown past the blur would show the seam,
+// so there the shelf keeps its size and only the icons grow.
 //
 // The per-frame update only runs while something changes: the pointer moves,
 // the swell eases in or out, an icon bounces or Dash to Dock moves things. Once
@@ -44,6 +47,8 @@
 //     whose own `icon` is the St.Icon drawn; everything else beside the BaseIcon
 //     in its parent is an indicator. item.label is the hover label.
 //   - dock._slider, with the slide-x property its sliding animates.
+// And of Blur my Shell's: its dock blur is a child of the dash's parent named
+// 'bms-dash-backgroundgroup'.
 // Ubuntu Dock is Dash to Dock under another name and is covered the same way.
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
@@ -53,6 +58,7 @@ import { childSignals } from './util.js';
 import { bounceRise, claimDock, isBouncing, watchBounces } from './dockBounce.js';
 
 const DOCK_ACTOR_NAME = 'dashtodockContainer';
+const BLUR_GROUP_NAME = 'bms-dash-backgroundgroup';
 
 // Named so it can be found from outside — in Looking Glass, or by the test
 // suite — without anything reaching into this module.
@@ -513,7 +519,8 @@ class DockMagnification {
         this._watched.clear();
     }
 
-    // What moves the dash as a whole, or adds and removes its items.
+    // What moves the dash as a whole, or adds and removes its items. The
+    // dash's parent is where Blur my Shell puts its blur.
     _watchDock() {
         const box = this._dash._box;
         this._watch(box, ['notify::allocation', ...childSignals(box)]);
@@ -523,6 +530,10 @@ class DockMagnification {
         const slider = this._dock._slider;
         if (slider instanceof Clutter.Actor)
             this._watch(slider, ['notify::slide-x']);
+        const parent = this._dash.get_parent();
+        if (parent)
+            this._watch(parent, childSignals(parent));
+
         const view = this._dash._scrollView;
         if (view instanceof Clutter.Actor) {
             this._watch(view, ['notify::allocation', 'notify::mapped']);
@@ -799,11 +810,32 @@ class DockMagnification {
                 this._watch(item.slot.label, ['notify::visible']);
         }
 
-        this._placeBackground(
-            Math.max(0, restFirst - (first + nudge)),
-            Math.max(0, last + nudge - restLast));
+        // Left out from under Blur my Shell's dock blur: its background pieces
+        // are not drawn, so the dock's own shelf is given its opacity back.
+        if (!this._frosted()) {
+            this._placeBackground(
+                Math.max(0, restFirst - (first + nudge)),
+                Math.max(0, last + nudge - restLast));
+        }
 
         this._dropUnseen();
+    }
+
+    // Blur my Shell's dock blur is drawn below the dash, inside Dash to Dock's
+    // clipped slider, and sized to the dash's background. The overlay could
+    // only draw a stretched picture of it, and a stretched blur no longer
+    // matches the wallpaper it stands for; so with it there the shelf stays
+    // as it is, tint and blur together.
+    _frosted() {
+        const parent = this._dash.get_parent();
+        for (const child of parent?.get_children() ?? []) {
+            if (child.name === BLUR_GROUP_NAME) {
+                this._watch(child, ['notify::visible']);
+                if (child.visible)
+                    return true;
+            }
+        }
+        return false;
     }
 
     // The shelf widens along with the icons, as on macOS. Dash to Dock's
