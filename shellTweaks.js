@@ -125,18 +125,10 @@ export class MethodPatch {
     }
 }
 
-// The wrappers InstancePatch has put on each object, by name: kept for the
-// shell's life, like the objects, so the next enable() knows its own.
+// Every wrapper InstancePatch has made, to what it knows of it: kept as long as
+// the wrapper is anywhere, so a later enable() knows its own, on top or put
+// back there by whatever wrapped it since.
 const instanceWrappers = new WeakMap();
-
-function wrappersOf(object) {
-    let byName = instanceWrappers.get(object);
-    if (!byName) {
-        byName = new Map();
-        instanceWrappers.set(object, byName);
-    }
-    return byName;
-}
 
 // MethodPatch for one object the shell keeps for its whole life (a swipe
 // tracker, the window manager): an own property over the class's method, on
@@ -147,9 +139,10 @@ function wrappersOf(object) {
 // there before goes back exactly (the class's method, or another extension's own
 // property on the same object, which this then sits on). Something that wrapped
 // it since keeps it in their chain, passing through, and turning it on again
-// puts a fresh one on top. With nothing of its own beneath, the class's method
-// is looked up at each call, so a patch to the class made later, as Blur my
-// Shell makes to the desktop switch's, is still called.
+// puts a fresh one on top; once they give it back, it is used again. With
+// nothing of its own beneath, the class's method is looked up at each call, so
+// a patch to the class made later, as Blur my Shell makes to the desktop
+// switch's, is still called.
 //
 // The replacement is called as MethodPatch's is, (original, ...args) with the
 // object as `this`; enable() takes it each time, so a wrapper made by an
@@ -180,8 +173,8 @@ export class InstancePatch {
             return false;
 
         const own = Object.getOwnPropertyDescriptor(object, name);
-        const ours = wrappersOf(object).get(name);
-        if (ours && own?.value === ours.wrapper) {
+        const ours = typeof own?.value === 'function' ? instanceWrappers.get(own.value) : null;
+        if (ours) {
             ours.state.impl = replacement;
             this._installed = ours;
             return true;
@@ -208,7 +201,7 @@ export class InstancePatch {
             enumerable: own?.enumerable ?? true,
         });
         this._installed = { wrapper, state, original, own };
-        wrappersOf(object).set(name, this._installed);
+        instanceWrappers.set(wrapper, this._installed);
         return true;
     }
 
@@ -227,8 +220,6 @@ export class InstancePatch {
                 Object.defineProperty(object, name, installed.own);
             else
                 delete object[name];
-            if (wrappersOf(object).get(name) === installed)
-                wrappersOf(object).delete(name);
         }
         return true;
     }
