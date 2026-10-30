@@ -385,30 +385,36 @@ export class SpacesSpring {
             return;
         }
 
+        // Another handler set for one of them after this one is its owner's
+        // from then on, and stays when this goes; so the keys are taken only
+        // where that can be seen.
+        const bindings = { owner: this, handler: null, modes: {}, claimed: new Set(), patch: null };
+        const patch = new InstancePatch(wm, 'setCustomKeybindingHandler');
+        if (!patch.enable(function (original, name, ...args) {
+            if (name in BINDINGS && args[args.length - 1] !== bindings.handler)
+                bindings.claimed.add(name);
+            return original.call(this, name, ...args);
+        })) {
+            this._tellOnce('bump-setter', 'Something else holds the shell\'s keybinding setter; there is no ' +
+                'bump at the ends.');
+            return;
+        }
+        bindings.patch = patch;
+
         // The binding comes last: GNOME 45 passes no event before it. Off, the
         // handler is the shell's alone and holds nothing of this, for anything
         // that kept it.
-        const bindings = { owner: this, handler: null, modes: {}, claimed: new Set(), patch: null };
         bindings.handler = (...args) => {
             const binding = args[args.length - 1];
             const owner = bindings.owner;
             owner?._guard('bumping at the end', () => owner._maybeBump(binding?.get_name?.()));
             wm._showWorkspaceSwitcher(...args);
         };
+        this._bindings = bindings;
         for (const name of Object.keys(BINDINGS)) {
             bindings.modes[name] = wm._allowedKeybindings?.[name] ?? BINDING_MODES;
             wm.setCustomKeybindingHandler(name, BINDING_MODES, bindings.handler);
         }
-        // Another handler set for one of them after this one is its owner's
-        // from then on, and stays when this goes.
-        const patch = new InstancePatch(wm, 'setCustomKeybindingHandler');
-        if (patch.enable(function (original, name, ...args) {
-            if (name in BINDINGS && args[args.length - 1] !== bindings.handler)
-                bindings.claimed.add(name);
-            return original.call(this, name, ...args);
-        }))
-            bindings.patch = patch;
-        this._bindings = bindings;
     }
 
     _disable() {
