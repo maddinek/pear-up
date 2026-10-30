@@ -119,6 +119,7 @@ export class DockMagnifier {
         this._docks = new Map();
         this._scanId = 0;
         this._dragging = false;
+        this._shutDown = false;
         this._unwatchBounces = null;
 
         // A throw halfway through would leave whatever was connected so far
@@ -143,7 +144,12 @@ export class DockMagnifier {
         uiGroup.connectObject(
             added, (_group, child) => this._onUiGroupChanged(child),
             removed, (_group, child) => this._onUiGroupChanged(child),
+            'destroy', () => this._onShutdown(),
             this);
+        // At shutdown the shell destroys the UI group, docks and all, without
+        // disabling extensions first. Usually the group's destroy says so
+        // first; the shell's own signal is there in case it does not.
+        global.connectObject('shutdown', () => this._onShutdown(), this);
         Main.layoutManager.connectObject('monitors-changed',
             () => this._queueScan(), this);
         Main.extensionManager.connectObject('extension-state-changed',
@@ -178,6 +184,10 @@ export class DockMagnifier {
         return this._maxScale;
     }
 
+    get shutDown() {
+        return this._shutDown;
+    }
+
     // The lock screen tears the docks down anyway, and Pear Up is not enabled
     // there, but a dock that lingered for a frame must not magnify behind it.
     get paused() {
@@ -210,6 +220,20 @@ export class DockMagnifier {
         this._wakeAll();
     }
 
+    // Nothing queued may look at the UI group from here on: it is disposed of
+    // by the time an idle callback would run.
+    _onShutdown() {
+        if (this._shutDown)
+            return;
+        this._shutDown = true;
+        if (this._scanId) {
+            GLib.source_remove(this._scanId);
+            this._scanId = 0;
+        }
+        for (const dock of this._docks.values())
+            dock.cancelWake();
+    }
+
     // The overlay itself comes and goes as a child of the UI group too, and is
     // not a reason to look for docks; nor is the bounce overlay (dockBounce.js).
     _onUiGroupChanged(child) {
@@ -220,17 +244,20 @@ export class DockMagnifier {
     // These signals fire in bursts, and some of them while the shell is still
     // delivering an event; looking for docks is left to an idle callback.
     _queueScan() {
-        if (this._scanId)
+        if (this._scanId || this._shutDown)
             return;
 
         this._scanId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._scanId = 0;
-            this.guard('looking for Dash to Dock', () => this._scan());
+            if (!this._shutDown)
+                this.guard('looking for Dash to Dock', () => this._scan());
             return GLib.SOURCE_REMOVE;
         });
     }
 
     _scan() {
+        if (this._shutDown)
+            return;
         const found = Main.layoutManager.uiGroup.get_children().filter(isDock);
 
         for (const dock of [...this._docks.keys()]) {
@@ -272,7 +299,10 @@ export class DockMagnifier {
         this._unwatchBounces?.();
         this._unwatchBounces = null;
 
-        Main.layoutManager.uiGroup.disconnectObject(this);
+        // A destroyed UI group took its handlers with it.
+        if (!this._shutDown)
+            Main.layoutManager.uiGroup.disconnectObject(this);
+        global.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
         Main.extensionManager.disconnectObject(this);
         Main.sessionMode.disconnectObject(this);
@@ -384,7 +414,7 @@ class DockMagnification {
     // An overlay already there only needs its frame updates started again,
     // which creates nothing and can happen at once.
     wake() {
-        if (this._broken)
+        if (this._broken || this._magnifier.shutDown)
             return;
         if (this._timeline) {
             this._resume();
@@ -397,6 +427,8 @@ class DockMagnification {
 
         this._wakeId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._wakeId = 0;
+            if (this._magnifier.shutDown)
+                return GLib.SOURCE_REMOVE;
             try {
                 this._start();
             } catch (e) {
@@ -416,7 +448,8 @@ class DockMagnification {
     // A resting swell starts its frame updates again, and the first one
     // redraws whatever the signature says.
     _resume() {
-        if (!this._timeline || this._timeline.is_playing() || this._destroyed)
+        if (!this._timeline || this._timeline.is_playing() ||
+            this._destroyed || this._magnifier.shutDown)
             return;
         this._dirty = true;
         this._quiet = 0;
@@ -1164,7 +1197,7 @@ class DockMagnification {
         // any that are in the air.
         if (this._claimed) {
             this._claimed = false;
-            claimDock(this._dock, false, handBack);
+            claimDock(this._dock, false, handBack && !this._magnifier.shutDown);
         }
         this._apps = [];
     }

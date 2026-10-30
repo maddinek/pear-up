@@ -147,6 +147,7 @@ export class DockBounce {
         this._bounces = new Map();
         this._docks = new Map();
         this._scanId = 0;
+        this._shutDown = false;
 
         try {
             const { uiGroup } = Main.layoutManager;
@@ -154,7 +155,9 @@ export class DockBounce {
             uiGroup.connectObject(
                 added, (_group, child) => this._onUiGroupChanged(child),
                 removed, (_group, child) => this._onUiGroupChanged(child),
+                'destroy', () => this._onShutdown(),
                 this);
+            global.connectObject('shutdown', () => this._onShutdown(), this);
             this.setModes({ onLaunch, onAttention });
             active = this;
         } catch (e) {
@@ -262,8 +265,12 @@ export class DockBounce {
     }
 
     wakeDock(dock) {
-        if (this.bouncing)
+        if (this.bouncing && !this._shutDown)
             this._docks.get(dock)?.wake();
+    }
+
+    get shutDown() {
+        return this._shutDown;
     }
 
     // The hop in the air comes down; none starts after it.
@@ -325,12 +332,25 @@ export class DockBounce {
             this._queueScan();
     }
 
+    // The shell is going: it destroys the UI group, and everything in it, as it
+    // shuts down, without disabling extensions first. Nothing queued may look
+    // at that group afterwards (see dockMagnifier.js).
+    _onShutdown() {
+        this._shutDown = true;
+        if (this._scanId) {
+            GLib.source_remove(this._scanId);
+            this._scanId = 0;
+        }
+    }
+
     _queueScan() {
-        if (this._scanId)
+        if (this._scanId || this._shutDown)
             return;
 
         this._scanId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._scanId = 0;
+            if (this._shutDown)
+                return GLib.SOURCE_REMOVE;
             try {
                 this._scan();
                 if (this.bouncing) {
@@ -345,6 +365,8 @@ export class DockBounce {
     }
 
     _scan() {
+        if (this._shutDown)
+            return;
         const found = Main.layoutManager.uiGroup.get_children().filter(isDock);
 
         for (const dock of [...this._docks.keys()]) {
@@ -389,7 +411,10 @@ export class DockBounce {
             this._scanId = 0;
         }
 
-        Main.layoutManager.uiGroup.disconnectObject(this);
+        // A destroyed UI group took its handlers with it.
+        if (!this._shutDown)
+            Main.layoutManager.uiGroup.disconnectObject(this);
+        global.disconnectObject(this);
         if (this._onLaunch)
             Shell.AppSystem.get_default().disconnectObject(this);
         if (this._onAttention)
@@ -425,7 +450,7 @@ class DockBounceOverlay {
     }
 
     wake() {
-        if (this._timeline || this._broken)
+        if (this._timeline || this._broken || this._owner.shutDown)
             return;
         if (this._owner.prune(GLib.get_monotonic_time()).size === 0) {
             this._stopWaiting();
