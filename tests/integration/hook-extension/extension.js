@@ -1988,6 +1988,9 @@ export default class TestHookExtension extends Extension {
             trackerState: tracker?._state ?? null,
             trackerProgress: tracker?._progress ?? null,
             emitOwn: !!tracker && Object.hasOwn(tracker, 'emit'),
+            // GNOME 48.3 and 49 on: updates at progress 0 do not begin to
+            // show the overview (gnome-shell fb30a942), which is the bug.
+            ignoresZeroProgress: /progress\s*===\s*0/.test(Main.overview._gestureUpdate?.toString() ?? ''),
             guard: guard?.state ?? null,
         });
     }

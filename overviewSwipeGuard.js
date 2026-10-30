@@ -4,17 +4,17 @@
 //
 // This is a fix for a GNOME bug, not a macOS behaviour, so it has no switch of
 // its own: it is on whenever Pear Up is, and does nothing a user would see but
-// keep the shell out of a broken state. From GNOME 49 the overview ignores a
-// swipe's updates while their progress is 0 (overview.js _gestureUpdate), so it
-// never begins to show; when the fingers lift, its end handler asks to go from
-// hidden to hiding, which is not allowed, and throws ("Invalid overview shown
-// transition from HIDDEN to HIDING") before it has told the overview's controls
-// the gesture is over. Their gesture stays in progress, and the desktops'
+// keep the shell out of a broken state. From GNOME 48.3 and 49 the overview
+// ignores a swipe's updates while their progress is 0 (overview.js
+// _gestureUpdate, gnome-shell fb30a942), so it never begins to show; when the
+// fingers lift, its end handler asks to go from hidden to hiding, which is not
+// allowed, and throws ("Invalid overview shown transition from HIDDEN to
+// HIDING") before it has told the overview's controls the gesture is over. Their gesture stays in progress, and the desktops'
 // views, made for the overview when the swipe began, stay built, hooked to the
 // stage's key presses and the overview's signals, until the overview next
 // opens for real. Which way is the closing way depends on Natural Scrolling and
 // Swipe Between Desktops Like macOS: up with both off, as on framy; down
-// otherwise. GNOME 48 and earlier show the overview at progress 0 instead, and
+// otherwise. Earlier releases show the overview at progress 0 instead, and
 // throw only for a swipe that ends with no update at all.
 //
 // The overview's handler is bound to its tracker when the shell makes it, so

@@ -1819,8 +1819,8 @@ finally:
         GLib.usleep(800 * 1000)
 
 # ------------------------------------------ a swipe that never opens the overview
-# From GNOME 49 the overview ignores a swipe's updates while their progress is
-# 0, so a three-finger swipe the closing way from the desktop never shows it,
+# From GNOME 48.3 and 49 the overview ignores a swipe's updates while their
+# progress is 0, so a three-finger swipe the closing way from the desktop never shows it,
 # and its end handler then throws ("Invalid overview shown transition from
 # HIDDEN to HIDING") before telling the controls the gesture is over: their
 # gesture stays in progress and the desktops' views made for the overview stay
@@ -1828,7 +1828,7 @@ finally:
 # Between Desktops Like macOS, so every combination is swiped both ways, ended
 # by lifting the fingers, by the tracker being interrupted and by a cancel.
 # Pear Up's guard is always on; with Pear Up disabled the same swipe must throw
-# on 49 and later, which shows these checks can see the bug at all.
+# on a shell that has the bug, which shows these checks can see it at all.
 INVALID_SHOWN = "Invalid overview shown transition"
 
 
@@ -1868,12 +1868,6 @@ def describe_left(state):
             f"tracker {state['trackerState']}/{state['trackerProgress']}")
 
 
-try:
-    SHELL_MAJOR_NOW = int(subprocess.run(["gnome-shell", "--version"], capture_output=True,
-                                         text=True, check=False).stdout.split()[-1].split(".")[0])
-except (ValueError, IndexError):
-    SHELL_MAJOR_NOW = 0
-
 print()
 print("  a swipe that never opens the overview:")
 natural_before = touchpad_natural()
@@ -1883,6 +1877,10 @@ try:
     overview_closed()
     GLib.usleep(500 * 1000)
     first = overview_swipe_state()
+    has_bug = first["ignoresZeroProgress"]
+    if not has_bug:
+        print("  note: this shell begins to show the overview at progress 0 (before 48.3), "
+              "so only a swipe with no update at all reaches the guard")
     check("Pear Up guards the overview's swipe while it is enabled, with no switch of its own",
           first["emitOwn"] and first["guard"] and first["guard"]["on"],
           f"emit own {first['emitOwn']}, guard {first['guard']}")
@@ -1907,10 +1905,10 @@ try:
                     print(f"  note: no cancelled-swipe path on this shell; skipped for {label}")
                     continue
                 never = bool(fed) and bool(fed["progress"]) and max(fed["progress"]) == 0
-                # GNOME 48 begins to show the overview at progress 0, so its
-                # end is a valid one and the guard has nothing to catch, unless
-                # there was no update at all.
-                expected = 1 if SHELL_MAJOR_NOW >= 49 or how == "noupdate" else 0
+                # Before 48.3 the shell begins to show the overview at progress
+                # 0, so its end is a valid one and the guard has nothing to
+                # catch, unless there was no update at all.
+                expected = 1 if has_bug or how == "noupdate" else 0
                 check(f"{label}: the closing swipe ({how}) never moves the overview, and leaves "
                       "nothing of it behind",
                       never and left_clean(after) and after["guard"]["caught"] == caught + expected,
@@ -1950,7 +1948,7 @@ try:
     check("none of it put an invalid overview transition in the shell's log", not thrown,
           "; ".join(thrown[:3]) or "nothing")
 
-    # Without Pear Up, the shell's own way: on 49 and later this throws and
+    # Without Pear Up, the shell's own way: with the bug this throws and
     # leaves the gesture and the views behind. Enabled again, the next such
     # swipe tidies that up as well.
     pear_up_setting(GESTURE_KEY, "false")
@@ -1964,15 +1962,15 @@ try:
     GLib.usleep(500 * 1000)
     bare = overview_swipe_state()
     bare_thrown = shell_log_since(bare_log, INVALID_SHOWN)
-    if SHELL_MAJOR_NOW >= 49:
+    if has_bug:
         check("Pear Up disabled, GNOME's own overview swipe throws on this one and leaves the "
               "overview half made, so these checks see the bug",
               not unguarded["emitOwn"] and bare_thrown and bare["gestureInProgress"]
               and bare["views"],
               f"emit own {unguarded['emitOwn']}, thrown {len(bare_thrown)}, {describe_left(bare)}")
     else:
-        check(f"Pear Up disabled, GNOME {SHELL_MAJOR_NOW}'s own overview swipe shows the overview "
-              "at progress 0 and does not throw (the bug came with 49)",
+        check("Pear Up disabled, this shell's own overview swipe shows the overview "
+              "at progress 0 and does not throw (the bug came with 48.3)",
               not unguarded["emitOwn"] and not bare_thrown and left_clean(bare),
               f"emit own {unguarded['emitOwn']}, thrown {len(bare_thrown)}, {describe_left(bare)}")
     call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
