@@ -19,6 +19,13 @@ from gi.repository import GLib
 DOCK_UUID = "dash-to-dock@micxgx.gmail.com"
 DOCK_SCHEMA = "org.gnome.shell.extensions.dash-to-dock"
 OVERLAY = "pearup-dock-magnifier"
+BLUR_UUID = "blur-my-shell@aunetx"
+BLUR_SCHEMA = "org.gnome.shell.extensions.blur-my-shell.dash-to-dock"
+
+# Frames a resting shell may still run over a count, beyond what it ran with
+# nothing on screen moving: a hover label finishing its fade, say. A swell
+# updating every frame runs one per refresh, 120 over two seconds at 60 Hz.
+FRAME_SLACK = 8
 
 # St.Side, as Dash to Dock stores its position.
 TOP, RIGHT, BOTTOM, LEFT = range(4)
@@ -54,6 +61,10 @@ class DockChecks:
 
     def move(self, x, y):
         self._hook("MovePointer", (float(x), float(y)), "(dd)")
+
+    def frames(self, ms, ticking=False):
+        """Frames the shell's frame clocks ran over `ms` milliseconds."""
+        return self._hook("CountFrames", (int(ms), ticking), "(ub)")
 
     def _extension_info(self, uuid):
         return self._call("org.gnome.Shell", "/org/gnome/Shell",
@@ -113,9 +124,12 @@ class DockChecks:
         return None
 
     def _away(self):
+        self._away_now()
+        GLib.usleep(SETTLE)
+
+    def _away_now(self):
         # The middle of the screen, nowhere near any edge.
         self.move(640, 360)
-        GLib.usleep(SETTLE)
 
     def _hover_target(self, dock):
         """The icon in the middle of the dock, and where to put the pointer.
@@ -140,13 +154,14 @@ class DockChecks:
         self._baseline = {self._key(item): (item["opacity"], item["siblingOpacities"])
                           for item in dock["items"]}
         self._baseline["background"] = dock["backgroundOpacity"]
+        self._baseline["blur"] = dock.get("blur")
 
     @staticmethod
     def _key(item):
         return item["id"] or f"{item['kind']}@{round(item['slot'][0])},{round(item['slot'][1])}"
 
     # ------------------------------------------------------------------ checks
-    def _check_magnified(self, state, pointer, max_scale, where):
+    def _check_magnified(self, state, pointer, max_scale, where, frosted=False):
         check = self._check
         dock = self._dock(state)
         if not check(f"[{where}] the dock is still there", dock):
@@ -262,7 +277,20 @@ class DockChecks:
         margin = 64
         pieces = [child for child in overlays[0]["children"]
                   if child["type"] == "clone" and child["clip"]]
-        if dock["background"] and pieces:
+        if frosted:
+            # Blur my Shell's blur cannot be stretched with the tint, so
+            # neither is: the dock's own shelf is drawn, at its own size.
+            blur = dock.get("blur") or {}
+            rest = self._baseline.get("blur") or {}
+            check(f"[{where}] under Blur my Shell's blur the shelf keeps its size",
+                  not pieces and dock["backgroundOpacity"] == self._baseline.get("background"),
+                  f"{len(pieces)} stretched pieces, background opacity "
+                  f"{self._baseline.get('background')} -> {dock['backgroundOpacity']}")
+            check(f"[{where}] and the blur stays where it was, under the shelf",
+                  blur.get("visible") and blur.get("box") == rest.get("box") and
+                  blur.get("clip") == rest.get("clip"),
+                  f"blur {blur} (was {rest})")
+        elif dock["background"] and pieces:
             spans = []
             for piece in pieces:
                 start = piece["box"][axis]
@@ -364,6 +392,89 @@ class DockChecks:
         check("and goes again when it is switched back off", plain_again == 0,
               f"alpha={plain_again}")
 
+    def _check_resting(self, target, pointer):
+        """A swell that has settled under a resting pointer draws nothing more
+        until something changes, and still follows the pointer once it moves.
+
+        Counted from outside: the frames the shell runs at all, against what
+        it runs with nothing on screen and what a running clock counts."""
+        check = self._check
+        dock = self._dock(self.state())
+        GLib.usleep(500 * 1000)
+        resting = self.frames(2000)
+        check("the shell rests while the pointer rests on the magnified dock",
+              resting <= self._idle_frames + FRAME_SLACK,
+              f"{resting} frames in 2 s, {self._idle_frames} with nothing hovered, "
+              f"{self._busy_frames} with a clock running")
+        self._check_magnified(self.state(), pointer, 1.75, "right-rested")
+
+        # Woken by motion alone: the pointer stays on the dock throughout.
+        vertical = dock["position"] in (LEFT, RIGHT)
+        apps = sorted((item for item in dock["items"]
+                       if item["kind"] == "icon" and item["id"] != "show-apps"),
+                      key=lambda item: _box_center(item["slot"])[1 if vertical else 0])
+        index = next(i for i, item in enumerate(apps) if item["id"] == target["id"])
+        other = apps[index - 1] if index > 0 else apps[index + 1]
+        moved = _box_center(other["slot"])
+        self.move(*moved)
+        GLib.usleep(SETTLE)
+        self._check_magnified(self.state(), moved, 1.75, "right-moved")
+        self.move(*pointer)
+        GLib.usleep(SETTLE)
+
+    def _check_frosted(self):
+        """With Blur my Shell's dock blur on, static as on framy and dynamic,
+        the magnified icons still grow, and the shelf with its blur and tint
+        stays together at its own size."""
+        check = self._check
+        info = self._extension_info(BLUR_UUID)
+        if not info:
+            print("  note: Blur my Shell is not installed here; skipping the blur checks")
+            return
+        self._gsettings(BLUR_SCHEMA, "blur", "true")
+        try:
+            for static in ("true", "false"):
+                kind = "static" if static == "true" else "dynamic"
+                self._gsettings(BLUR_SCHEMA, "static-blur", static)
+                if static == "true":
+                    self._call("org.gnome.Shell", "/org/gnome/Shell",
+                               "org.gnome.Shell.Extensions", "EnableExtension",
+                               (BLUR_UUID,), "(s)")
+                self._away()
+                blurred = None
+                for _ in range(40):
+                    blurred = (self._dock(self.state()) or {}).get("blur")
+                    if blurred and blurred["visible"]:
+                        break
+                    GLib.usleep(250 * 1000)
+                info = self._extension_info(BLUR_UUID)
+                if not check(f"Blur my Shell blurs the dock ({kind})",
+                             blurred and blurred["visible"],
+                             f"state={info.get('state')} error={info.get('error')} blur={blurred}"):
+                    continue
+                # Settled before it is taken as the shelf to compare with.
+                GLib.usleep(SETTLE)
+                self._record_baseline(self._dock(self.state()))
+                _, pointer = self._hover()
+                self._check_magnified(self.state(), pointer, 1.75, f"blur-{kind}", frosted=True)
+                if static == "true":
+                    self._capture("dock-magnified-blur.png")
+                self._away()
+                self.check_left_nothing(f"the pointer leaves the blurred dock ({kind})")
+        finally:
+            try:
+                self._call("org.gnome.Shell", "/org/gnome/Shell",
+                           "org.gnome.Shell.Extensions", "DisableExtension",
+                           (BLUR_UUID,), "(s)")
+            except GLib.Error as exc:
+                print(f"  note: could not disable Blur my Shell: {exc.message.splitlines()[0]}")
+            for _ in range(40):
+                if not (self._dock(self.state()) or {}).get("blur"):
+                    break
+                GLib.usleep(250 * 1000)
+            self._away()
+            self._record_baseline(self._dock(self.state()))
+
     # -------------------------------------------------------------- the run
     def run(self):
         check = self._check
@@ -398,6 +509,14 @@ class DockChecks:
         self._record_baseline(self._dock(state))
         self.ready = True
 
+        # What the frame count is measured against: the shell with nothing
+        # moving, and with a clock of the hook's own running.
+        self._idle_frames = self.frames(2000)
+        self._busy_frames = self.frames(1000, True)
+        check("a running frame clock is counted, and an idle one is not",
+              self._busy_frames >= 20 and self._idle_frames <= FRAME_SLACK,
+              f"{self._busy_frames} frames in 1 s running, {self._idle_frames} in 2 s idle")
+
         # ---- the backdrop behind the focused app, with the pointer elsewhere
         self._check_focus_highlight()
 
@@ -407,6 +526,9 @@ class DockChecks:
         self._check_magnified(state, pointer, 1.75, "right")
 
         self._capture("dock-magnified-right.png")
+
+        # ---- resting there: nothing redrawn, yet still following the pointer
+        self._check_resting(target, pointer)
 
         # ---- the size setting applies while hovered
         self._pear_up_setting("dock-magnification-size", "250")
@@ -453,6 +575,9 @@ class DockChecks:
         state = self.state()
         check("switching magnification back on magnifies the hovered dock",
               len(state["overlays"]) == 1, f"{len(state['overlays'])} overlays")
+
+        # ---- Blur my Shell's dock blur, as framy has it
+        self._check_frosted()
 
         # ---- bottom edge: Dash to Dock rebuilds its dock, which must be found
         self._away()

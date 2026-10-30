@@ -47,6 +47,15 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     && dnf clean all \
     && (glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true)
 
+# Blur my Shell, for the check that magnification and its dock blur agree.
+# Installed but not enabled, like Dash to Dock; the dock checks switch it on
+# for a moment and off again. Not every release packages it, so its absence
+# only skips that check.
+RUN (dnf install -y --setopt=install_weak_deps=False \
+        gnome-shell-extension-blur-my-shell || true) \
+    && dnf clean all \
+    && (glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true)
+
 # Nothing here needs networking, printing, or a boot splash. Masking these keeps
 # startup to a couple of seconds and the logs readable.
 RUN systemctl mask \

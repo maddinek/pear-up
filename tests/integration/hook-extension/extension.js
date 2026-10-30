@@ -192,6 +192,11 @@ const IFACE = `
       <arg type="s" direction="in" name="path"/>
       <arg type="b" direction="out" name="saved"/>
     </method>
+    <method name="CountFrames">
+      <arg type="u" direction="in" name="ms"/>
+      <arg type="b" direction="in" name="ticking"/>
+      <arg type="u" direction="out" name="frames"/>
+    </method>
     <method name="MoveClock">
       <arg type="s" direction="in" name="box"/>
       <arg type="b" direction="out" name="moved"/>
@@ -612,6 +617,9 @@ export default class TestHookExtension extends Extension {
         this.LogoutCalls();
         this.ReleaseLeftEdge();
         this._stopBannerTrace();
+        for (const stop of this._frameCounts ?? [])
+            stop();
+        this._frameCounts = null;
         this._pointer = null;
         this._keyboard = null;
         this._export?.unexport();
@@ -1392,6 +1400,38 @@ export default class TestHookExtension extends Extension {
         return true;
     }
 
+    // How many frames the shell's frame clocks ran over `ms` milliseconds: the
+    // stage's before-update, which every frame clock dispatch emits whether or
+    // not anything is then redrawn, so a timeline left running with nothing
+    // to show is counted too. With `ticking` a repeating timeline of the
+    // hook's own runs meanwhile, which shows what a busy clock counts here.
+    CountFramesAsync([ms, ticking], invocation) {
+        let frames = 0;
+        const id = global.stage.connect('before-update', () => frames++);
+        let timeline = null;
+        if (ticking) {
+            timeline = new Clutter.Timeline({ actor: global.stage, duration: 1000, repeat_count: -1 });
+            timeline.start();
+        }
+        this._frameCounts ??= new Set();
+        let timeoutId = 0;
+        const stop = () => {
+            this._frameCounts?.delete(stop);
+            if (timeoutId)
+                GLib.source_remove(timeoutId);
+            timeoutId = 0;
+            global.stage.disconnect(id);
+            timeline?.stop();
+            invocation.return_value(new GLib.Variant('(u)', [frames]));
+        };
+        timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+            timeoutId = 0;
+            stop();
+            return GLib.SOURCE_REMOVE;
+        });
+        this._frameCounts.add(stop);
+    }
+
     _backgroundAlpha(actor) {
         try {
             return actor.get_theme_node().get_background_color().alpha;
@@ -1446,8 +1486,20 @@ export default class TestHookExtension extends Extension {
                     };
                 });
                 const next = children[children.indexOf(dock) + 1];
+                // Blur my Shell's dock blur, beside the dash; its background
+                // is clipped to where the blur is drawn.
+                const blur = dash.get_parent()?.get_children()
+                    .find(child => child.name === 'bms-dash-backgroundgroup');
+                const blurred = blur?.get_first_child();
                 return {
                     position: dock._position,
+                    slideX: dock._slider?.slideX ?? null,
+                    blur: blur ? {
+                        visible: blur.visible,
+                        box: stageBox(blur),
+                        clip: blurred?.has_clip ? blurred.get_clip() : null,
+                        clipOrigin: blurred ? [...blurred.get_transformed_position()] : null,
+                    } : null,
                     box: stageBox(dock),
                     background: dash._background ? stageBox(dash._background) : null,
                     backgroundOpacity: dash._background?.opacity ?? null,

@@ -138,6 +138,13 @@ dbus-run-session -- bash -c '
     python3 /src/tests/integration/assert.py "$UUID" "$ARTIFACTS"
     status=$?
 
+    # Ended the way a logout ends it, with Pear Up enabled again over the dock,
+    # to catch anything left queued against the torn-down shell.
+    echo
+    echo "  shutdown:"
+    python3 /src/tests/integration/shutdown_check.py "$UUID" $SHELL_PID "$ARTIFACTS/shell.log" \
+        || status=1
+
     kill $SHELL_PID 2>/dev/null
     wait $SHELL_PID 2>/dev/null
     exit $status
