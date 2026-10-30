@@ -20,6 +20,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as WindowManager from 'resource:///org/gnome/shell/ui/windowManager.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 import * as Screenshot from 'resource:///org/gnome/shell/ui/screenshot.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
@@ -34,6 +35,24 @@ const IFACE = `
     </method>
     <method name="GetMenuTree">
       <arg type="s" direction="out" name="tree"/>
+    </method>
+    <method name="GetBarIdentity">
+      <arg type="s" direction="out" name="bar"/>
+    </method>
+    <method name="MeasureMenuSync">
+      <arg type="s" direction="in" name="wmClasses"/>
+      <arg type="i" direction="in" name="rounds"/>
+      <arg type="s" direction="out" name="result"/>
+    </method>
+    <method name="MeasureFirstOpen">
+      <arg type="s" direction="out" name="result"/>
+    </method>
+    <method name="WatchBarBuilds">
+      <arg type="b" direction="in" name="on"/>
+      <arg type="s" direction="out" name="builds"/>
+    </method>
+    <method name="ArmShutdownProbe">
+      <arg type="b" direction="out" name="armed"/>
     </method>
     <method name="FocusFirstWindow">
       <arg type="b" direction="out" name="focused"/>
@@ -341,6 +360,48 @@ function describeItem(item, withChildren = true) {
     };
 }
 
+// A number per panel button, given the first time the hook sees it, so the
+// suite can tell a bar that was kept from one built again with the same titles.
+const buttonSerials = new WeakMap();
+let nextButtonSerial = 1;
+function serialOf(button) {
+    if (!button)
+        return null;
+    if (!buttonSerials.has(button))
+        buttonSerials.set(button, nextButtonSerial++);
+    return buttonSerials.get(button);
+}
+
+// What a menu holds is what it shows when it opens: Pear Up makes a menu's
+// items the first time it opens, and the app menu again on every open. So the
+// hook opens a closed menu, without animation, reads it and closes it again.
+function itemsWhenOpen(menu) {
+    if (!menu)
+        return [];
+    if (menu.isOpen)
+        return menu._getMenuItems?.() ?? [];
+    menu.open(BoxPointer.PopupAnimation.NONE);
+    const items = menu._getMenuItems?.() ?? [];
+    menu.close(BoxPointer.PopupAnimation.NONE);
+    return items;
+}
+
+function median(values) {
+    if (values.length === 0)
+        return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+}
+
+function percentile(values, p) {
+    if (values.length === 0)
+        return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)];
+}
+
+const round2 = v => (v === null ? null : Math.round(v * 100) / 100);
+
 // Pear Up names its panel buttons after its own UUID, plus the System Menu.
 const PEAR_UP_UUID = 'pear-up@maddinek.github.io';
 const LOGO_ROLE = 'pearup-logo';
@@ -551,6 +612,9 @@ export default class TestHookExtension extends Extension {
     }
 
     disable() {
+        this._measurement?.end({ error: 'the hook was disabled' });
+        this._disarmShutdownProbe();
+        this.WatchBarBuilds(false);
         this._stopWatchingAnimations();
         this.StandInLikeMagicLamp(false);
         this.LogoutCalls();
@@ -1936,7 +2000,10 @@ export default class TestHookExtension extends Extension {
     // reading them without opening one reports an empty menu.
     OpenSubMenu(label) {
         for (const role of this._pearUpRoles()) {
-            const items = Main.panel.statusArea[role]?.menu?._getMenuItems?.() ?? [];
+            const menu = Main.panel.statusArea[role]?.menu;
+            const items = role === LOGO_ROLE
+                ? menu?._getMenuItems?.() ?? []
+                : itemsWhenOpen(menu);
             const found = items.find(item => item.menu && labelOf(item) === label);
             if (!found)
                 continue;
@@ -1949,12 +2016,289 @@ export default class TestHookExtension extends Extension {
         return JSON.stringify(null);
     }
 
+    // The bar's buttons as they stand, without opening anything: which button
+    // object holds each role, and how many items its menu has been given so far.
+    GetBarIdentity() {
+        return JSON.stringify(this._pearUpRoles()
+            .filter(role => role.startsWith(PEAR_UP_UUID))
+            .map(role => {
+                const button = Main.panel.statusArea[role];
+                return {
+                    role,
+                    label: button?.label?.text ?? null,
+                    serial: serialOf(button),
+                    items: button?.menu?._getMenuItems?.().length ?? 0,
+                };
+            }));
+    }
+
+    _barSerials() {
+        return this._pearUpRoles()
+            .filter(role => role.startsWith(PEAR_UP_UUID))
+            .map(role => serialOf(Main.panel.statusArea[role]));
+    }
+
+    // Puts windows in front by turns and times each menu bar sync that follows,
+    // the way focus moves when someone clicks between windows. wmClasses is one
+    // class (two windows of it, the same app) or two separated by a comma (one
+    // window of each). The time is Pear Up's own sync, timed by wrapping it on
+    // the running extension for the length of the measurement: this is a
+    // measurement, so it reaches inside, and it reports null where it cannot.
+    // A bar counts as rebuilt when any of its buttons is a new object.
+    MeasureMenuSyncAsync([wmClasses, rounds], invocation) {
+        let replied = false;
+        const reply = result => {
+            if (replied)
+                return;
+            replied = true;
+            invocation.return_value(new GLib.Variant('(s)', [JSON.stringify(result)]));
+        };
+        if (this._measurement) {
+            reply({ error: 'a measurement is already running' });
+            return;
+        }
+        const classes = wmClasses.split(',').filter(Boolean);
+        const windowsOf = wmClass => global.get_window_actors()
+            .map(actor => actor.meta_window)
+            .filter(win => win?.get_wm_class() === wmClass &&
+                win.get_window_type() === Meta.WindowType.NORMAL);
+        const windows = classes.length === 1
+            ? windowsOf(classes[0]).slice(0, 2)
+            : classes.map(wmClass => windowsOf(wmClass)[0]).filter(Boolean);
+        if (windows.length < 2) {
+            reply({ error: `found ${windows.length} windows for ${wmClasses}` });
+            return;
+        }
+
+        const pearUp = Main.extensionManager.lookup(PEAR_UP_UUID)?.stateObj;
+        const original = pearUp?._syncMenuVisibility;
+        const durations = [];
+        const wrapper = function (...args) {
+            const start = GLib.get_monotonic_time();
+            try {
+                return original.apply(this, args);
+            } finally {
+                durations.push((GLib.get_monotonic_time() - start) / 1000);
+            }
+        };
+        const hadOwn = pearUp ? Object.hasOwn(pearUp, '_syncMenuVisibility') : false;
+        if (typeof original === 'function')
+            pearUp._syncMenuVisibility = wrapper;
+
+        // Ended once, whichever way: finished, failed, or the hook disabled
+        // (Pear Up's own disable re-enables the hook) — never leaving the
+        // wrapper or the timer behind.
+        const measurement = {
+            sourceId: 0,
+            end: result => {
+                if (measurement.sourceId) {
+                    GLib.source_remove(measurement.sourceId);
+                    measurement.sourceId = 0;
+                }
+                if (pearUp && pearUp._syncMenuVisibility === wrapper) {
+                    if (hadOwn)
+                        pearUp._syncMenuVisibility = original;
+                    else
+                        delete pearUp._syncMenuVisibility;
+                }
+                if (this._measurement === measurement)
+                    this._measurement = null;
+                reply(result);
+            },
+        };
+        this._measurement = measurement;
+
+        let step = 0;
+        let rebuilds = 0;
+        let previous = this._barSerials();
+        const labels = [];
+        const next = () => {
+            try {
+                const serials = this._barSerials();
+                if (step > 0) {
+                    if (serials.length !== previous.length ||
+                        serials.some((serial, i) => serial !== previous[i]))
+                        rebuilds++;
+                    labels.push(Main.panel.statusArea[`${PEAR_UP_UUID}-0`]?.label?.text ?? null);
+                } else {
+                    // The warm-up activation is not counted.
+                    durations.length = 0;
+                }
+                previous = serials;
+                if (step >= rounds) {
+                    measurement.sourceId = 0;
+                    measurement.end({
+                        rounds,
+                        syncs: durations.length,
+                        rebuilds,
+                        labels,
+                        medianMs: round2(median(durations)),
+                        p95Ms: round2(percentile(durations, 0.95)),
+                        maxMs: round2(durations.length ? Math.max(...durations) : null),
+                        timed: typeof original === 'function',
+                    });
+                    return GLib.SOURCE_REMOVE;
+                }
+                windows[step % 2].activate(global.get_current_time());
+                step++;
+                return GLib.SOURCE_CONTINUE;
+            } catch (e) {
+                measurement.sourceId = 0;
+                measurement.end({ error: `${e}` });
+                return GLib.SOURCE_REMOVE;
+            }
+        };
+        try {
+            windows[1].activate(global.get_current_time());
+        } catch (e) {
+            measurement.end({ error: `${e}` });
+            return;
+        }
+        // Long enough for the focus change to reach Pear Up's idle and the bar
+        // to settle; short of anything a person would notice.
+        measurement.sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, next);
+    }
+
+    // How long each bar menu takes to open, the first time and the second.
+    // Lazily built menus move their cost from the focus change to the first
+    // open, so this is the other half of the measurement above.
+    MeasureFirstOpen() {
+        const result = {};
+        for (const role of this._pearUpRoles().filter(r => r.startsWith(PEAR_UP_UUID))) {
+            const button = Main.panel.statusArea[role];
+            const menu = button?.menu;
+            if (!menu || menu.isOpen)
+                continue;
+            const times = [];
+            for (let i = 0; i < 2; i++) {
+                const start = GLib.get_monotonic_time();
+                menu.open(BoxPointer.PopupAnimation.NONE);
+                times.push(round2((GLib.get_monotonic_time() - start) / 1000));
+                menu.close(BoxPointer.PopupAnimation.NONE);
+            }
+            result[button.label?.text ?? role] = { firstMs: times[0], secondMs: times[1] };
+        }
+        return JSON.stringify(result);
+    }
+
+    // Records every Pear Up button added to or taken off the left box, with
+    // whether a desktop switch was under way at that moment, and samples the
+    // switch meanwhile so the suite knows one was there to be avoided. Turning
+    // it off returns what was recorded.
+    WatchBarBuilds(on) {
+        const box = Main.panel._leftBox;
+        const watched = { records: this._barBuilds ?? [], sawSwitch: !!this._sawSwitch };
+        if (this._barBuildIds) {
+            for (const id of this._barBuildIds)
+                box.disconnect(id);
+            this._barBuildIds = null;
+        }
+        if (this._switchSampleId) {
+            GLib.source_remove(this._switchSampleId);
+            this._switchSampleId = 0;
+        }
+        this._barBuilds = null;
+        this._sawSwitch = false;
+        if (!on)
+            return JSON.stringify(watched);
+
+        const switching = () => !!Main.wm._workspaceAnimation?._switchData;
+        this._barBuilds = [];
+        // A button being destroyed has already given up its role by the time
+        // its container leaves the box, so removals are recognised by the
+        // containers seen holding a Pear Up role.
+        const ours = new Set(Object.keys(Main.panel.statusArea)
+            .filter(r => r.startsWith(PEAR_UP_UUID))
+            .map(r => Main.panel.statusArea[r]?.container));
+        const record = (kind, child) => {
+            const role = Object.keys(Main.panel.statusArea)
+                .find(r => Main.panel.statusArea[r]?.container === child);
+            if (kind === 'added' && role?.startsWith(PEAR_UP_UUID))
+                ours.add(child);
+            if (!ours.has(child))
+                return;
+            this._barBuilds.push({
+                kind,
+                role: role ?? null,
+                switching: switching(),
+                at: GLib.get_monotonic_time() / 1000,
+            });
+        };
+        const added = childAddedSignal(box);
+        const removed = added === 'child-added' ? 'child-removed' : 'actor-removed';
+        this._barBuildIds = [
+            box.connect(added, (_box, child) => record('added', child)),
+            box.connect(removed, (_box, child) => record('removed', child)),
+        ];
+        this._switchSampleId = GLib.timeout_add(GLib.PRIORITY_HIGH, 10, () => {
+            this._sawSwitch ||= switching();
+            return GLib.SOURCE_CONTINUE;
+        });
+        return JSON.stringify({ records: [], sawSwitch: false });
+    }
+
+    // At logout the shell destroys uiGroup and then runs a main loop of its own
+    // (main.js, while it saves the session history), so anything queued on an
+    // idle by then runs against disposed actors. Arms two moments of that for
+    // the shell the suite stops at the end, each making Pear Up want to queue
+    // its padding pass by putting an indicator in the right box:
+    //  - as the shell takes the window group out of uiGroup, just before it
+    //    destroys uiGroup: the pass is queued, and has to be dropped;
+    //  - as uiGroup is destroyed, after Pear Up's own handler (connected
+    //    first): the pass must not be queued at all.
+    // The log lines let run-tests.sh look only at what came after them.
+    ArmShutdownProbe() {
+        if (this._shutdownProbeIds)
+            return true;
+        const uiGroup = Main.layoutManager.uiGroup;
+        const addIndicator = (moment, role) => {
+            try {
+                const button = new PanelMenu.Button(0.5, `Test Shutdown Indicator ${role}`, true);
+                Main.panel.addToStatusArea(role, button, 0, 'right');
+                console.log(`[pear-up-test-hook] shutdown probe: indicator added ${moment}`);
+            } catch (e) {
+                console.log(`[pear-up-test-hook] shutdown probe: could not add an indicator ${moment}: ${e}`);
+            }
+        };
+        // Whether Pear Up has its padding pass queued. Reaching inside, as the
+        // measurement does: the callback guards against a dead shell too, so
+        // only this tells a pass dropped from one that merely did nothing.
+        const queued = () => {
+            const id = Main.extensionManager.lookup(PEAR_UP_UUID)?.stateObj?._indicatorPaddingId;
+            return id === undefined ? 'unknown' : `${!!id}`;
+        };
+        const removed = childAddedSignal(uiGroup) === 'child-added' ? 'child-removed' : 'actor-removed';
+        this._shutdownProbeIds = [
+            uiGroup.connect(removed, (_group, child) => {
+                if (child !== global.window_group)
+                    return;
+                console.log('[pear-up-test-hook] shutdown probe: the shell is going down');
+                addIndicator('before uiGroup is destroyed', 'pear-up-test-shutdown-before');
+                console.log(`[pear-up-test-hook] shutdown probe: padding queued before destroy=${queued()}`);
+            }),
+            uiGroup.connect('destroy', () => {
+                console.log(`[pear-up-test-hook] shutdown probe: padding queued at destroy=${queued()}`);
+                addIndicator('as uiGroup is destroyed', 'pear-up-test-shutdown-during');
+                console.log(`[pear-up-test-hook] shutdown probe: padding queued after destroy=${queued()}`);
+            }),
+        ];
+        return true;
+    }
+
+    _disarmShutdownProbe() {
+        for (const id of this._shutdownProbeIds ?? [])
+            Main.layoutManager.uiGroup.disconnect(id);
+        this._shutdownProbeIds = null;
+    }
+
     // The label on each panel button, and the items inside its menu. Enough to
     // assert that a menu offers what it should without simulating a pointer.
     GetMenuTree() {
         const menus = this._pearUpRoles().map(role => {
             const button = Main.panel.statusArea[role];
-            const items = button?.menu?._getMenuItems?.() ?? [];
+            const items = role === LOGO_ROLE
+                ? button?.menu?._getMenuItems?.() ?? []
+                : itemsWhenOpen(button?.menu);
             return {
                 role,
                 label: button?.label?.text ?? null,

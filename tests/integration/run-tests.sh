@@ -138,7 +138,38 @@ dbus-run-session -- bash -c '
     python3 /src/tests/integration/assert.py "$UUID" "$ARTIFACTS"
     status=$?
 
+    # Stopping the shell is its logout: the suite armed a probe that, as the
+    # shell destroys its UI, makes Pear Up want to queue work on an idle. The
+    # shell then runs a main loop of its own on the way out, so anything still
+    # queued would run against disposed actors and say so in the log.
     kill $SHELL_PID 2>/dev/null
     wait $SHELL_PID 2>/dev/null
+
+    echo
+    echo "  logout:"
+    probe="$(grep "shutdown probe" "$ARTIFACTS/shell.log")"
+    if ! grep -q "indicator added before uiGroup is destroyed" <<< "$probe" ||
+       ! grep -q "indicator added as uiGroup is destroyed" <<< "$probe"; then
+        echo "  FAIL the logout probe fired as the shell went down — ${probe:-it never fired}"
+        status=1
+    else
+        # Queued before the destroy, dropped by it, and not queued again after.
+        if grep -q "padding queued before destroy=true" <<< "$probe" &&
+           grep -q "padding queued at destroy=false" <<< "$probe" &&
+           grep -q "padding queued after destroy=false" <<< "$probe"; then
+            echo "  ok   work queued as the shell goes down is dropped, and none is queued after"
+        else
+            echo "  FAIL work queued as the shell goes down is dropped, and none is queued after — $(grep "padding queued" <<< "$probe" | sed "s/.*probe: //" | tr "\n" " ")"
+            status=1
+        fi
+        disposed=$(sed -n "/shutdown probe: the shell is going down/,\$p" "$ARTIFACTS/shell.log" \
+            | grep -A12 "already disposed" | grep -c "extensions/$UUID/" || true)
+        if [[ "$disposed" == "0" ]]; then
+            echo "  ok   nothing of Pear Up runs against the disposed shell at logout"
+        else
+            echo "  FAIL nothing of Pear Up runs against the disposed shell at logout — $disposed stack frames in it after the probe"
+            status=1
+        fi
+    fi
     exit $status
 '
