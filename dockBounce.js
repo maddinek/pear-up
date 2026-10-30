@@ -18,10 +18,17 @@
 // icon twice: this module's clone is drawn at the opacity the icon would have
 // had, which is zero while the magnifier has hidden it.
 //
+// The magnifier also takes the whole drawing over: once it is showing every
+// icon of a dock, it claims that dock (claimDock), and this module's overlay
+// for it stops its own frame updates until the dock is released again, so the
+// two never both walk the dock on every frame.
+//
 // Dash to Dock internals used, beyond those listed in dockMagnifier.js:
 //   - an app item's `child.app`, the Shell.App it stands for;
 //   - dock._slider.slideX, 1 when the dock is fully shown. A dock sliding in or
 //     out, or hidden, is not bounced on: the clone would be drawn outside it.
+//     Nor is its frame clock kept running meanwhile; the overlay waits for the
+//     slider's notify::slide-x, or the dock's mapping or opacity, instead.
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Graphene from 'gi://Graphene';
@@ -62,6 +69,39 @@ const ATTENTION = 'attention';
 
 // The instance currently switched on, for bounceRise(). There is at most one.
 let active = null;
+
+// Docks the magnifier is drawing in full (see claimDock), and who is to hear
+// of a bounce starting — the magnifier, which may be resting between frames.
+const claimed = new Set();
+const listeners = new Set();
+
+// Called by the magnifier once its overlay shows every icon of `dock`, and
+// again with false once it has let go of them: from then on the bounce overlay
+// draws the dock's bounces itself again — unless `wake` is false, for a dock
+// that is being destroyed.
+export function claimDock(dock, claim, wake = true) {
+    if (claim === claimed.has(dock))
+        return;
+    if (claim) {
+        claimed.add(dock);
+        return;
+    }
+    claimed.delete(dock);
+    if (wake)
+        active?.wakeDock(dock);
+}
+
+// `fn` is called whenever an app starts bouncing; returns the way to stop.
+export function watchBounces(fn) {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
+}
+
+// Whether an app is still bouncing, between hops included, where bounceRise()
+// is zero for a moment.
+export function isBouncing(app) {
+    return !!(active && app && active.isBouncing(app, GLib.get_monotonic_time()));
+}
 
 // How high the top of a hop is for an icon drawn `size` logical pixels across.
 export function hopPeak(size) {
@@ -168,7 +208,7 @@ export class DockBounce {
 
         // Still bouncing from its launch, or from an earlier request: that
         // bounce already says it.
-        if (this._bounces.has(app))
+        if (this.isBouncing(app, GLib.get_monotonic_time()))
             return;
         this._start(app, ATTENTION, ATTENTION_HOPS);
     }
@@ -196,7 +236,7 @@ export class DockBounce {
         const now = GLib.get_monotonic_time();
         const existing = this._bounces.get(app);
         const phase = existing ? (now - existing.start) / existing.hop : 0;
-        if (existing && phase < existing.endHop) {
+        if (existing && phase < this._endHop(existing)) {
             existing.kind = kind;
             existing.endHop = Math.floor(phase) + hops;
             return;
@@ -212,6 +252,18 @@ export class DockBounce {
 
         for (const dock of this._docks.values())
             dock.wake();
+        for (const fn of listeners) {
+            try {
+                fn(app);
+            } catch (e) {
+                console.warn('[pear-up] Passing on a dock bounce failed:', e);
+            }
+        }
+    }
+
+    wakeDock(dock) {
+        if (this.bouncing)
+            this._docks.get(dock)?.wake();
     }
 
     // The hop in the air comes down; none starts after it.
@@ -234,17 +286,29 @@ export class DockBounce {
         return this._bounces.size > 0;
     }
 
+    // The hop a bounce ends with. A launch bounce runs out after
+    // LAUNCH_LIMIT_MS, finishing the hop it is in at that moment. Worked out
+    // from its start rather than noted when a frame happens to see the limit
+    // pass: no frames run while the dock is hidden, and a dock shown again
+    // after the limit must not give the bounce another hop.
+    _endHop(bounce) {
+        if (bounce.kind !== LAUNCH)
+            return bounce.endHop;
+        return Math.min(bounce.endHop, Math.floor(LAUNCH_LIMIT_MS * 1000 / bounce.hop) + 1);
+    }
+
     // Every app currently bouncing, with bounces that have landed let go of.
     prune(now) {
         for (const [app, bounce] of this._bounces) {
-            const phase = (now - bounce.start) / bounce.hop;
-            if (bounce.kind === LAUNCH && bounce.endHop === Infinity &&
-                now - bounce.start >= LAUNCH_LIMIT_MS * 1000)
-                bounce.endHop = Math.floor(phase) + 1;
-            if (phase >= bounce.endHop)
+            if ((now - bounce.start) / bounce.hop >= this._endHop(bounce))
                 this._bounces.delete(app);
         }
         return this._bounces;
+    }
+
+    isBouncing(app, now) {
+        const bounce = this._bounces.get(app);
+        return !!bounce && (now - bounce.start) / bounce.hop < this._endHop(bounce);
     }
 
     lift(app, now) {
@@ -252,7 +316,7 @@ export class DockBounce {
         if (!bounce)
             return 0;
         const phase = (now - bounce.start) / bounce.hop;
-        return phase >= bounce.endHop || phase < 0 ? 0 : hopHeight(phase);
+        return phase >= this._endHop(bounce) || phase < 0 ? 0 : hopHeight(phase);
     }
 
     // -------------------------------------------------------------- docks
@@ -341,6 +405,9 @@ export class DockBounce {
 // One dock's bouncing icons. Idle until something bounces; then a per-frame
 // update on the dock's own frame clock draws each hop, and once everything
 // has landed it removes the overlay and gives every icon its opacity back.
+// While the dock cannot be seen, or the magnifier draws it, there are no
+// frames at all: what is in the air is put down, and the overlay waits to be
+// woken.
 class DockBounceOverlay {
     constructor(dock, owner) {
         this._dock = dock;
@@ -351,6 +418,7 @@ class DockBounceOverlay {
         this._overlay = null;
         this._timeline = null;
         this._broken = false;
+        this._waiting = false;
         this._frame = 0;
         // St.Icon → { view, rest, destroyId, dead, seen }
         this._records = new Map();
@@ -359,6 +427,19 @@ class DockBounceOverlay {
     wake() {
         if (this._timeline || this._broken)
             return;
+        if (this._owner.prune(GLib.get_monotonic_time()).size === 0) {
+            this._stopWaiting();
+            return;
+        }
+        // The magnifier draws the hops itself, and hands the dock back
+        // through claimDock() when it is done.
+        if (claimed.has(this._dock))
+            return;
+        if (!this._shown()) {
+            this._waitUntilShown();
+            return;
+        }
+        this._stopWaiting();
 
         this._timeline = new Clutter.Timeline({
             actor: this._dock,
@@ -393,25 +474,65 @@ class DockBounceOverlay {
             return;
         }
 
+        if (claimed.has(this._dock)) {
+            this._stop();
+            return;
+        }
+        if (!this._shown()) {
+            this._stop();
+            this._waitUntilShown();
+            return;
+        }
+
         this._frame++;
-        if (this._shown()) {
-            for (const slot of this._dock.dash._box.get_children()) {
-                const app = slot.child?.app;
-                if (!app || !bounces.has(app))
-                    continue;
-                const lift = this._owner.lift(app, now);
-                if (lift > 0)
-                    this._place(slot, lift);
-            }
+        for (const slot of this._dock.dash._box.get_children()) {
+            const app = slot.child?.app;
+            if (!app || !bounces.has(app))
+                continue;
+            const lift = this._owner.lift(app, now);
+            if (lift > 0)
+                this._place(slot, lift);
         }
         this._dropUnseen();
     }
 
-    // Fully slid in, on screen, and not behind the lock screen.
+    // Fully slid in, on screen, drawn, and not behind the lock screen.
     _shown() {
         const dock = this._dock;
-        return dock.mapped && dock.get_paint_opacity() > 0 &&
+        return dock.mapped && (dock.dash?.get_paint_opacity() ?? 0) > 0 &&
             (dock._slider?.slideX ?? 1) >= 1 && !Main.sessionMode.isLocked;
+    }
+
+    // Everything _shown() looks at, watched until it says yes. A bounce that
+    // runs out meanwhile is let go of on the first frame after.
+    _waitUntilShown() {
+        if (this._waiting)
+            return;
+        this._waiting = true;
+
+        const wake = () => this.wake();
+        this._dock.connectObject(
+            'notify::mapped', wake,
+            'notify::opacity', wake,
+            this);
+        this._dock.dash?.connectObject?.('notify::opacity', wake, this);
+        this._dock._slider?.connectObject?.('notify::slide-x', wake, this);
+        Main.sessionMode.connectObject('updated', wake, this);
+    }
+
+    _stopWaiting() {
+        if (!this._waiting)
+            return;
+        this._waiting = false;
+
+        try {
+            this._dock.disconnectObject(this);
+            this._dock.dash?.disconnectObject?.(this);
+            this._dock._slider?.disconnectObject?.(this);
+        } catch {
+            // Disposed along with the dock.
+        }
+        Main.sessionMode.disconnectObject(this);
     }
 
     _ensureOverlay() {
@@ -578,6 +699,7 @@ class DockBounceOverlay {
     }
 
     destroy() {
+        this._stopWaiting();
         this._stop();
     }
 }

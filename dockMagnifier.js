@@ -21,6 +21,11 @@
 // drawn at their own size, only moved, so a clone is exact. The dock's
 // background is cloned too, and stretched to take in the grown icons.
 //
+// The per-frame update only runs while something changes: the pointer moves,
+// the swell eases in or out, an icon bounces or Dash to Dock moves things. Once
+// the picture has settled the frame clock is let go of, the overlay staying as
+// it is, and any of those wakes it again.
+//
 // Dash to Dock internals this depends on. None of them are GNOME APIs, so they
 // are listed here rather than in tests/api-manifest.json. Any of them missing
 // means a dock is not recognised, or its first frame throws, is caught, and
@@ -38,13 +43,14 @@
 //   - An item's icon is item.child.icon (Show Apps: item.icon), a GNOME BaseIcon
 //     whose own `icon` is the St.Icon drawn; everything else beside the BaseIcon
 //     in its parent is an indicator. item.label is the hover label.
+//   - dock._slider, with the slide-x property its sliding animates.
 // Ubuntu Dock is Dash to Dock under another name and is covered the same way.
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { childSignals } from './util.js';
-import { bounceRise } from './dockBounce.js';
+import { bounceRise, claimDock, isBouncing, watchBounces } from './dockBounce.js';
 
 const DOCK_ACTOR_NAME = 'dashtodockContainer';
 
@@ -67,6 +73,11 @@ const EASE_OUT_MS = 180;
 // swap happens anyway after this many frames, so the cost of being wrong is a
 // one-frame blink rather than an icon that never magnifies.
 const READY_FRAME_LIMIT = 12;
+
+// Frames with nothing to redraw before the frame clock is let go of. More
+// than one, so a change Dash to Dock makes during the frame's own layout,
+// after the update has run, is still seen.
+const SETTLE_FRAMES = 2;
 
 // Raised cosine: 1 at the pointer, 0 at the radius and beyond, smooth at both
 // ends so nothing kinks as the pointer moves.
@@ -108,6 +119,7 @@ export class DockMagnifier {
         this._docks = new Map();
         this._scanId = 0;
         this._dragging = false;
+        this._unwatchBounces = null;
 
         // A throw halfway through would leave whatever was connected so far
         // connected, with nothing holding the object to disconnect it.
@@ -136,7 +148,14 @@ export class DockMagnifier {
             () => this._queueScan(), this);
         Main.extensionManager.connectObject('extension-state-changed',
             () => this._queueScan(), this);
-        Main.sessionMode.connectObject('updated', () => this._queueScan(), this);
+        // Locking pauses the swell (see `paused`); a resting dock has to be
+        // told.
+        Main.sessionMode.connectObject('updated', () => {
+            this._queueScan();
+            this._wakeAll();
+        }, this);
+        // A bounce starting on a dock that is resting.
+        this._unwatchBounces = watchBounces(() => this._wakeAll());
 
         // Reordering the dock is a drag, and a swell moving under it would make
         // the drop target jump about. Window drags in the overview and files
@@ -167,6 +186,12 @@ export class DockMagnifier {
 
     setSize(sizePercent) {
         this._maxScale = sizePercent / 100;
+        this._wakeAll();
+    }
+
+    _wakeAll() {
+        for (const dock of this._docks.values())
+            dock.wake();
     }
 
     guard(what, fn) {
@@ -179,12 +204,10 @@ export class DockMagnifier {
 
     _setDragging(dragging) {
         this._dragging = dragging;
-        // A dock that was hovered all through the drag gets no new hover
-        // notification when it ends, so ask each one to look again.
-        if (!dragging) {
-            for (const dock of this._docks.values())
-                dock.wake();
-        }
+        // A drag starting has a resting swell step aside, and a dock that was
+        // hovered all through the drag gets no new hover notification when it
+        // ends: either way, each one looks again.
+        this._wakeAll();
     }
 
     // The overlay itself comes and goes as a child of the UI group too, and is
@@ -234,7 +257,7 @@ export class DockMagnifier {
             return;
 
         this._docks.delete(dock);
-        this.guard('restoring a dock', () => magnification.destroy());
+        this.guard('restoring a dock', () => magnification.destroy(alive));
         // A destroyed dock's handlers went with it; only a live one has any
         // left to disconnect.
         if (alive)
@@ -246,6 +269,8 @@ export class DockMagnifier {
             GLib.source_remove(this._scanId);
             this._scanId = 0;
         }
+        this._unwatchBounces?.();
+        this._unwatchBounces = null;
 
         Main.layoutManager.uiGroup.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
@@ -261,7 +286,9 @@ export class DockMagnifier {
 
 // One dock's magnification. Idle until its dock is hovered; while hovered or
 // easing back out it runs a per-frame update, and once fully out it removes
-// everything it made and gives every icon its opacity back.
+// everything it made and gives every icon its opacity back. While hovered with
+// nothing changing it rests: the overlay stays, the frame updates stop, and
+// whatever could change the picture starts them again.
 class DockMagnification {
     constructor(dock, magnifier) {
         this._dock = dock;
@@ -283,6 +310,25 @@ class DockMagnification {
         this._anchor = null;
         this._range = null;
 
+        // What the last update drew from (see _signature), whether something
+        // has changed since that the signature cannot see, and how many frames
+        // in a row found nothing to do.
+        this._drawn = null;
+        this._dirty = false;
+        this._quiet = 0;
+        this._drawing = false;
+        // Copies still loading their texture, and an icon bouncing on the
+        // last frame: both need every frame drawn.
+        this._pending = false;
+        this._bouncing = false;
+        // Whether the bounce overlay has handed this dock's drawing over.
+        this._claimed = false;
+        // The apps of the items last drawn.
+        this._apps = [];
+        this._destroyed = false;
+        // Actors whose changes wake a resting swell → their handler ids.
+        this._watched = new Map();
+
         // Source actor (or key) → what stands in for it in the overlay.
         this._records = new Map();
         // Source actor → the opacity it had before it was made transparent.
@@ -293,8 +339,16 @@ class DockMagnification {
         // Dash to Dock destroys the dash first when a dock goes, before the
         // dock's own destroy handlers run, so each of these is let go of as it
         // dies rather than disconnected from afterwards.
+        // Motion over the dock is what moves the swell. Seen on the way down
+        // the tree, before an icon can keep it to itself; it is only a reason
+        // to start updating again, and goes on to wherever it was going.
         this._hoverActor.connectObject(
             'notify::hover', () => this.wake(),
+            'captured-event', (_actor, event) => {
+                if (event.type() === Clutter.EventType.MOTION)
+                    this._resume();
+                return Clutter.EVENT_PROPAGATE;
+            },
             'destroy', () => {
                 this._hoverActor = null;
             },
@@ -306,6 +360,7 @@ class DockMagnification {
         this._dash.connectObject(
             'menu-opened', () => {
                 this._menuOpen = true;
+                this.wake();
             },
             'menu-closed', () => {
                 this._menuOpen = false;
@@ -325,8 +380,19 @@ class DockMagnification {
     // adding them to the stage is the kind of work that has aborted GNOME 50
     // before (see searchButton.js). Starting is left to an idle callback, a
     // frame later at most, which the ease-in hides completely.
+    //
+    // An overlay already there only needs its frame updates started again,
+    // which creates nothing and can happen at once.
     wake() {
-        if (this._wakeId || this._broken || this._timeline)
+        if (this._broken)
+            return;
+        if (this._timeline) {
+            this._resume();
+            return;
+        }
+        if (this._destroyed)
+            return;
+        if (this._wakeId)
             return;
 
         this._wakeId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
@@ -338,6 +404,101 @@ class DockMagnification {
             }
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    cancelWake() {
+        if (this._wakeId) {
+            GLib.source_remove(this._wakeId);
+            this._wakeId = 0;
+        }
+    }
+
+    // A resting swell starts its frame updates again, and the first one
+    // redraws whatever the signature says.
+    _resume() {
+        if (!this._timeline || this._timeline.is_playing() || this._destroyed)
+            return;
+        this._dirty = true;
+        this._quiet = 0;
+        this._lastFrame = GLib.get_monotonic_time();
+        this._timeline.start();
+    }
+
+    // Something changed that the next frame has to draw. The update's own
+    // changes — the opacities it takes away, say — are not news.
+    _invalidate() {
+        if (this._drawing)
+            return;
+        this._dirty = true;
+        this._resume();
+    }
+
+    // Changes to these wake a resting swell. `lifetime` is the actor whose
+    // destruction ends the watch, for a watched object that is not an actor.
+    // Asked again with other signals, it watches those as well.
+    _watch(emitter, signals, lifetime = emitter) {
+        if (!emitter || !lifetime)
+            return;
+
+        let watch = this._watched.get(emitter);
+        if (!watch) {
+            watch = { ids: new Map(), lifetime, destroyId: 0, dead: false };
+            // An emitter that is not the actor going is not disconnected
+            // from here: an adjustment is already disposed by the time its
+            // scroll view says it is going, and touching it then is what
+            // GJS complains about. Its handlers just stop doing anything.
+            watch.destroyId = lifetime.connect('destroy', () => {
+                watch.dead = true;
+                this._watched.delete(emitter);
+                this._invalidate();
+            });
+            this._watched.set(emitter, watch);
+        }
+        for (const signal of signals) {
+            if (!watch.ids.has(signal)) {
+                watch.ids.set(signal, emitter.connect(signal, () => {
+                    if (!watch.dead)
+                        this._invalidate();
+                }));
+            }
+        }
+    }
+
+    _disconnectWatch(emitter, { ids, lifetime, destroyId }) {
+        try {
+            for (const id of ids.values())
+                emitter.disconnect(id);
+            lifetime.disconnect(destroyId);
+        } catch {
+            // Disposed along with its dock.
+        }
+    }
+
+    _unwatch() {
+        for (const [emitter, watch] of this._watched)
+            this._disconnectWatch(emitter, watch);
+        this._watched.clear();
+    }
+
+    // What moves the dash as a whole, or adds and removes its items.
+    _watchDock() {
+        const box = this._dash._box;
+        this._watch(box, ['notify::allocation', ...childSignals(box)]);
+        this._watch(this._dash, ['notify::opacity', 'notify::translation-x',
+            'notify::translation-y', 'notify::allocation']);
+        this._watch(this._dock, ['notify::allocation', 'notify::mapped', 'notify::opacity']);
+        const slider = this._dock._slider;
+        if (slider instanceof Clutter.Actor)
+            this._watch(slider, ['notify::slide-x']);
+        const view = this._dash._scrollView;
+        if (view instanceof Clutter.Actor) {
+            this._watch(view, ['notify::allocation', 'notify::mapped']);
+            const adjustment = this._vertical
+                ? view.vadjustment ?? view.vscroll?.adjustment
+                : view.hadjustment ?? view.hscroll?.adjustment;
+            if (adjustment)
+                this._watch(adjustment, ['notify::value'], view);
+        }
     }
 
     _target() {
@@ -378,6 +539,8 @@ class DockMagnification {
             }
         });
 
+        this._watchDock();
+        this._dirty = true;
         this._lastFrame = GLib.get_monotonic_time();
         this._timeline.start();
     }
@@ -431,7 +594,54 @@ class DockMagnification {
         if (this._dock.get_next_sibling() !== this._overlay)
             Main.layoutManager.uiGroup.set_child_above_sibling(this._overlay, this._dock);
 
-        this._layout(smoothstep(this._progress));
+        // Redrawn only when something it is drawn from has changed. A bounce
+        // changes every frame, and its last frame, where it lands, is drawn
+        // too.
+        const bouncing = this._anyBouncing();
+        const signature = this._signature();
+        if (this._dirty || this._pending || bouncing || this._bouncing ||
+            signature !== this._drawn) {
+            this._dirty = false;
+            this._drawn = signature;
+            this._quiet = 0;
+            this._drawing = true;
+            try {
+                this._layout(smoothstep(this._progress));
+            } finally {
+                this._drawing = false;
+            }
+        } else if (this._progress === target && ++this._quiet >= SETTLE_FRAMES) {
+            this._timeline.stop();
+        }
+        this._bouncing = bouncing;
+
+        // Every icon is drawn here now, so the bounce overlay can stop
+        // drawing this dock (see dockBounce.js).
+        if (!this._pending && !this._claimed) {
+            this._claimed = true;
+            claimDock(this._dock, true);
+        }
+    }
+
+    // What a frame is drawn from, short of reading every item: where the
+    // pointer is, how far the swell is in, its size, where the dash is, and
+    // how opaque the dock is drawn. Anything else is watched (_watch).
+    _signature() {
+        const box = this._dash._box;
+        const [x, y] = box.get_transformed_position();
+        const [width, height] = box.get_transformed_size();
+        return [this._anchor, this._progress, this._magnifier.maxScale,
+            x, y, width, height, this._dock.get_paint_opacity()].join();
+    }
+
+    // Only the apps last drawn: one scrolled out of sight, or not shown at
+    // all, bounces where nobody sees it.
+    _anyBouncing() {
+        for (const app of this._apps) {
+            if (isBouncing(app))
+                return true;
+        }
+        return false;
     }
 
     // Re-read every frame rather than remembered: apps open and close while the
@@ -489,8 +699,24 @@ class DockMagnification {
 
     _layout(strength) {
         this._frame++;
+        this._pending = false;
 
         const items = this._items();
+        this._apps = items.map(item => item.slot.child?.app).filter(app => app);
+        // Dash to Dock fading, scaling or hiding an item, and indicators
+        // coming and going beside an icon.
+        for (const { slot, base } of items) {
+            this._watch(slot, ['notify::allocation', 'notify::opacity', 'notify::visible',
+                'notify::scale-x', 'notify::scale-y', 'notify::translation-x',
+                'notify::translation-y']);
+            if (slot.child instanceof Clutter.Actor) {
+                this._watch(slot.child, ['notify::opacity', 'notify::scale-x',
+                    'notify::scale-y']);
+            }
+            const parent = base?.get_parent();
+            if (parent)
+                this._watch(parent, childSignals(parent));
+        }
         const icons = items.filter(item => item.base);
         if (icons.length === 0) {
             this._dropUnseen();
@@ -534,6 +760,10 @@ class DockMagnification {
             else
                 this._placeClone(this._record(item.slot, () => this._makeClone(item.slot)),
                     item.offset + nudge);
+            // A hover label shows a moment after the pointer arrives, and has
+            // to be moved out of the swell's way when it does.
+            if (item.slot.label instanceof St.Widget)
+                this._watch(item.slot.label, ['notify::visible']);
         }
 
         this._placeBackground(
@@ -656,6 +886,8 @@ class DockMagnification {
             record.frames++;
             const texture = copy.get_first_child();
             record.ready = (texture && texture.opacity > 0) || record.frames > READY_FRAME_LIMIT;
+            if (!record.ready)
+                this._pending = true;
         }
         if (record.ready) {
             this._hideSource(record);
@@ -758,6 +990,7 @@ class DockMagnification {
 
         if (record.source !== source) {
             record.source = source;
+            this._watch(source, ['notify::gicon', 'notify::icon-size']);
             copy.style_class = source.style_class;
             copy.fallback_gicon = source.fallback_gicon;
             // A symbolic icon takes its colour from the stylesheet, and the
@@ -802,6 +1035,14 @@ class DockMagnification {
             else
                 this._overlay.add_child(record.view);
             this._records.set(key, record);
+            // Dash to Dock fading an item, hiding an indicator or resizing
+            // one, for a resting swell to redraw.
+            this._watch(actor, ['notify::opacity', 'notify::visible', 'notify::allocation']);
+            // A copy given a new icon size reports its new natural size only
+            // once it has been laid out again, after the update that set it;
+            // it is scaled from that size, so the swell redraws then.
+            if (record.view instanceof St.Icon)
+                this._watch(record.view, ['notify::allocation']);
         }
 
         record.seen = this._frame;
@@ -885,11 +1126,14 @@ class DockMagnification {
         this._labels.clear();
     }
 
-    _stop() {
+    // `handBack` says whether the bounce overlay is to draw this dock again;
+    // not when the dock itself is going.
+    _stop(handBack = true) {
         if (this._timeline) {
             this._timeline.stop();
             this._timeline = null;
         }
+        this._unwatch();
 
         for (const record of [...this._records.values()])
             this._drop(record);
@@ -910,15 +1154,25 @@ class DockMagnification {
         this._overlay = null;
         this._progress = 0;
         this._anchor = null;
+        this._drawn = null;
+        this._dirty = false;
+        this._quiet = 0;
+        this._pending = false;
+        this._bouncing = false;
+
+        // The icons are the dock's own again, for the bounce overlay to draw
+        // any that are in the air.
+        if (this._claimed) {
+            this._claimed = false;
+            claimDock(this._dock, false, handBack);
+        }
+        this._apps = [];
     }
 
-    destroy() {
-        if (this._wakeId) {
-            GLib.source_remove(this._wakeId);
-            this._wakeId = 0;
-        }
-
-        this._stop();
+    destroy(alive = true) {
+        this.cancelWake();
+        this._destroyed = true;
+        this._stop(alive);
 
         this._hoverActor?.disconnectObject(this);
         this._dash?.disconnectObject(this);

@@ -18,7 +18,8 @@ import subprocess
 
 from gi.repository import GLib
 
-from dock_magnification import BOTTOM, LEFT, RIGHT, SIDE_NAMES, TOP, _box_center
+from dock_magnification import (BOTTOM, FRAME_SLACK, LEFT, RIGHT, SIDE_NAMES, TOP,
+                                 _box_center)
 
 BOUNCE = "pearup-dock-bounce"
 LAUNCH_APP = "io.github.maddinek.PearUpTestLaunch"
@@ -144,6 +145,153 @@ class BounceChecks:
                    if item["id"] in self._baseline and item["iconOpacity"] != self._baseline[item["id"]]]
         check(f"every dock icon has its opacity back after {what}", not changed, "; ".join(changed))
 
+    def _wait_slide(self, shown, timeout=6):
+        """Until Dash to Dock's slider is fully in, or fully out."""
+        end = GLib.get_monotonic_time() + timeout * 1e6
+        while GLib.get_monotonic_time() < end:
+            dock = self._dock()
+            if dock and dock.get("slideX") is not None and \
+                    (dock["slideX"] >= 1 if shown else dock["slideX"] <= 0):
+                return True
+            GLib.usleep(100 * 1000)
+        return False
+
+    def _hide_dock(self, keep_hidden=False):
+        """Dash to Dock's autohide, with the pointer away: the dock slides out,
+        and quickly back in once it is fixed again. With `keep_hidden`, it
+        does not show itself for a window asking for attention either, nor
+        wiggle that app's icon. Answers what to put back afterwards, and
+        whether the dock did hide."""
+        d = self._d
+
+        def get(key):
+            return subprocess.run(["gsettings", "get", "org.gnome.shell.extensions.dash-to-dock", key],
+                                  capture_output=True, text=True, check=False).stdout.strip()
+
+        keys = ["intellihide", "autohide", "animation-time"]
+        if keep_hidden:
+            keys += ["show-dock-urgent-notify", "dance-urgent-applications"]
+        saved = {key: get(key) for key in keys}
+        if keep_hidden:
+            d._dock_setting("show-dock-urgent-notify", "false")
+            d._dock_setting("dance-urgent-applications", "false")
+        d._dock_setting("animation-time", "0.05")
+        d._dock_setting("intellihide", "false")
+        d._dock_setting("autohide", "true")
+        d._dock_setting("dock-fixed", "false")
+        d._away()
+        hidden = self._check("Dash to Dock hides its dock once autohide is on",
+                             self._wait_slide(False), f"slideX {self._dock().get('slideX')}")
+        GLib.usleep(500 * 1000)
+        return saved, hidden
+
+    def _show_dock(self, saved):
+        d = self._d
+        for key, value in (saved or {}).items():
+            if value and key != "animation-time":
+                d._dock_setting(key, value)
+        d._dock_setting("dock-fixed", "true")
+        self._wait_slide(True)
+        if (saved or {}).get("animation-time"):
+            d._dock_setting("animation-time", saved["animation-time"])
+
+    def _hidden(self):
+        dock = self._dock()
+        return dock is not None and dock.get("slideX") is not None and dock["slideX"] <= 0
+
+    def _check_hidden(self):
+        """Apps launched while the dock is hidden: nothing is drawn, and a
+        bounce still in the air when the dock shows is drawn from then on."""
+        check = self._check
+        d = self._d
+        saved = None
+        try:
+            saved, hidden = self._hide_dock()
+            if not hidden:
+                return
+            dock = self._dock()
+            hidden_app, shown_app = (self._fresh_app(dock) for _ in range(2))
+            if not shown_app:
+                check("there are unused favourites for the hidden dock", False)
+                return
+
+            self._hook("ActivateDockApp", (hidden_app,), "(s)")
+            GLib.usleep(400 * 1000)
+            state = d.state()
+            item = self._item(state, hidden_app)
+            check("an app launched with the dock hidden draws no bounce",
+                  item and item["appState"] == STARTING and not state["bounces"] and self._hidden(),
+                  f"state {item and item['appState']}, {len(state['bounces'])} bounce overlays, "
+                  f"hidden {self._hidden()}")
+
+            # Shown while the app is still starting: the hop is drawn now,
+            # by a clone level with that app's icon.
+            self._hook("ActivateDockApp", (shown_app,), "(s)")
+            d._dock_setting("dock-fixed", "true")
+            samples = self._sample(shown_app, 1.2)
+            shown = [s for s in samples if s["item"] and s["item"]["appState"] == STARTING
+                     and (self._dock(s["state"]).get("slideX") or 0) >= 1]
+
+            def its_own(sample):
+                along = _box_center(sample["item"]["icon"])[1]
+                return any(c["visible"] and c["opacity"] > 0 and
+                           abs(_box_center(c["box"])[1] - along) <= 2 for c in sample["clones"])
+
+            drawn = [s for s in shown if its_own(s)]
+            if not check("the app launched as the dock shows is still starting once it has",
+                         len(shown) >= 3, f"{len(shown)} of {len(samples)} samples"):
+                return
+            check("a bounce started on the hidden dock is drawn once the dock shows",
+                  len(drawn) >= len(shown) // 2,
+                  f"{len(drawn)} of {len(shown)} samples with the dock shown and the app starting")
+        finally:
+            self._show_dock(saved)
+            self._wait_gone(LAUNCH_LIMIT_S)
+            d._away()
+            self._record_baseline()
+
+    def _check_hidden_attention(self):
+        """A window asking for attention while the dock is hidden: no frames
+        are spent on a bounce nobody can see.
+
+        Asked the same way with bouncing on attention switched off first, for
+        what the shell draws for the request itself."""
+        check = self._check
+        d = self._d
+        saved = None
+        try:
+            saved, hidden = self._hide_dock(keep_hidden=True)
+            if not hidden:
+                return
+            counts, asked, stayed = {}, {}, {}
+            for on in ("false", "true"):
+                d._pear_up_setting("dock-bounce-on-attention", on)
+                self._hook("FocusWindowOf", (LAUNCH_APP,), "(s)")
+                GLib.usleep(300 * 1000)
+                self._hook("FocusWindowOf", (OTHER_WINDOW,), "(s)")
+                GLib.usleep(800 * 1000)
+                asked[on] = self._hook("DemandAttention", (LAUNCH_APP,), "(s)")
+                counts[on] = d.frames(1000)
+                stayed[on] = self._hidden()
+            state = d.state()
+            if not check("the dock stays hidden while a window asks for attention",
+                         all(stayed.values()) and "missing" not in asked.values(),
+                         f"hidden {stayed}, asked via {asked}"):
+                return
+            check("a window asking for attention with the dock hidden draws no bounce",
+                  not state["bounces"], f"{len(state['bounces'])} bounce overlays")
+            check("a bounce keeps no frame clock running while its dock is hidden",
+                  counts["false"] <= 2 * FRAME_SLACK and
+                  counts["true"] <= counts["false"] + FRAME_SLACK,
+                  f"{counts['true']} frames in 1 s, {counts['false']} with bouncing off")
+        finally:
+            d._pear_up_setting("dock-bounce-on-attention", "true")
+            self._show_dock(saved)
+            self._hook("FocusWindowOf", (LAUNCH_APP,), "(s)")
+            self._wait_gone(3 * HOP_S + 0.5)
+            d._away()
+            self._record_baseline()
+
     def _check_hops(self, samples, side, where):
         """The clone rises away from the edge, to about the icon's size,
         and never moves along the dock or towards the edge."""
@@ -243,6 +391,9 @@ class BounceChecks:
             print("  note: the app was still starting at five seconds, so the ten-second limit ended it")
         self._left_nothing("the launch bounce gives up")
 
+        # ---- the dock hidden while an app launches
+        self._check_hidden()
+
         # ---- a real app: bounces until its window appears, then lands. Pinned
         # first: Dash to Dock shows an app that is not a favourite only once it
         # runs, which is when its bounce ends.
@@ -305,6 +456,9 @@ class BounceChecks:
             landed = self._wait_gone(HOP_S + 0.4)
             check("bringing the app forward stops the bounce after the current hop",
                   bouncing and landed, f"bouncing {bouncing}, landed {landed}")
+
+            # ---- the dock hidden while a window asks for attention
+            self._check_hidden_attention()
 
             # ---- magnified and bouncing at once: the magnifier draws the hop
             self._check_with_magnification()
@@ -396,6 +550,14 @@ class BounceChecks:
               f"highest {top:.1f}px for a {size:.0f}px magnified icon over {len(gaps)} samples")
         check("the bounce overlay draws nothing while the magnifier does",
               drawn_twice == 0, f"{drawn_twice} visible clones")
+
+        # The pointer leaves mid-bounce: the magnifier lets go of the dock and
+        # the bounce overlay takes the hop over again.
+        d._away_now()
+        resumed = [s for s in self._sample(app_id, 0.5)
+                   if any(c["visible"] and c["opacity"] > 0 for c in s["clones"])]
+        check("the bounce overlay takes over again once the swell is gone",
+              resumed, "no visible bounce clone after the pointer left")
         self._hook("FocusWindowOf", (LAUNCH_APP,), "(s)")
         d._away()
         self._wait_gone(HOP_S * 3)
@@ -410,8 +572,16 @@ class BounceChecks:
         self._record_baseline()
         self._hook("ActivateDockApp", (app,), "(s)")
         GLib.usleep(400 * 1000)
+        # The dock is hovered by now (hover_before_disable), so the magnifier
+        # draws the hop rather than the bounce overlay.
+        state = self._d.state()
+        item = self._item(state, app)
         return self._check("an icon is bouncing as Pear Up is disabled",
-                           bool(self._d.state()["bounces"]))
+                           bool(state["bounces"]) or (state["overlays"] and item and
+                                                      item["appState"] == STARTING),
+                           f"{len(state['bounces'])} bounce overlays, "
+                           f"{len(state['overlays'])} magnifier overlays, "
+                           f"state {item and item['appState']}")
 
     def check_left_nothing(self, what):
         self._left_nothing(what)

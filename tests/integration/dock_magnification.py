@@ -20,6 +20,11 @@ DOCK_UUID = "dash-to-dock@micxgx.gmail.com"
 DOCK_SCHEMA = "org.gnome.shell.extensions.dash-to-dock"
 OVERLAY = "pearup-dock-magnifier"
 
+# Frames a resting shell may still run over a count, beyond what it ran with
+# nothing on screen moving: a hover label finishing its fade, say. A swell
+# updating every frame runs one per refresh, 120 over two seconds at 60 Hz.
+FRAME_SLACK = 8
+
 # St.Side, as Dash to Dock stores its position.
 TOP, RIGHT, BOTTOM, LEFT = range(4)
 SIDE_NAMES = {TOP: "top", RIGHT: "right", BOTTOM: "bottom", LEFT: "left"}
@@ -54,6 +59,10 @@ class DockChecks:
 
     def move(self, x, y):
         self._hook("MovePointer", (float(x), float(y)), "(dd)")
+
+    def frames(self, ms, ticking=False):
+        """Frames the shell's frame clocks ran over `ms` milliseconds."""
+        return self._hook("CountFrames", (int(ms), ticking), "(ub)")
 
     def _extension_info(self, uuid):
         return self._call("org.gnome.Shell", "/org/gnome/Shell",
@@ -113,9 +122,12 @@ class DockChecks:
         return None
 
     def _away(self):
+        self._away_now()
+        GLib.usleep(SETTLE)
+
+    def _away_now(self):
         # The middle of the screen, nowhere near any edge.
         self.move(640, 360)
-        GLib.usleep(SETTLE)
 
     def _hover_target(self, dock):
         """The icon in the middle of the dock, and where to put the pointer.
@@ -364,6 +376,36 @@ class DockChecks:
         check("and goes again when it is switched back off", plain_again == 0,
               f"alpha={plain_again}")
 
+    def _check_resting(self, target, pointer):
+        """A swell that has settled under a resting pointer draws nothing more
+        until something changes, and still follows the pointer once it moves.
+
+        Counted from outside: the frames the shell runs at all, against what
+        it runs with nothing on screen and what a running clock counts."""
+        check = self._check
+        dock = self._dock(self.state())
+        GLib.usleep(500 * 1000)
+        resting = self.frames(2000)
+        check("the shell rests while the pointer rests on the magnified dock",
+              resting <= self._idle_frames + FRAME_SLACK,
+              f"{resting} frames in 2 s, {self._idle_frames} with nothing hovered, "
+              f"{self._busy_frames} with a clock running")
+        self._check_magnified(self.state(), pointer, 1.75, "right-rested")
+
+        # Woken by motion alone: the pointer stays on the dock throughout.
+        vertical = dock["position"] in (LEFT, RIGHT)
+        apps = sorted((item for item in dock["items"]
+                       if item["kind"] == "icon" and item["id"] != "show-apps"),
+                      key=lambda item: _box_center(item["slot"])[1 if vertical else 0])
+        index = next(i for i, item in enumerate(apps) if item["id"] == target["id"])
+        other = apps[index - 1] if index > 0 else apps[index + 1]
+        moved = _box_center(other["slot"])
+        self.move(*moved)
+        GLib.usleep(SETTLE)
+        self._check_magnified(self.state(), moved, 1.75, "right-moved")
+        self.move(*pointer)
+        GLib.usleep(SETTLE)
+
     # -------------------------------------------------------------- the run
     def run(self):
         check = self._check
@@ -398,6 +440,14 @@ class DockChecks:
         self._record_baseline(self._dock(state))
         self.ready = True
 
+        # What the frame count is measured against: the shell with nothing
+        # moving, and with a clock of the hook's own running.
+        self._idle_frames = self.frames(2000)
+        self._busy_frames = self.frames(1000, True)
+        check("a running frame clock is counted, and an idle one is not",
+              self._busy_frames >= 20 and self._idle_frames <= FRAME_SLACK,
+              f"{self._busy_frames} frames in 1 s running, {self._idle_frames} in 2 s idle")
+
         # ---- the backdrop behind the focused app, with the pointer elsewhere
         self._check_focus_highlight()
 
@@ -407,6 +457,9 @@ class DockChecks:
         self._check_magnified(state, pointer, 1.75, "right")
 
         self._capture("dock-magnified-right.png")
+
+        # ---- resting there: nothing redrawn, yet still following the pointer
+        self._check_resting(target, pointer)
 
         # ---- the size setting applies while hovered
         self._pear_up_setting("dock-magnification-size", "250")
