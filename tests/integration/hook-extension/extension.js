@@ -260,6 +260,44 @@ const IFACE = `
     <method name="SampleSwitch">
       <arg type="s" direction="out" name="samples"/>
     </method>
+    <method name="RecordGestures">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="GetGestureState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="FeedSwipe">
+      <arg type="s" direction="in" name="target"/>
+      <arg type="d" direction="in" name="dx"/>
+      <arg type="d" direction="in" name="dy"/>
+      <arg type="i" direction="in" name="steps"/>
+      <arg type="s" direction="out" name="result"/>
+    </method>
+    <method name="FeedSwipeThen">
+      <arg type="s" direction="in" name="target"/>
+      <arg type="d" direction="in" name="dx"/>
+      <arg type="d" direction="in" name="dy"/>
+      <arg type="i" direction="in" name="steps"/>
+      <arg type="s" direction="in" name="how"/>
+      <arg type="s" direction="out" name="result"/>
+    </method>
+    <method name="ClaimSwitchKey">
+      <arg type="s" direction="in" name="name"/>
+      <arg type="b" direction="in" name="claim"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="WrapSwitchTracker">
+      <arg type="b" direction="in" name="wrap"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="WatchSwitchTransition">
+      <arg type="b" direction="in" name="fresh"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="GetOverviewSwipeState">
+      <arg type="s" direction="in" name="uuid"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
     <method name="SwipeTouchpad">
       <arg type="s" direction="in" name="phase"/>
       <arg type="d" direction="in" name="delta"/>
@@ -541,6 +579,24 @@ function screenshotNotifications() {
             return ['screenshooter-symbolic', 'screenshot-recorded-symbolic'].includes(name);
         })
         .flatMap(source => [...(source.notifications ?? [])]);
+}
+
+// The shell's swipe trackers, by what they move, and the touchpad settings each
+// one's gesture held when first recorded: the shell's own Gio.Settings.
+const shellTouchpadSettings = new WeakMap();
+
+function swipeTrackers() {
+    const controls = Main.overview._overview?.controls;
+    const appDisplay = controls?._appDisplay;
+    const found = [
+        ['desktops', Main.wm._workspaceAnimation?._swipeTracker],
+        ['overview', Main.overview._swipeTracker],
+        ['overview desktops', controls?._workspacesDisplay?._swipeTracker],
+        ['app grid', appDisplay?._swipeTracker],
+    ];
+    for (const icon of appDisplay?._folderIcons ?? [])
+        found.push(['folder', icon?.view?._swipeTracker]);
+    return found.filter(([, tracker]) => tracker?._touchpadGesture);
 }
 
 export default class TestHookExtension extends Extension {
@@ -1779,7 +1835,8 @@ export default class TestHookExtension extends Extension {
     }
 
     // Pauses the switch the shell is animating and reads its curve, by
-    // setting its timeline to each 20 ms in turn, then lets it finish.
+    // setting its timeline to each 20 ms in turn, then lets it finish; and how
+    // many times the group's progress was set for each of those frames.
     SampleSwitch() {
         const group = Main.wm._workspaceAnimation?._switchData?.monitors?.[0];
         const transition = group?.get_transition('progress');
@@ -1788,18 +1845,218 @@ export default class TestHookExtension extends Extension {
         transition.pause();
         const duration = transition.get_duration();
         const samples = [];
+        const writes = [];
+        let written = 0;
+        const notifyId = group.connect('notify::progress', () => written++);
         const seek = ms => {
             transition.advance(ms);
+            written = 0;
             transition.emit('new-frame', ms);
+            writes.push(written);
         };
-        for (let ms = 0; ms <= duration; ms += 20) {
-            seek(ms);
-            samples.push([ms, group.progress]);
+        try {
+            for (let ms = 0; ms <= duration; ms += 20) {
+                seek(ms);
+                samples.push([ms, group.progress]);
+            }
+            seek(duration);
+            samples.push([duration, group.progress]);
+        } finally {
+            group.disconnect(notifyId);
         }
-        seek(duration);
-        samples.push([duration, group.progress]);
         transition.start();
-        return JSON.stringify({ duration, samples });
+        return JSON.stringify({ duration, samples, writes });
+    }
+
+    // Notes each swipe gesture's touchpad settings as the shell made them; only
+    // called while Pear Up leaves them alone.
+    RecordGestures() {
+        for (const [, tracker] of swipeTrackers()) {
+            const gesture = tracker._touchpadGesture;
+            if (!shellTouchpadSettings.has(gesture))
+                shellTouchpadSettings.set(gesture, gesture._touchpadSettings);
+        }
+        return this.GetGestureState();
+    }
+
+    // Whether each swipe gesture still has the shell's own settings, and what
+    // it reads for Natural Scrolling through them, against the setting itself.
+    GetGestureState() {
+        const touchpad = new Gio.Settings({ schema_id: 'org.gnome.desktop.peripherals.touchpad' });
+        return JSON.stringify({
+            natural: touchpad.get_boolean('natural-scroll'),
+            gestures: swipeTrackers().map(([name, tracker]) => {
+                const gesture = tracker._touchpadGesture;
+                const shells = shellTouchpadSettings.get(gesture);
+                return {
+                    name,
+                    recorded: !!shells,
+                    shells: shells !== undefined && gesture._touchpadSettings === shells,
+                    reads: gesture._touchpadSettings.get_boolean('natural-scroll'),
+                };
+            }),
+        });
+    }
+
+    // A three-finger swipe through the gesture's own event handler, as the
+    // touchpad delivers it: a begin with no motion, `steps` updates of (dx, dy)
+    // 50 ms apart — slow enough that letting go settles back rather than flings
+    // — and an end. What the gesture passed on to its tracker, and the
+    // progress the tracker made of it.
+    FeedSwipe(target, dx, dy, steps) {
+        return this.FeedSwipeThen(target, dx, dy, steps, 'end');
+    }
+
+    // FeedSwipe, ended as `how` says: 'end', the fingers lifting; 'interrupt',
+    // the tracker turned off and on again before they lift, as the shell does
+    // when its mode changes (SwipeTracker._interrupt emits the end itself);
+    // 'cancel', the tracker's cancelled-gesture path (a touch swipe's, which
+    // reaches _endGesture with the swipe cancelled), before they lift. A lift
+    // after either finds the swipe already over. 'noupdate': begun and ended
+    // with no update at all, which GNOME 48 throws on too.
+    FeedSwipeThen(target, dx, dy, steps, how) {
+        const tracker = swipeTrackers().find(([name]) => name === target)?.[1];
+        if (!tracker)
+            return JSON.stringify(null);
+        const gesture = tracker._touchpadGesture;
+        const deltas = [];
+        const progress = [];
+        const gestureId = gesture.connect('update', (_g, _time, delta) => deltas.push(delta));
+        const trackerId = tracker.connect('update', (_t, value) => progress.push(value));
+        const monitor = Main.layoutManager.primaryMonitor;
+        const [x, y] = [monitor.x + monitor.width / 2, monitor.y + monitor.height / 2];
+        let time = global.get_current_time();
+        const event = (phase, mx, my) => ({
+            type: () => Clutter.EventType.TOUCHPAD_SWIPE,
+            get_gesture_phase: () => phase,
+            get_touchpad_gesture_finger_count: () => 3,
+            get_time: () => time,
+            get_coords: () => [x, y],
+            get_gesture_motion_delta_unaccelerated: () => [mx, my],
+            get_gesture_motion_delta: () => [mx, my],
+        });
+        try {
+            if (how === 'noupdate') {
+                // Begun and ended with no update between, through the
+                // gesture's own signals: its event handler always sends an
+                // update with the begin.
+                gesture.emit('begin', time, x, y);
+                gesture.emit('end', time + 50, tracker.distance || 300);
+                return JSON.stringify({ deltas, progress: [0] });
+            }
+            gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.BEGIN, 0, 0));
+            for (let i = 0; i < steps; i++) {
+                time += 50;
+                gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.UPDATE, dx, dy));
+            }
+            if (how === 'interrupt') {
+                tracker.enabled = false;
+                tracker.enabled = true;
+            } else if (how === 'cancel') {
+                // GNOME 48 calls it _cancelTouchGesture and wants the time.
+                if (typeof tracker._cancelPanGesture === 'function')
+                    tracker._cancelPanGesture();
+                else if (typeof tracker._cancelTouchGesture === 'function')
+                    tracker._cancelTouchGesture(null, time, tracker.distance);
+                else
+                    return JSON.stringify({ deltas, progress, unsupported: true });
+            }
+            time += 50;
+            gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.END, 0, 0));
+        } finally {
+            gesture.disconnect(gestureId);
+            tracker.disconnect(trackerId);
+        }
+        return JSON.stringify({ deltas, progress });
+    }
+
+    // What a swipe that ended while the overview was hidden may have left
+    // behind: the overview's shown state, its controls' gesture, the desktops'
+    // views made for it, the tracker's own state, and Pear Up's guard on it.
+    GetOverviewSwipeState(uuid) {
+        const tracker = Main.overview._swipeTracker;
+        const controls = Main.overview._overview?.controls;
+        const display = controls?._workspacesDisplay;
+        const guard = Main.extensionManager.lookup(uuid)?.stateObj?._overviewSwipeGuard;
+        return JSON.stringify({
+            shownState: Main.overview._shownState,
+            visible: Main.overview.visible,
+            gestureInProgress: !!controls?._stateAdjustment?.gestureInProgress,
+            controlsState: controls?._stateAdjustment?.value ?? null,
+            displayVisible: !!display?.visible,
+            views: display?._workspacesViews?.length ?? null,
+            trackerState: tracker?._state ?? null,
+            trackerProgress: tracker?._progress ?? null,
+            emitOwn: !!tracker && Object.hasOwn(tracker, 'emit'),
+            // GNOME 48.3 and 49 on: updates at progress 0 do not begin to
+            // show the overview (gnome-shell fb30a942), which is the bug.
+            ignoresZeroProgress: /progress\s*===\s*0/.test(Main.overview._gestureUpdate?.toString() ?? ''),
+            guard: guard?.state ?? null,
+        });
+    }
+
+    // The desktops' progress transition of the switch now running, kept (with
+    // `fresh`) to be asked about again after it has stopped: how far along, its
+    // length and curve, and whether anything is still connected to its frames.
+    WatchSwitchTransition(fresh) {
+        if (fresh)
+            this._watchedTransition = Main.wm._workspaceAnimation?._switchData?.monitors?.[0]
+                ?.get_transition('progress') ?? null;
+        const transition = this._watchedTransition;
+        if (!transition)
+            return JSON.stringify(null);
+        const frameSignal = GObject.signal_lookup('new-frame', Clutter.Timeline.$gtype);
+        return JSON.stringify({
+            playing: transition.is_playing(),
+            progress: transition.get_progress(),
+            duration: transition.get_duration(),
+            linear: transition.get_progress_mode() === Clutter.AnimationMode.LINEAR,
+            frameHandlers: GObject.signal_has_handler_pending(transition, frameSignal, 0, true),
+        });
+    }
+
+    // Another extension taking one of the switch keys, as GNOME's API lets it,
+    // and giving it back to the shell; how often its handler has run, and the
+    // action modes the shell holds for the key.
+    ClaimSwitchKey(name, claim) {
+        const wm = Main.wm;
+        const modes = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
+        if (claim) {
+            this._claimedRuns = 0;
+            wm.setCustomKeybindingHandler(name, modes, () => this._claimedRuns++);
+        } else {
+            wm.setCustomKeybindingHandler(name, modes, wm._showWorkspaceSwitcher.bind(wm));
+        }
+        return JSON.stringify({ runs: this._claimedRuns ?? 0, modes: wm._allowedKeybindings?.[name] ?? null });
+    }
+
+    // Another extension wrapping the desktop switcher's tracker, as own
+    // properties over whatever is there, Pear Up's included; unwrapped, each
+    // gets back exactly what it covered.
+    WrapSwitchTracker(wrap) {
+        const tracker = Main.wm._workspaceAnimation?._swipeTracker;
+        if (!tracker)
+            return JSON.stringify(null);
+        if (wrap && !this._trackerWraps) {
+            this._trackerWraps = [];
+            for (const name of ['confirmSwipe', '_reset', '_updateGesture', '_endGesture']) {
+                const own = Object.getOwnPropertyDescriptor(tracker, name);
+                const beneath = own?.value;
+                tracker[name] = function (...args) {
+                    return (beneath ?? Object.getPrototypeOf(tracker)[name]).apply(this, args);
+                };
+                this._trackerWraps.push({ name, own, wrapper: tracker[name] });
+            }
+        } else if (!wrap && this._trackerWraps) {
+            for (const { name, own } of this._trackerWraps.reverse()) {
+                if (own)
+                    Object.defineProperty(tracker, name, own);
+                else
+                    delete tracker[name];
+            }
+            this._trackerWraps = null;
+        }
+        return this.GetSwitchState();
     }
 
     // A three-finger touchpad swipe, fed to the desktop switcher's tracker as

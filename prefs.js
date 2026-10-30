@@ -1796,12 +1796,12 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         // The trackpad has no page of its own: eight tabs are what the window's
         // width holds, and its neighbour in macOS's settings is the keyboard.
-        this._buildTrackpadGroup(page);
+        this._buildTrackpadGroup(page, settings);
 
         return page;
     }
 
-    _buildTrackpadGroup(page, home = GLib.get_home_dir()) {
+    _buildTrackpadGroup(page, settings, home = GLib.get_home_dir()) {
         const group = new Adw.PreferencesGroup({
             title: 'Trackpad',
             description: 'Scroll acceleration is a plugin for libinput, which GNOME loads when you log in',
@@ -1896,6 +1896,23 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         followers.push(browser[2]);
         const firefox = this._buildFirefoxMomentumRow(group, home);
         followers.push(firefox[1]);
+
+        this._buildGestureDirectionRow(group, settings);
+    }
+
+    // The shell's own swipes, not scrolling: GNOME turns them round with
+    // Natural Scrolling off, macOS never does. Applied by the shell side at once.
+    _buildGestureDirectionRow(group, settings) {
+        const row = new Adw.SwitchRow({
+            title: 'Swipe Between Desktops Like macOS',
+            subtitle: 'Three fingers move the desktops with them, whatever the scrolling direction: left brings ' +
+                'in the desktop on the right, up opens the overview, down goes back. GNOME turns them round ' +
+                'when Natural Scrolling is off',
+        });
+        row.set_subtitle_lines(0);
+        group.add(row);
+        settings.bind('macos-gesture-direction', row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
     }
 
     // The plugin's speed as the browsers' scale is set from it: what is
