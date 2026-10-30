@@ -12,6 +12,7 @@ import { DockBounce } from './dockBounce.js';
 import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
 import { SpacesSpring, SPACES_SPRING_KEY } from './spacesSpring.js';
+import { GestureDirection, GESTURE_DIRECTION_KEY } from './gestureDirection.js';
 import { ScreenshotThumbnail, SCREENSHOT_THUMBNAIL_KEY } from './screenshotThumbnail.js';
 import { WindowAnimations, WINDOW_ANIMATIONS_KEY } from './windowAnimations.js';
 import { SteamButtonsKeeper, STEAM_BUTTONS_KEY } from './steamButtons.js';
@@ -112,6 +113,7 @@ export default class GlobalMenuExtension extends Extension {
         this._shellTweaks = null;
         this._smoothBrightness = null;
         this._spacesSpring = null;
+        this._gestureDirection = null;
         this._screenshotThumbnail = null;
         this._windowAnimations = null;
         this._steamButtons = null;
@@ -208,6 +210,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._smoothBrightness?.sync();
             else if (key === SPACES_SPRING_KEY)
                 this._spacesSpring?.sync();
+            else if (key === GESTURE_DIRECTION_KEY)
+                this._gestureDirection?.sync();
             else if (key === SCREENSHOT_THUMBNAIL_KEY)
                 this._guard('updating the screenshot thumbnail', () => this._screenshotThumbnail?.sync());
             else if (key === WINDOW_ANIMATIONS_KEY)
@@ -266,6 +270,13 @@ export default class GlobalMenuExtension extends Extension {
         // sets the brightness itself (GNOME 49 on).
         this._guard('smoothing automatic brightness', () => {
             this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
+        });
+
+        // The shell's swipes follow the fingers, as Spaces and Mission Control
+        // do, whatever Natural Scrolling says. In the gestures beneath the
+        // trackers the spring wraps, so it goes first and comes off last.
+        this._guard('turning the swipes the macOS way', () => {
+            this._gestureDirection = new GestureDirection(this.metadata.uuid, this._settings);
         });
 
         // Desktop switching on a spring, with a rubber band at the ends, as
@@ -1305,6 +1316,9 @@ export default class GlobalMenuExtension extends Extension {
 
         this._guard('taking desktop switching off its spring', () => this._spacesSpring?.destroy());
         this._spacesSpring = null;
+
+        this._guard('giving the swipes back their direction', () => this._gestureDirection?.destroy());
+        this._gestureDirection = null;
 
         // Takes away a thumbnail still showing, and the notification it held back.
         this._guard('removing the screenshot thumbnail', () => this._screenshotThumbnail?.destroy());

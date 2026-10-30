@@ -260,6 +260,19 @@ const IFACE = `
     <method name="SampleSwitch">
       <arg type="s" direction="out" name="samples"/>
     </method>
+    <method name="RecordGestures">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="GetGestureState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="FeedSwipe">
+      <arg type="s" direction="in" name="target"/>
+      <arg type="d" direction="in" name="dx"/>
+      <arg type="d" direction="in" name="dy"/>
+      <arg type="i" direction="in" name="steps"/>
+      <arg type="s" direction="out" name="result"/>
+    </method>
     <method name="SwipeTouchpad">
       <arg type="s" direction="in" name="phase"/>
       <arg type="d" direction="in" name="delta"/>
@@ -541,6 +554,24 @@ function screenshotNotifications() {
             return ['screenshooter-symbolic', 'screenshot-recorded-symbolic'].includes(name);
         })
         .flatMap(source => [...(source.notifications ?? [])]);
+}
+
+// The shell's swipe trackers, by what they move, and the touchpad settings each
+// one's gesture held when first recorded: the shell's own Gio.Settings.
+const shellTouchpadSettings = new WeakMap();
+
+function swipeTrackers() {
+    const controls = Main.overview._overview?.controls;
+    const appDisplay = controls?._appDisplay;
+    const found = [
+        ['desktops', Main.wm._workspaceAnimation?._swipeTracker],
+        ['overview', Main.overview._swipeTracker],
+        ['overview desktops', controls?._workspacesDisplay?._swipeTracker],
+        ['app grid', appDisplay?._swipeTracker],
+    ];
+    for (const icon of appDisplay?._folderIcons ?? [])
+        found.push(['folder', icon?.view?._swipeTracker]);
+    return found.filter(([, tracker]) => tracker?._touchpadGesture);
 }
 
 export default class TestHookExtension extends Extension {
@@ -1800,6 +1831,77 @@ export default class TestHookExtension extends Extension {
         samples.push([duration, group.progress]);
         transition.start();
         return JSON.stringify({ duration, samples });
+    }
+
+    // Notes each swipe gesture's touchpad settings as the shell made them; only
+    // called while Pear Up leaves them alone.
+    RecordGestures() {
+        for (const [, tracker] of swipeTrackers()) {
+            const gesture = tracker._touchpadGesture;
+            if (!shellTouchpadSettings.has(gesture))
+                shellTouchpadSettings.set(gesture, gesture._touchpadSettings);
+        }
+        return this.GetGestureState();
+    }
+
+    // Whether each swipe gesture still has the shell's own settings, and what
+    // it reads for Natural Scrolling through them, against the setting itself.
+    GetGestureState() {
+        const touchpad = new Gio.Settings({ schema_id: 'org.gnome.desktop.peripherals.touchpad' });
+        return JSON.stringify({
+            natural: touchpad.get_boolean('natural-scroll'),
+            gestures: swipeTrackers().map(([name, tracker]) => {
+                const gesture = tracker._touchpadGesture;
+                const shells = shellTouchpadSettings.get(gesture);
+                return {
+                    name,
+                    recorded: !!shells,
+                    shells: shells !== undefined && gesture._touchpadSettings === shells,
+                    reads: gesture._touchpadSettings.get_boolean('natural-scroll'),
+                };
+            }),
+        });
+    }
+
+    // A three-finger swipe through the gesture's own event handler, as the
+    // touchpad delivers it: a begin with no motion, `steps` updates of (dx, dy)
+    // 50 ms apart — slow enough that letting go settles back rather than flings
+    // — and an end. What the gesture passed on to its tracker, and the
+    // progress the tracker made of it.
+    FeedSwipe(target, dx, dy, steps) {
+        const tracker = swipeTrackers().find(([name]) => name === target)?.[1];
+        if (!tracker)
+            return JSON.stringify(null);
+        const gesture = tracker._touchpadGesture;
+        const deltas = [];
+        const progress = [];
+        const gestureId = gesture.connect('update', (_g, _time, delta) => deltas.push(delta));
+        const trackerId = tracker.connect('update', (_t, value) => progress.push(value));
+        const monitor = Main.layoutManager.primaryMonitor;
+        const [x, y] = [monitor.x + monitor.width / 2, monitor.y + monitor.height / 2];
+        let time = global.get_current_time();
+        const event = (phase, mx, my) => ({
+            type: () => Clutter.EventType.TOUCHPAD_SWIPE,
+            get_gesture_phase: () => phase,
+            get_touchpad_gesture_finger_count: () => 3,
+            get_time: () => time,
+            get_coords: () => [x, y],
+            get_gesture_motion_delta_unaccelerated: () => [mx, my],
+            get_gesture_motion_delta: () => [mx, my],
+        });
+        try {
+            gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.BEGIN, 0, 0));
+            for (let i = 0; i < steps; i++) {
+                time += 50;
+                gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.UPDATE, dx, dy));
+            }
+            time += 50;
+            gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.END, 0, 0));
+        } finally {
+            gesture.disconnect(gestureId);
+            tracker.disconnect(trackerId);
+        }
+        return JSON.stringify({ deltas, progress });
     }
 
     // A three-finger touchpad swipe, fed to the desktop switcher's tracker as
