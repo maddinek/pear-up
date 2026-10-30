@@ -4,7 +4,7 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
-import { MenuManager } from './menuManager.js';
+import { MenuManager, MENU_CONTENT_KEYS } from './menuManager.js';
 import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
 import { DockMagnifier } from './dockMagnifier.js';
@@ -52,21 +52,12 @@ const CLOCK_RETURN_WINDOW_US = 10 * GLib.USEC_PER_SEC;
 // that inspects the panel from outside, so this one carries no test surface and
 // no way in for anything else.
 
-// Only these change what the menu bar contains. Anything else — an icon, a
-// command string, a System Menu item — is handled where it is used, so the bar
-// is not torn down and rebuilt for it.
-const MENU_CONTENT_KEYS = [
-    'show-indicator',
-    'desktop-app-name',
-    'menu-app-enabled',
-    'menu-file-enabled',
-    'menu-edit-enabled',
-    'menu-view-enabled',
-    'menu-go-enabled',
-    'menu-window-enabled',
-    'menu-help-enabled',
-    'custom-menus',
-];
+// A menu bar sync that lands while a desktop switch is sliding is held until
+// the slide ends, so St widgets are not built in the middle of its frames —
+// checked this often, and never held longer than this, so the bar cannot be
+// left showing the desktop just left.
+const MENU_SYNC_SWITCH_POLL_MS = 50;
+const MENU_SYNC_SWITCH_LIMIT_US = GLib.USEC_PER_SEC;
 
 // Both are read live: the magnifier is built or torn down by the first, and
 // picks up a new size from the second on its next frame.
@@ -137,6 +128,7 @@ export default class GlobalMenuExtension extends Extension {
         this._resyncId = 0;
         this._indicatorPaddingId = 0;
         this._menuSyncId = 0;
+        this._menuSyncDeadline = 0;
         this._hiddenSpacers = [];
         this._gapped = new Set();
         this._padded = new Set();
@@ -182,6 +174,7 @@ export default class GlobalMenuExtension extends Extension {
         this._hiddenSpacers = [];
         this._spotlightMoved = null;
         this._overviewHidden = false;
+        this._menuSyncDeadline = 0;
 
         this._menuManager = new MenuManager(this.metadata.uuid, this._settings);
 
@@ -363,6 +356,9 @@ export default class GlobalMenuExtension extends Extension {
         // Rebuilding the panel drops buttons this extension added, so put the
         // System Menu and the app menus back.
         if (clockWasMoved !== this._clockMoved && this._menuManager) {
+            // The buttons may survive the rebuild in name only, so build the
+            // bar afresh rather than keep it.
+            this._menuManager.invalidate();
             if (this._logoButton) {
                 this._logoButton.destroy();
                 this._logoButton = null;
@@ -1187,9 +1183,56 @@ export default class GlobalMenuExtension extends Extension {
 
         this._menuSyncId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._menuSyncId = 0;
-            this._guard('syncing menu visibility', () => this._syncMenuVisibility());
+            this._runMenuSync();
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    // A desktop switch moves focus as it starts, so the sync for it would
+    // otherwise build the new app's bar during the slide. Hold it, polling,
+    // until the switch is over or the limit is reached. The window in front is
+    // read when the sync finally runs, so a hold never shows a stale one. The
+    // limit counts from the first hold and is not extended by later signals.
+    _runMenuSync() {
+        if (this._workspaceSwitching()) {
+            const now = GLib.get_monotonic_time();
+            if (!this._menuSyncDeadline)
+                this._menuSyncDeadline = now + MENU_SYNC_SWITCH_LIMIT_US;
+            if (now < this._menuSyncDeadline) {
+                this._menuSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT,
+                    MENU_SYNC_SWITCH_POLL_MS, () => {
+                        this._menuSyncId = 0;
+                        this._runMenuSync();
+                        return GLib.SOURCE_REMOVE;
+                    });
+                return;
+            }
+        }
+
+        this._menuSyncDeadline = 0;
+        this._guard('syncing menu visibility', () => this._syncMenuVisibility());
+    }
+
+    // The window manager's switch animation holds its switch data from the
+    // moment a switch or swipe is prepared until it has landed. A shell
+    // without one simply never holds the sync.
+    _workspaceSwitching() {
+        try {
+            return !!Main.wm?._workspaceAnimation?._switchData;
+        } catch {
+            return false;
+        }
+    }
+
+    _dropQueuedSources() {
+        for (const source of ['_resyncId', '_indicatorPaddingId', '_menuSyncId', '_powerRetryId', '_overviewRetryId',
+            '_clockHoldId']) {
+            if (this[source]) {
+                GLib.source_remove(this[source]);
+                this[source] = 0;
+            }
+        }
+        this._menuSyncDeadline = 0;
     }
 
     _syncMenuVisibility() {
@@ -1257,13 +1300,7 @@ export default class GlobalMenuExtension extends Extension {
             this._sessionModeId = 0;
         }
 
-        for (const source of ['_resyncId', '_indicatorPaddingId', '_menuSyncId', '_powerRetryId', '_overviewRetryId',
-            '_clockHoldId']) {
-            if (this[source]) {
-                GLib.source_remove(this[source]);
-                this[source] = 0;
-            }
-        }
+        this._dropQueuedSources();
 
         if (this._quitBound) {
             Main.wm.removeKeybinding('quit-app');
