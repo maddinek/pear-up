@@ -36,9 +36,20 @@
 // factor and makes them instant when animations are off; with animations off
 // nothing is changed at all.
 //
+// Which animation an ease() is, the shell mostly says itself, without a stack
+// trace on every window event: it keeps a set of the windows it is opening,
+// _mapping, and of those it is closing, _destroying, and adds the window to it
+// before that animation's ease(). An ease() of a window in neither is
+// something else and goes through. One of a window in either may still be
+// another animation — a resize while the opening waits for the overview to
+// close, with both running — so only then is its caller read from the stack,
+// once per opening or closing. A shell without the sets has it read for every
+// ease() of an armed window, as before.
+//
 // GNOME internals this depends on, listed in tests/api-manifest.json too:
 //   - Main.wm._shouldAnimateActor(actor, types), called from _mapWindow and
 //     _destroyWindow right before they set up the animation
+//   - Main.wm's _mapping and _destroying sets
 //   - the window actor's ease(), installed on Clutter.Actor by the shell, and
 //     its onStopped, which the shell uses to finish the map or destroy
 //   - _getAnimationWindowType (GNOME 46 on) or the actor's _windowType (45)
@@ -78,7 +89,7 @@ const patch = new MethodPatch(
         const animate = original.call(this, actor, types);
         if (animate && active) {
             try {
-                active._claim(this, actor);
+                active._claim(this, actor, types);
             } catch (e) {
                 console.warn(`[${active._uuid}] restyling a window animation failed:`, e);
             }
@@ -144,11 +155,28 @@ export class WindowAnimations {
             this._disarm(actor);
     }
 
-    // Called from inside the shell's _shouldAnimateActor, once it has said yes.
-    _claim(wm, actor) {
+    // What the shell is about to animate with this ease() of the actor: 'open',
+    // 'close', or null for anything else.
+    _kindOf(wm, actor) {
+        if (!(wm._mapping instanceof Set) || !(wm._destroying instanceof Set)) {
+            const stack = new Error().stack ?? '';
+            return OPENING.test(stack) ? 'open' : CLOSING.test(stack) ? 'close' : null;
+        }
+        const closing = wm._destroying.has(actor);
+        if (!closing && !wm._mapping.has(actor))
+            return null;
         const stack = new Error().stack ?? '';
-        const kind = OPENING.test(stack) ? 'open' : CLOSING.test(stack) ? 'close' : null;
-        if (!kind || !St.Settings.get().enable_animations)
+        if (closing && CLOSING.test(stack))
+            return 'close';
+        return wm._mapping.has(actor) && OPENING.test(stack) ? 'open' : null;
+    }
+
+    // Called from inside the shell's _shouldAnimateActor, once it has said yes.
+    // Opening and closing ask it with dialogs among the types, resizing does
+    // not, so a resize never arms a window; minimizing and unminimizing do,
+    // and their ease() then takes the stand-in back.
+    _claim(wm, actor, types) {
+        if (!St.Settings.get().enable_animations || !types?.includes?.(Meta.WindowType.DIALOG))
             return;
 
         const window = actor.meta_window;
@@ -160,13 +188,10 @@ export class WindowAnimations {
         if (!TYPES.includes(type))
             return;
 
-        // A window closed before its opening began: the closing is what is
-        // wanted now.
-        const armed = this._armed.get(actor);
-        if (armed) {
-            armed.kind = kind;
+        // A window closed before its opening began: the stand-in already
+        // there tells the closing by the shell's sets when it comes.
+        if (this._armed.has(actor))
             return;
-        }
 
         // Somebody else is already standing in for this window's ease().
         if (Object.hasOwn(actor, 'ease'))
@@ -174,16 +199,21 @@ export class WindowAnimations {
 
         const self = this;
         const base = actor.ease;
-        const entry = { kind };
+        const entry = {};
         entry.ease = function (params = {}, ...rest) {
-            // The opening animation is set up after an await, and a window can
-            // be resized before it, which the shell animates with ease() too.
-            // That one goes through as it is, and the stand-in stays.
-            const stack = new Error().stack ?? '';
-            if (!(entry.kind === 'open' ? OPENING : CLOSING).test(stack))
+            const kind = self._kindOf(wm, this);
+            if (!kind) {
+                // The opening animation is set up after an await, and a window
+                // can be resized before it, which the shell animates with
+                // ease() too. That one goes through as it is, and the stand-in
+                // stays while the opening is still to come; once it is not, a
+                // closing arms the window afresh.
+                if (wm._mapping instanceof Set && !wm._mapping.has(this))
+                    self._disarm(this);
                 return base.call(this, params, ...rest);
+            }
             self._disarm(this);
-            return self._restyle(this, entry.kind, params, rest);
+            return self._restyle(this, kind, params, rest);
         };
         actor.ease = entry.ease;
         this._armed.set(actor, entry);

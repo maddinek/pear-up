@@ -264,6 +264,8 @@
     "_shouldAnimateActor",
     "_mapWindow",
     "_destroyWindow",
+    "_mapping",
+    "_destroying",
     "is_attached_dialog",
     "addKeybinding",
     "removeKeybinding",
