@@ -1388,6 +1388,10 @@ try:
            f"{share(first, 140):.2f} at 140, {share(first, 300):.3f} at 300; "
            f"desktop {after['active']} of {after['count']}") if first
           else f"no switch animated (desktop {on['active']} of {on['count']})")
+    if animated and first:
+        check("on the spring, the desktops' position is set once a frame, not twice",
+              first.get("writes") and all(w == 1 for w in first["writes"]),
+              f"sets per frame: {sorted(set(first.get('writes') or []))}")
 
     # The last desktop: Ctrl+Alt+Right has nowhere to go.
     hook("PressKeys", (["Control_L", "Alt_L", "Right"],), "(as)")
@@ -1465,6 +1469,10 @@ try:
     settle()
     check("and Ctrl+Alt+Right is GNOME's 250 ms slide again",
           (plain and plain["duration"] == 250) if animated else not plain, f"{plain['duration'] if plain else 'no'} ms")
+    if animated and plain:
+        check("which sets the desktops' position once a frame too",
+              plain.get("writes") and all(w == 1 for w in plain["writes"]),
+              f"sets per frame: {sorted(set(plain.get('writes') or []))}")
     hook("PressKeys", (["Control_L", "Alt_L", "Right"],), "(as)")
     shifts = watch_bump(0.5)
     swipe("begin")
@@ -1484,6 +1492,73 @@ try:
     off = switch_state()
     check("switched on and off repeatedly, it leaves nothing behind",
           not off["controllerOwn"] and not off["trackerOwn"] and not off["others"])
+
+    # Turned off in the middle of a slide, as a lock can: the slide lands.
+    on_last = settle()
+    pear_up_setting("spaces-spring", "true")
+    GLib.usleep(400 * 1000)
+    hook("PressKeys", (["Control_L", "Alt_L", "Left"],), "(as)")
+    pear_up_setting("spaces-spring", "false")
+    after = settle()
+    check("turned off in the middle of a slide, the slide still lands and nothing is left",
+          on_last["active"] == 1 and after["active"] == 0 and not after["switching"]
+          and not after["others"] and not after["controllerOwn"] and not after["trackerOwn"],
+          f"desktop {on_last['active']} → {after['active']}, controller {after['controllerOwn']}, "
+          f"tracker {after['trackerOwn']}")
+
+    # Another extension's handler for a switch key, set while the spring is on,
+    # is still the key's when the spring goes off.
+    pear_up_setting("spaces-spring", "true")
+    GLib.usleep(400 * 1000)
+    claimed = json.loads(hook("ClaimSwitchKey", ("switch-to-workspace-right", True), "(sb)"))
+    pear_up_setting("spaces-spring", "false")
+    GLib.usleep(400 * 1000)
+    hook("PressKeys", (["Control_L", "Alt_L", "Right"],), "(as)")
+    GLib.usleep(600 * 1000)
+    kept = json.loads(hook("ClaimSwitchKey", ("switch-to-workspace-right", False), "(sb)"))
+    after = settle()
+    check("a switch key another extension took while the spring was on stays theirs when it goes off",
+          kept["runs"] == claimed["runs"] + 1 and after["active"] == 0,
+          f"their handler ran {kept['runs'] - claimed['runs']} times; desktop {after['active']}")
+
+    # Another extension wrapping the tracker over the spring's own wrappers:
+    # off, the spring's pass everything through beneath theirs, and on again it
+    # goes on top; given back, the spring's old ones are used again and go.
+    if rubber:
+        pear_up_setting("spaces-spring", "true")
+        GLib.usleep(400 * 1000)
+        wrapped = json.loads(hook("WrapSwitchTracker", (True,), "(b)"))
+        pear_up_setting("spaces-spring", "false")
+        GLib.usleep(400 * 1000)
+        buried = switch_state()
+        swipe("begin")
+        pulled = [swipe("update", -16) for _ in range(6)]
+        swipe("end")
+        settle()
+        still = not any(p["shift"][0] for p in pulled if p and p["shift"])
+        check("off beneath another extension's wrappers, the spring's pass through: no stretch",
+              RUBBER_OWN <= set(buried["trackerOwn"]) and still,
+              f"tracker own {buried['trackerOwn']}, shifts {[p['shift'] for p in pulled if p]}")
+        pear_up_setting("spaces-spring", "true")
+        GLib.usleep(400 * 1000)
+        swipe("begin")
+        pulled = [swipe("update", -16) for _ in range(6)]
+        swipe("end")
+        settle()
+        check("on again over them, the desktops stretch at the end once more",
+              any(p["shift"][0] for p in pulled if p and p["shift"]),
+              f"shifts {[p['shift'] for p in pulled if p]}")
+        pear_up_setting("spaces-spring", "false")
+        GLib.usleep(400 * 1000)
+        hook("WrapSwitchTracker", (False,), "(b)")
+        pear_up_setting("spaces-spring", "true")
+        GLib.usleep(400 * 1000)
+        pear_up_setting("spaces-spring", "false")
+        GLib.usleep(400 * 1000)
+        off = switch_state()
+        check("their wrappers gone, the spring's old ones are used again and leave nothing behind",
+              bool(wrapped) and not off["trackerOwn"] and not off["controllerOwn"],
+              f"tracker own {off['trackerOwn']}")
 except (GLib.Error, FileNotFoundError, KeyError, TypeError) as exc:
     check("desktop switching could be exercised", False, str(exc).splitlines()[0])
 finally:
@@ -1551,16 +1626,17 @@ def swipe_directions():
     left = feed_swipe("desktops", -16, 0)
     settle()
     up = feed_swipe("overview", 0, -16)
-    overview_closed()
+    closed = overview_closed()
     return {
         "left": left and sum(left["deltas"]) > 0 and max(left["progress"] or [0]) > 0.1,
         "leftBack": left and sum(left["deltas"]) < 0 and max(left["progress"] or [0]) == 0,
-        "up": up and sum(up["deltas"]) > 0 and max(up["progress"] or [0]) > 0.1,
-        "upBack": up and sum(up["deltas"]) < 0 and max(up["progress"] or [0]) == 0,
+        "up": closed and up and sum(up["deltas"]) > 0 and max(up["progress"] or [0]) > 0.1,
+        "upBack": closed and up and sum(up["deltas"]) < 0 and max(up["progress"] or [0]) == 0,
         "detail": f"left: deltas {sum(left['deltas']) if left else '-'}, "
                   f"progress {max(left['progress'] or [0]) if left else '-':.2f}; "
                   f"up: deltas {sum(up['deltas']) if up else '-'}, "
-                  f"progress {max(up['progress'] or [0]) if up else '-'}",
+                  f"progress {max(up['progress'] or [0]) if up else '-'}"
+                  f"{'' if closed else ', overview still open'}",
     }
 
 
@@ -1700,6 +1776,181 @@ finally:
         direction_window.terminate()
         direction_window.wait()
         GLib.usleep(800 * 1000)
+
+# ------------------------------------------ a swipe that never opens the overview
+# From GNOME 49 the overview ignores a swipe's updates while their progress is
+# 0, so a three-finger swipe the closing way from the desktop never shows it,
+# and its end handler then throws ("Invalid overview shown transition from
+# HIDDEN to HIDING") before telling the controls the gesture is over: their
+# gesture stays in progress and the desktops' views made for the overview stay
+# built. Which way is the closing way depends on Natural Scrolling and Swipe
+# Between Desktops Like macOS, so every combination is swiped both ways, ended
+# by lifting the fingers, by the tracker being interrupted and by a cancel.
+# Pear Up's guard is always on; with Pear Up disabled the same swipe must throw
+# on 49 and later, which shows these checks can see the bug at all.
+INVALID_SHOWN = "Invalid overview shown transition"
+
+
+def shell_log_size():
+    try:
+        return os.path.getsize(os.path.join(ARTIFACTS, "shell.log"))
+    except OSError:
+        return 0
+
+
+def shell_log_since(offset, needle):
+    try:
+        with open(os.path.join(ARTIFACTS, "shell.log"), "rb") as handle:
+            handle.seek(offset)
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    return [line.strip() for line in text.splitlines() if needle in line]
+
+
+def overview_swipe_state():
+    return json.loads(hook("GetOverviewSwipeState", (UUID,), "(s)"))
+
+
+def left_clean(state):
+    """Nothing of the overview left behind a swipe that never opened it."""
+    return (state["shownState"] == "HIDDEN" and not state["visible"]
+            and not state["gestureInProgress"] and state["controlsState"] == 0
+            and not state["displayVisible"] and state["views"] == 0
+            and state["trackerState"] == 0 and state["trackerProgress"] == 0)
+
+
+def describe_left(state):
+    return (f"shown {state['shownState']}, gesture {state['gestureInProgress']}, "
+            f"controls {state['controlsState']}, views {state['views']} "
+            f"(display {'shown' if state['displayVisible'] else 'hidden'}), "
+            f"tracker {state['trackerState']}/{state['trackerProgress']}")
+
+
+try:
+    SHELL_MAJOR_NOW = int(subprocess.run(["gnome-shell", "--version"], capture_output=True,
+                                         text=True, check=False).stdout.split()[-1].split(".")[0])
+except (ValueError, IndexError):
+    SHELL_MAJOR_NOW = 0
+
+print()
+print("  a swipe that never opens the overview:")
+natural_before = touchpad_natural()
+guard_log = shell_log_size()
+try:
+    hook("HideOverview")
+    overview_closed()
+    GLib.usleep(500 * 1000)
+    first = overview_swipe_state()
+    check("Pear Up guards the overview's swipe while it is enabled, with no switch of its own",
+          first["emitOwn"] and first["guard"] and first["guard"]["on"],
+          f"emit own {first['emitOwn']}, guard {first['guard']}")
+
+    for natural in ("false", "true"):
+        touchpad_natural(natural)
+        for direction in ("false", "true"):
+            pear_up_setting(GESTURE_KEY, direction)
+            GLib.usleep(300 * 1000)
+            # Fingers up open the overview with Natural Scrolling on or the
+            # switch on; down closes it. Otherwise GNOME has them the other way.
+            closing_dy = 16 if (natural == "true" or direction == "true") else -16
+            label = (f"Natural Scrolling {'on' if natural == 'true' else 'off'}, "
+                     f"macOS direction {'on' if direction == 'true' else 'off'}")
+            for how in ("end", "interrupt", "cancel"):
+                caught = overview_swipe_state()["guard"]["caught"]
+                fed = json.loads(hook("FeedSwipeThen", ("overview", 0, closing_dy, 5, how),
+                                      "(sddis)"))
+                GLib.usleep(300 * 1000)
+                after = overview_swipe_state()
+                if fed and fed.get("unsupported"):
+                    print(f"  note: no cancelled-swipe path on this shell; skipped for {label}")
+                    continue
+                never = bool(fed) and bool(fed["progress"]) and max(fed["progress"]) == 0
+                # GNOME 48 begins to show the overview at progress 0, so its
+                # end is a valid one and the guard has nothing to catch.
+                expected = 1 if SHELL_MAJOR_NOW >= 49 else 0
+                check(f"{label}: the closing swipe ({how}) never moves the overview, and leaves "
+                      "nothing of it behind",
+                      never and left_clean(after) and after["guard"]["caught"] == caught + expected,
+                      f"progress {fed['progress'] if fed else None}, {describe_left(after)}, "
+                      f"caught {after['guard']['caught'] - caught}")
+
+            # The other way still opens it, and a slow one settles back closed.
+            opened = feed_swipe("overview", 0, -closing_dy, 5)
+            closed = overview_closed()
+            after = overview_swipe_state()
+            check(f"{label}: the opening swipe still moves the overview, and lets it close again",
+                  bool(opened) and max(opened["progress"] or [0]) > 0.1 and closed
+                  and after["shownState"] == "HIDDEN" and not after["gestureInProgress"],
+                  f"progress {max(opened['progress'] or [0]) if opened else None:.2f}, "
+                  f"{describe_left(after)}")
+
+    # A long one the opening way opens the overview for real after all that.
+    touchpad_natural("false")
+    pear_up_setting(GESTURE_KEY, "true")
+    GLib.usleep(300 * 1000)
+    feed_swipe("overview", 0, -80, 6)
+    shown = False
+    for _ in range(60):
+        GLib.usleep(50 * 1000)
+        now = overview_swipe_state()
+        if now["shownState"] == "SHOWN":
+            shown = True
+            break
+    hook("HideOverview")
+    closed = overview_closed()
+    GLib.usleep(500 * 1000)
+    check("and a full swipe up opens the overview, which then hides as usual",
+          shown and closed and left_clean(overview_swipe_state()),
+          describe_left(overview_swipe_state()))
+
+    thrown = shell_log_since(guard_log, INVALID_SHOWN)
+    check("none of it put an invalid overview transition in the shell's log", not thrown,
+          "; ".join(thrown[:3]) or "nothing")
+
+    # Without Pear Up, the shell's own way: on 49 and later this throws and
+    # leaves the gesture and the views behind. Enabled again, the next such
+    # swipe tidies that up as well.
+    pear_up_setting(GESTURE_KEY, "false")
+    GLib.usleep(300 * 1000)
+    call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
+         "DisableExtension", (UUID,), "(s)")
+    GLib.usleep(1500 * 1000)
+    unguarded = overview_swipe_state()
+    bare_log = shell_log_size()
+    feed_swipe("overview", 0, -16, 5)
+    GLib.usleep(500 * 1000)
+    bare = overview_swipe_state()
+    bare_thrown = shell_log_since(bare_log, INVALID_SHOWN)
+    if SHELL_MAJOR_NOW >= 49:
+        check("Pear Up disabled, GNOME's own overview swipe throws on this one and leaves the "
+              "overview half made, so these checks see the bug",
+              not unguarded["emitOwn"] and bare_thrown and bare["gestureInProgress"]
+              and bare["views"],
+              f"emit own {unguarded['emitOwn']}, thrown {len(bare_thrown)}, {describe_left(bare)}")
+    else:
+        check(f"Pear Up disabled, GNOME {SHELL_MAJOR_NOW}'s own overview swipe shows the overview "
+              "at progress 0 and does not throw (the bug came with 49)",
+              not unguarded["emitOwn"] and not bare_thrown and left_clean(bare),
+              f"emit own {unguarded['emitOwn']}, thrown {len(bare_thrown)}, {describe_left(bare)}")
+    call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
+         "EnableExtension", (UUID,), "(s)")
+    GLib.usleep(2500 * 1000)
+    feed_swipe("overview", 0, -16, 5)
+    GLib.usleep(500 * 1000)
+    tidied = overview_swipe_state()
+    check("enabled again, the guard is back and the next such swipe tidies up what the shell left",
+          tidied["emitOwn"] and left_clean(tidied), describe_left(tidied))
+except (GLib.Error, FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+    check("the overview swipe could be exercised", False, str(exc).splitlines()[0])
+finally:
+    pear_up_setting(GESTURE_KEY, "false")
+    touchpad_natural(natural_before)
+    try:
+        hook("HideOverview")
+    except GLib.Error:
+        pass
+    overview_closed()
 
 # ------------------------------------------------------- automatic brightness
 # From GNOME 49 the shell sets the backlight itself, and gnome-settings-daemon
