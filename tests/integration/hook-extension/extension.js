@@ -290,6 +290,10 @@ const IFACE = `
       <arg type="b" direction="in" name="wrap"/>
       <arg type="s" direction="out" name="state"/>
     </method>
+    <method name="WatchSwitchTransition">
+      <arg type="b" direction="in" name="fresh"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
     <method name="GetOverviewSwipeState">
       <arg type="s" direction="in" name="uuid"/>
       <arg type="s" direction="out" name="state"/>
@@ -1907,7 +1911,9 @@ export default class TestHookExtension extends Extension {
     // the tracker turned off and on again before they lift, as the shell does
     // when its mode changes (SwipeTracker._interrupt emits the end itself);
     // 'cancel', the tracker's cancelled-gesture path (a touch swipe's, which
-    // reaches _endGesture with the swipe cancelled), before they lift. A lift after either finds the swipe already over.
+    // reaches _endGesture with the swipe cancelled), before they lift. A lift
+    // after either finds the swipe already over. 'noupdate': begun and ended
+    // with no update at all, which GNOME 48 throws on too.
     FeedSwipeThen(target, dx, dy, steps, how) {
         const tracker = swipeTrackers().find(([name]) => name === target)?.[1];
         if (!tracker)
@@ -1930,6 +1936,14 @@ export default class TestHookExtension extends Extension {
             get_gesture_motion_delta: () => [mx, my],
         });
         try {
+            if (how === 'noupdate') {
+                // Begun and ended with no update between, through the
+                // gesture's own signals: its event handler always sends an
+                // update with the begin.
+                gesture.emit('begin', time, x, y);
+                gesture.emit('end', time + 50, tracker.distance || 300);
+                return JSON.stringify({ deltas, progress: [0] });
+            }
             gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.BEGIN, 0, 0));
             for (let i = 0; i < steps; i++) {
                 time += 50;
@@ -1975,6 +1989,26 @@ export default class TestHookExtension extends Extension {
             trackerProgress: tracker?._progress ?? null,
             emitOwn: !!tracker && Object.hasOwn(tracker, 'emit'),
             guard: guard?.state ?? null,
+        });
+    }
+
+    // The desktops' progress transition of the switch now running, kept (with
+    // `fresh`) to be asked about again after it has stopped: how far along, its
+    // length and curve, and whether anything is still connected to its frames.
+    WatchSwitchTransition(fresh) {
+        if (fresh)
+            this._watchedTransition = Main.wm._workspaceAnimation?._switchData?.monitors?.[0]
+                ?.get_transition('progress') ?? null;
+        const transition = this._watchedTransition;
+        if (!transition)
+            return JSON.stringify(null);
+        const frameSignal = GObject.signal_lookup('new-frame', Clutter.Timeline.$gtype);
+        return JSON.stringify({
+            playing: transition.is_playing(),
+            progress: transition.get_progress(),
+            duration: transition.get_duration(),
+            linear: transition.get_progress_mode() === Clutter.AnimationMode.LINEAR,
+            frameHandlers: GObject.signal_has_handler_pending(transition, frameSignal, 0, true),
         });
     }
 

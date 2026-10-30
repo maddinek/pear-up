@@ -1493,18 +1493,59 @@ try:
     check("switched on and off repeatedly, it leaves nothing behind",
           not off["controllerOwn"] and not off["trackerOwn"] and not off["others"])
 
-    # Turned off in the middle of a slide, as a lock can: the slide lands.
+    # Turned off in the middle of a slide, as a lock can: the slide goes on to
+    # land on the spring, and its handlers go when it stops.
     on_last = settle()
     pear_up_setting("spaces-spring", "true")
     GLib.usleep(400 * 1000)
     hook("PressKeys", (["Control_L", "Alt_L", "Left"],), "(as)")
+    midway = None
+    for _ in range(100):
+        midway = json.loads(hook("WatchSwitchTransition", (True,), "(b)"))
+        if midway and midway["playing"] and midway["progress"] > 0:
+            break
+        GLib.usleep(5 * 1000)
     pear_up_setting("spaces-spring", "false")
+    still = json.loads(hook("WatchSwitchTransition", (False,), "(b)"))
     after = settle()
-    check("turned off in the middle of a slide, the slide still lands and nothing is left",
-          on_last["active"] == 1 and after["active"] == 0 and not after["switching"]
-          and not after["others"] and not after["controllerOwn"] and not after["trackerOwn"],
-          f"desktop {on_last['active']} → {after['active']}, controller {after['controllerOwn']}, "
-          f"tracker {after['trackerOwn']}")
+    stopped = json.loads(hook("WatchSwitchTransition", (False,), "(b)"))
+    if animated:
+        check("turned off in the middle of a slide, the slide lands on the spring and its "
+              "handlers go when it stops",
+              midway and midway["duration"] == 380 and midway["linear"] and midway["frameHandlers"]
+              and still and still["duration"] == 380 and still["linear"]
+              and stopped and not stopped["playing"] and not stopped["frameHandlers"]
+              and on_last["active"] == 1 and after["active"] == 0 and not after["switching"]
+              and not after["others"] and not after["controllerOwn"] and not after["trackerOwn"],
+              f"midway {midway}, after off {still}, stopped {stopped}; desktop "
+              f"{on_last['active']} → {after['active']}, controller {after['controllerOwn']}")
+    else:
+        check("turned off around a switch, it lands and nothing is left",
+              after["active"] == 0 and not after["controllerOwn"] and not after["trackerOwn"])
+
+    # A slide taken over by a new swipe: its transition is removed, and the
+    # spring's handlers go with it.
+    if animated:
+        pear_up_setting("spaces-spring", "true")
+        GLib.usleep(400 * 1000)
+        swipe("begin")
+        for _ in range(10):
+            swipe("update", 24)
+        swipe("end")
+        taken = json.loads(hook("WatchSwitchTransition", (True,), "(b)"))
+        swipe("begin")
+        removed = json.loads(hook("WatchSwitchTransition", (False,), "(b)"))
+        swipe("end")
+        settle()
+        check("a slide a new swipe takes over drops the spring's handlers with its transition",
+              taken and taken["frameHandlers"] and removed and not removed["playing"]
+              and not removed["frameHandlers"],
+              f"before {taken}, after {removed}")
+        pear_up_setting("spaces-spring", "false")
+        GLib.usleep(300 * 1000)
+        if switch_state()["active"] != 0:
+            hook("PressKeys", (["Control_L", "Alt_L", "Left"],), "(as)")
+            settle()
 
     # Another extension's handler for a switch key, set while the spring is on,
     # is still the key's when the spring goes off.
@@ -1856,7 +1897,7 @@ try:
             closing_dy = 16 if (natural == "true" or direction == "true") else -16
             label = (f"Natural Scrolling {'on' if natural == 'true' else 'off'}, "
                      f"macOS direction {'on' if direction == 'true' else 'off'}")
-            for how in ("end", "interrupt", "cancel"):
+            for how in ("end", "interrupt", "cancel", "noupdate"):
                 caught = overview_swipe_state()["guard"]["caught"]
                 fed = json.loads(hook("FeedSwipeThen", ("overview", 0, closing_dy, 5, how),
                                       "(sddis)"))
@@ -1867,8 +1908,9 @@ try:
                     continue
                 never = bool(fed) and bool(fed["progress"]) and max(fed["progress"]) == 0
                 # GNOME 48 begins to show the overview at progress 0, so its
-                # end is a valid one and the guard has nothing to catch.
-                expected = 1 if SHELL_MAJOR_NOW >= 49 else 0
+                # end is a valid one and the guard has nothing to catch, unless
+                # there was no update at all.
+                expected = 1 if SHELL_MAJOR_NOW >= 49 or how == "noupdate" else 0
                 check(f"{label}: the closing swipe ({how}) never moves the overview, and leaves "
                       "nothing of it behind",
                       never and left_clean(after) and after["guard"]["caught"] == caught + expected,
