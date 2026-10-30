@@ -398,14 +398,18 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
             row.active = false;
             expect(at('the user\'s values after a partial match'), typeUserValues(), partial);
 
-            // Set by hand, before this switch existed: nothing was noted, and
-            // the default is the only thing there is to go back to.
+            // Set by hand, before this switch existed: nothing was noted, so
+            // nothing is Pear Up's to take back. The user's own values stay,
+            // rather than being reset to the defaults on a guess, and the row
+            // says why it stays on.
             setType(typeFor(family));
             forgetDisplaced();
             row = rowOf(prefsWith([family]), TYPE_ROW);
             expect(at('the switch when all four already match'), row.active, true);
             row.active = false;
-            expect(at('the user\'s values after switching off values set by hand'), typeUserValues(), unset);
+            expect(at('the user\'s values after switching off values set by hand'), typeUserValues(), typeFor(family));
+            expect(at('the switch after switching off values set by hand'), row.active, true);
+            expect(at('the row says there is nothing noted'), /no saved change/.test(row.subtitle), true);
 
             // It follows the keys when they change somewhere else.
             setType(typeFor(family));
@@ -797,7 +801,9 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         expect('tray off', shell.get_strv('toggle-message-tray'), ['<Super>v', '<Super>m', '<Super>n']);
         expect('keybinding notes after Cmd+M', pearUp.get_string('displaced-keybindings'), '{}');
 
-        // Already set by hand, as on framy: reads on, off goes back to GNOME's own.
+        // Already set by hand, as on framy: reads on, and off takes the set's
+        // own accelerator away. What the tray held before is not known, so it
+        // is left as it is rather than reset to GNOME's default.
         reset();
         wm.set_strv('minimize', ['<Super>h', '<Super>m']);
         shell.set_strv('toggle-message-tray', ['<Super>v']);
@@ -805,7 +811,7 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         expect('Cmd+M row set by hand', row.enable_expansion, true);
         row.enable_expansion = false;
         expect('minimize off after hand-set', wm.get_strv('minimize'), ['<Super>h']);
-        expect('tray off after hand-set', shell.get_strv('toggle-message-tray').includes('<Super>m'), true);
+        expect('tray off after hand-set', shell.get_strv('toggle-message-tray'), ['<Super>v']);
 
         // Super+M in minimize while the tray still holds it, as the old window
         // set left it: Cmd+M does not minimize yet, so the row reads off, and
@@ -818,6 +824,11 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         row.enable_expansion = true;
         expect('minimize on over the old set', wm.get_strv('minimize'), ['<Super>h', '<Super>m']);
         expect('tray on over the old set', shell.get_strv('toggle-message-tray'), ['<Super>v']);
+        // Super+M was in minimize before the set went on: it stays there
+        // when the set goes off, and the tray gets its own back.
+        rowOf(Adw.ExpanderRow, 'Cmd+M Minimizes').enable_expansion = false;
+        expect('minimize off over the old set', wm.get_strv('minimize'), ['<Super>h', '<Super>m']);
+        expect('tray off over the old set', shell.get_strv('toggle-message-tray'), ['<Super>v', '<Super>m']);
 
         // Cmd+M has one owner. The macOS Window Shortcuts set no longer lists
         // it, and switching that set off leaves Cmd+M Minimizes and its Super+M
@@ -904,6 +915,220 @@ if (GLib.getenv('PREFS_SMOKE_DOCK')) {
         if (problems.length === problemsBefore)
             print('  window keys: Cmd+M, Cmd+D and the tiling keys set, read back and restore; Cmd+M has one owner');
     }
+}
+
+// What the switches displaced is handed back by ownership: each switch keeps a
+// record of what it changed, and gives back only that, only while it still
+// holds what the switch wrote. Every case goes through a fresh preferences
+// object between steps, as after the window was closed and opened again.
+{
+    const WM = 'org.gnome.desktop.wm.keybindings';
+    const MUTTER = 'org.gnome.mutter.keybindings';
+    const SHELL = 'org.gnome.shell.keybindings';
+    const wm = preferences._settingsForSchema(WM);
+    const mutter = preferences._settingsForSchema(MUTTER);
+    const shell = preferences._settingsForSchema(SHELL);
+    const mutterPrefs = preferences._settingsForSchema('org.gnome.mutter');
+    const pearUp = preferences.getSettings();
+    const problemsBefore = problems.length;
+    const expect = (label, got, wanted) => {
+        if (JSON.stringify(got) !== JSON.stringify(wanted))
+            problems.push(`ownership: ${label} is ${JSON.stringify(got)}, expected ${JSON.stringify(wanted)}`);
+    };
+    const kept = [];
+    const rowIn = (prefs, build, type, title) => {
+        const page = prefs[build]();
+        kept.push(page);
+        return findWidget(page, widget => widget instanceof type && widget.title === title);
+    };
+    const keyboardRow = (type, title, prefs = new Preferences(metadata)) =>
+        rowIn(prefs, '_buildKeyboardPage', type, title);
+    const resetKeys = () => {
+        for (const [settings, key] of [[wm, 'minimize'], [wm, 'maximize'], [wm, 'unmaximize'],
+            [mutter, 'toggle-tiled-left'], [mutter, 'toggle-tiled-right'], [shell, 'toggle-message-tray'],
+            [shell, 'screenshot'], [shell, 'show-screenshot-ui'], [shell, 'show-screen-recording-ui'],
+            [wm, 'show-desktop'], [mutterPrefs, 'auto-maximize']]) {
+            if (settings && preferences._schemaHasKey(settings, key))
+                settings.reset(key);
+        }
+        pearUp.reset('displaced-keybindings');
+        pearUp.reset('displaced-settings');
+    };
+
+    if (!wm || !mutter || !shell || !preferences._schemaHasKey(shell, 'toggle-message-tray') ||
+        !preferences._schemaHasKey(mutter, 'toggle-tiled-left') || !preferences._schemaHasKey(shell, 'screenshot')) {
+        print('  ownership: skipped, the GNOME keybinding schemas are not complete here');
+    } else {
+        // The user had one of the three screenshot keys before: switching the
+        // set on adds the other two, and off takes only those two away.
+        resetKeys();
+        shell.set_strv('screenshot', ['<Shift>Print', '<Super><Shift>3']);
+        const SHOTS = 'macOS Screenshot Shortcuts';
+        let row = keyboardRow(Adw.ExpanderRow, SHOTS);
+        expect('the screenshot set with one key the user\'s', row.enable_expansion, false);
+        row.enable_expansion = true;
+        expect('the user\'s screenshot key with the set on', shell.get_strv('screenshot'),
+            ['<Shift>Print', '<Super><Shift>3']);
+        expect('the region key with the set on', shell.get_strv('show-screenshot-ui').includes('<Super><Shift>4'), true);
+        keyboardRow(Adw.ExpanderRow, SHOTS).enable_expansion = false;
+        expect('the user\'s screenshot key after the set went off', shell.get_strv('screenshot'),
+            ['<Shift>Print', '<Super><Shift>3']);
+        expect('the region key after the set went off',
+            shell.get_strv('show-screenshot-ui').includes('<Super><Shift>4'), false);
+        expect('the keybinding notes after the screenshot set', pearUp.get_string('displaced-keybindings'), '{}');
+
+        // A key that cannot be written when the set goes off: what could not be
+        // taken away stays the set's, so that going on and off again still
+        // leaves the user's own key.
+        keyboardRow(Adw.ExpanderRow, SHOTS).enable_expansion = true;
+        const stuck = new Preferences(metadata);
+        const stuckShell = stuck._settingsForSchema(SHELL);
+        const setStrv = stuckShell.set_strv.bind(stuckShell);
+        stuckShell.set_strv = (key, value) => key === 'show-screenshot-ui' ? false : setStrv(key, value);
+        row = keyboardRow(Adw.ExpanderRow, SHOTS, stuck);
+        row.enable_expansion = false;
+        expect('the region key that could not be taken away', shell.get_strv('show-screenshot-ui').includes('<Super><Shift>4'), true);
+        expect('the subtitle says what could not be changed', /Could not change/.test(row.subtitle), true);
+        keyboardRow(Adw.ExpanderRow, SHOTS).enable_expansion = true;
+        keyboardRow(Adw.ExpanderRow, SHOTS).enable_expansion = false;
+        expect('the user\'s screenshot key after a failed and a good switching off', shell.get_strv('screenshot'),
+            ['<Shift>Print', '<Super><Shift>3']);
+        expect('the region key after a failed and a good switching off',
+            shell.get_strv('show-screenshot-ui').includes('<Super><Shift>4'), false);
+
+        // On, off, on and off again: the tray's own list comes back every time,
+        // also when the set is switched on again while the tray is still
+        // stood down (Super+M taken out of minimize by hand), which used to
+        // note the stood-down list as the user's own.
+        resetKeys();
+        const tray = ['<Super>v', '<Super>m', '<Super>x'];
+        shell.set_strv('toggle-message-tray', tray);
+        const CMD_M = 'Cmd+M Minimizes';
+        keyboardRow(Adw.ExpanderRow, CMD_M).enable_expansion = true;
+        keyboardRow(Adw.ExpanderRow, CMD_M).enable_expansion = false;
+        expect('the tray after on and off', shell.get_strv('toggle-message-tray'), tray);
+        keyboardRow(Adw.ExpanderRow, CMD_M).enable_expansion = true;
+        expect('the tray on the second time', shell.get_strv('toggle-message-tray'), ['<Super>v', '<Super>x']);
+        wm.set_strv('minimize', wm.get_strv('minimize').filter(accel => accel !== '<Super>m'));
+        row = keyboardRow(Adw.ExpanderRow, CMD_M);
+        expect('Cmd+M with Super+M taken out of minimize by hand', row.enable_expansion, false);
+        row.enable_expansion = true;
+        keyboardRow(Adw.ExpanderRow, CMD_M).enable_expansion = false;
+        expect('the tray after switching on again over the stood-down list', shell.get_strv('toggle-message-tray'), tray);
+        expect('minimize after all that', wm.get_strv('minimize').includes('<Super>m'), false);
+
+        // Restore GNOME Window Keys with a binding of the user's own: it reads
+        // on, as every key holds something, and switching it off leaves the
+        // custom binding alone instead of resetting it to GNOME's default.
+        resetKeys();
+        const TILING = 'Restore GNOME Window Keys';
+        wm.set_strv('maximize', ['<Super>k']);
+        row = keyboardRow(Adw.SwitchRow, TILING);
+        expect('the tiling switch with a custom maximize', row.active, true);
+        row.active = false;
+        expect('the custom maximize after switching off', wm.get_strv('maximize'), ['<Super>k']);
+        expect('the tiling switch after switching off with nothing noted', row.active, true);
+        // One emptied and one custom: on fills the empty one, off empties it
+        // again, and a binding changed since is the user's and stays.
+        wm.set_strv('unmaximize', []);
+        mutter.set_strv('toggle-tiled-left', []);
+        row = keyboardRow(Adw.SwitchRow, TILING);
+        row.active = true;
+        expect('unmaximize refilled', wm.get_strv('unmaximize').length > 0, true);
+        mutter.set_strv('toggle-tiled-left', ['<Super>j']);
+        keyboardRow(Adw.SwitchRow, TILING).active = false;
+        expect('the tiling keys after off', [wm.get_strv('maximize'), wm.get_strv('unmaximize'),
+            mutter.get_strv('toggle-tiled-left')], [['<Super>k'], [], ['<Super>j']]);
+        expect('the settings notes after the tiling keys', pearUp.get_string('displaced-settings'), '{}');
+
+        // When the note cannot be saved, nothing is changed and the row says so.
+        resetKeys();
+        const failing = new Preferences(metadata);
+        failing._displacedSettings().set_string = () => false;
+        wm.set_strv('show-desktop', []);
+        row = keyboardRow(Adw.ExpanderRow, 'Cmd+D Shows the Desktop', failing);
+        row.enable_expansion = true;
+        expect('show-desktop when the note could not be saved', wm.get_strv('show-desktop'), []);
+        expect('the Cmd+D row when the note could not be saved', row.enable_expansion, false);
+        expect('the Cmd+D subtitle says why', /could not note/.test(row.subtitle), true);
+        if (mutterPrefs && preferences._schemaHasKey(mutterPrefs, 'auto-maximize')) {
+            const maximize = rowIn(failing, '_buildWindowsPage', Adw.SwitchRow, 'Don’t Maximize New Windows');
+            maximize.active = true;
+            expect('auto-maximize when the note could not be saved', mutterPrefs.get_boolean('auto-maximize'), true);
+            expect('the auto-maximize switch when the note could not be saved', maximize.active, false);
+            expect('the auto-maximize subtitle says why', /could not note/.test(maximize.subtitle), true);
+        }
+
+        // Notes kept by the older build, flat and with no owner, are claimed
+        // by the switch whose key it is: one with a fixed value hands it back,
+        // one whose value a function made (the tiling keys) cannot know what
+        // was written and leaves the key alone.
+        if (mutterPrefs && preferences._schemaHasKey(mutterPrefs, 'auto-maximize')) {
+            resetKeys();
+            mutterPrefs.set_boolean('auto-maximize', false);
+            pearUp.set_string('displaced-settings', JSON.stringify({
+                'org.gnome.mutter:auto-maximize': 'true',
+                'org.gnome.desktop.wm.keybindings:maximize': '@as []',
+            }));
+            const maximize = rowIn(new Preferences(metadata), '_buildWindowsPage', Adw.SwitchRow,
+                'Don’t Maximize New Windows');
+            expect('the switch over an old note', maximize.active, true);
+            maximize.active = false;
+            expect('auto-maximize handed back from an old note', mutterPrefs.get_user_value('auto-maximize')?.unpack(), true);
+            row = keyboardRow(Adw.SwitchRow, TILING);
+            row.active = false;
+            expect('maximize with an old note it cannot be sure of', wm.get_user_value('maximize'), null);
+            expect('the settings notes once both are claimed', pearUp.get_string('displaced-settings'), '{}');
+        }
+        resetKeys();
+    }
+
+    // framy's notes as they stand (design-review-data/framy-settings.txt): the
+    // screenshot set on, with Dash to Dock's hot-keys noted as true by the old
+    // build, and the window set on with its Dash to Dock shortcut emptied and
+    // no note of it. After the upgrade the screenshot set gives hot-keys back;
+    // the window set takes its own keys away and leaves the shortcut, whose
+    // owner is not known.
+    const dock = preferences._dashToDockSettings();
+    if (GLib.getenv('PREFS_SMOKE_DOCK') && dock && preferences._schemaHasKey(dock, 'hot-keys') &&
+        preferences._schemaHasKey(dock, 'shortcut')) {
+        const pairs = [[shell, 'screenshot', '<Super><Shift>3'], [shell, 'show-screenshot-ui', '<Super><Shift>4'],
+            [shell, 'show-screen-recording-ui', '<Super><Shift>5']];
+        for (const [settings, key, accel] of pairs)
+            settings.set_strv(key, [...settings.get_strv(key), accel]);
+        dock.set_boolean('hot-keys', false);
+        dock.set_strv('shortcut', []);
+        pearUp.set_string('displaced-keybindings', '{"org.gnome.shell.extensions.dash-to-dock:hot-keys": "true"}');
+        let row = keyboardRow(Adw.ExpanderRow, 'macOS Screenshot Shortcuts');
+        expect('framy\'s screenshot set after the upgrade', row.enable_expansion, true);
+        row.enable_expansion = false;
+        expect('framy\'s hot-keys after the screenshot set went off', dock.get_user_value('hot-keys')?.unpack(), true);
+        expect('framy\'s screenshot keys after the set went off',
+            pairs.map(([settings, key, accel]) => settings.get_strv(key).includes(accel)), [false, false, false]);
+        expect('framy\'s notes once the screenshot set went off', pearUp.get_string('displaced-keybindings'), '{}');
+        const media = preferences._settingsForSchema('org.gnome.settings-daemon.plugins.media-keys');
+        const windowPairs = [[pearUp, 'quit-app', '<Super>q'], [wm, 'close', '<Super>w'],
+            [wm, 'toggle-fullscreen', '<Super><Control>f'], [shell, 'toggle-overview', '<Control>Up']];
+        if (media && preferences._schemaHasKey(media, 'screensaver'))
+            windowPairs.push([media, 'screensaver', '<Super><Control>q']);
+        for (const [settings, key, accel] of windowPairs) {
+            if (!settings.get_strv(key).includes(accel))
+                settings.set_strv(key, [...settings.get_strv(key), accel]);
+        }
+        row = keyboardRow(Adw.ExpanderRow, 'macOS Window Shortcuts');
+        expect('framy\'s window set after the upgrade', row.enable_expansion, true);
+        row.enable_expansion = false;
+        expect('framy\'s quit-app after the window set went off', pearUp.get_strv('quit-app'), []);
+        expect('framy\'s dock shortcut, of unknown owner, after the window set went off', dock.get_strv('shortcut'), []);
+        for (const key of ['hot-keys', 'shortcut'])
+            dock.reset(key);
+        for (const [settings, key] of [...pairs, ...windowPairs])
+            settings.reset(key);
+        pearUp.reset('displaced-keybindings');
+    }
+
+    if (problems.length === problemsBefore)
+        print('  ownership: switches hand back only what they changed and still hold, keep old notes, and say when a note cannot be saved');
 }
 
 // The Windows page drives GNOME's window settings, the user's gtk.css files and
@@ -1008,13 +1233,16 @@ const windowsExpecter = label => (what, got, wanted) => {
         expect('the user\'s value after switching off, back to the default', userValue(), null);
 
         // Already off, set by hand before this switch existed: it reads on, and
-        // the default is the only thing there is to go back to.
+        // with nothing noted there is nothing that is Pear Up's to take back.
+        // It is not reset on a guess; the row says so.
         mutter.set_boolean(KEY, false);
         pearUp.reset('displaced-settings');
         row = rowOf();
         expect('the switch when GNOME already leaves windows alone', row.active, true);
+        expect('the subtitle says there is nothing noted', /no saved change/.test(row.subtitle), true);
         row.active = false;
-        expect('the user\'s value after switching off what was set by hand', userValue(), null);
+        expect('the user\'s value after switching off what was set by hand', userValue(), false);
+        expect('the switch after switching off what was set by hand', row.active, true);
 
         // It follows the key when something else changes it.
         mutter.set_boolean(KEY, false);
@@ -1777,8 +2005,9 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
         });
         // The notes as the page keeps them, printed GVariants: a double is
         // printed as the shortest text that reads back as it, which for 0.7 is not "0.7".
-        const noted = () => Object.fromEntries(Object.entries(JSON.parse(pearUp.get_string('displaced-settings')))
-            .map(([id, text]) => [id, text !== null && id.endsWith(':brightness') ? Number(text) : text]));
+        const noted = () => Object.fromEntries(Object.entries(
+            JSON.parse(pearUp.get_string('displaced-settings')).options?.['frosted-glass']?.keys ?? {})
+            .map(([id, { before }]) => [id, before !== null && id.endsWith(':brightness') ? Number(before) : before]));
         // The page has no use for the other components' schemas, so Pear Up cannot
         // be asked for them: read them from where the runner put them. Not finding
         // them would make "never written" prove nothing, so it fails.
@@ -1858,11 +2087,15 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
 
                 // On: blur, the background it tints, dark glass with the dark
                 // colour scheme, and the brightness of the macOS Dock. What each
-                // key held is noted, defaults as null.
+                // key it wrote held is noted, defaults as null, and so is what
+                // the tint and the slider set, which are the switch's too. A
+                // key already at the preset by default is not written.
+                const atPreset = key => blur.get_default_value(key).deepUnpack() === PRESET_DARK[key];
                 glass.switchRow.active = true;
                 expect('the keys after switching on', current(), PRESET_DARK);
-                expect('the notes after switching on', noted(), Object.fromEntries(
-                    Object.keys(PRESET_DARK).map(key => [`${DOCK_SCHEMA}:${key}`, null])));
+                expect('the notes after switching on', noted(), Object.fromEntries(Object.keys(PRESET_DARK)
+                    .filter(key => ['style-dash-to-dock', 'brightness'].includes(key) || !atPreset(key))
+                    .map(key => [`${DOCK_SCHEMA}:${key}`, null])));
                 expect('the tint after switching on', glass.tint.selected, 2);
                 expect('the slider after switching on', glass.scale.get_value(), 90);
                 untouched('after switching on');
@@ -1925,9 +2158,9 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             expect('the switch already open, after the other one switched off', glass.switchRow.active, false);
             untouched('after the user\'s own values came back', ['static-blur']);
 
-            // Made by hand, as on a machine set up before this switch existed: it
-            // reads on, there is nothing noted, and the default is all there is
-            // to go back to.
+            // Made by hand, as on framy, set up before this switch kept notes: it
+            // reads on, there is nothing noted, so switching off leaves the look
+            // as it is rather than resetting the user's own values on a guess.
             resetAll();
             for (const [key, value] of Object.entries(PRESET_DARK))
                 blur.set_value(key, typeof value === 'boolean' ? GLib.Variant.new_boolean(value)
@@ -1935,8 +2168,37 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
             glass = glassOf(new Preferences(metadata));
             expect('the switch for a look made by hand', glass.switchRow.active, true);
             expect('the tint for a look made by hand', glass.tint.selected, 2);
+            expect('the subtitle for a look made by hand', /no saved change/.test(glass.switchRow.subtitle), true);
             glass.switchRow.active = false;
-            expect('the keys after switching off a look made by hand', stored(), AT_DEFAULTS);
+            expect('the keys after switching off a look made by hand', stored(), PRESET_DARK);
+            expect('the switch after switching off a look made by hand', glass.switchRow.active, true);
+
+            // Changed elsewhere after switching on: the newer value is the
+            // user's, and switching off leaves it.
+            resetAll();
+            glass = glassOf(new Preferences(metadata));
+            glass.switchRow.active = true;
+            blur.set_double('brightness', 0.8);
+            glass.switchRow.active = false;
+            expect('a brightness changed elsewhere, after switching off', userValue('brightness'), 0.8);
+            expect('the style the switch wrote, after switching off', userValue('style-dash-to-dock'), null);
+
+            // A slider write that fails leaves the note as it was, so off still
+            // hands back what was there before the glass.
+            resetAll();
+            blur.set_double('brightness', 0.7);
+            const failingGlass = new Preferences(metadata);
+            glass = glassOf(failingGlass);
+            glass.switchRow.active = true;
+            const glassSettings = failingGlass._settingsForSchema(DOCK_SCHEMA);
+            const setValue = glassSettings.set_value.bind(glassSettings);
+            glassSettings.set_value = (key, value) => key === 'brightness' ? false : setValue(key, value);
+            glass.scale.set_value(80);
+            expect('the brightness when the slider could not write', userValue('brightness'), 0.9);
+            expect('the slider put back when it could not write', glass.scale.get_value(), 90);
+            glassSettings.set_value = setValue;
+            glass.switchRow.active = false;
+            expect('the brightness handed back after a failed slider write', userValue('brightness'), 0.7);
 
             // Moving the controls beside the switch is no reason to switch it off.
             resetAll();
@@ -1965,14 +2227,13 @@ if (!smokeConfig || smokeConfig !== GLib.get_user_config_dir() ||
 
             // Switched on from there it writes its own values over the tweaks. The
             // notes taken at the first switch-on are still there, and are the
-            // older, truer ones: the brightness goes back to what it was before
-            // any glass, not to the tweak, while the style, which was changed
-            // since, is noted as it stood.
+            // older, truer ones: the tint and the slider are the switch's own,
+            // so the brightness and the style go back to what they were before
+            // any glass, not to the tweaks.
             glass.switchRow.active = true;
             expect('the keys after switching on over a tweaked look', current(), PRESET_DARK);
             glass.switchRow.active = false;
-            expect('the keys after switching that off', stored(),
-                { ...AT_DEFAULTS, 'style-dash-to-dock': 0 });
+            expect('the keys after switching that off', stored(), AT_DEFAULTS);
 
             // The keys changing elsewhere, as when Blur my Shell's own window is used.
             blur.set_int('style-dash-to-dock', 1);
