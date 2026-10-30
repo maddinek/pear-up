@@ -86,6 +86,129 @@ def hook(method, args=None, signature="()"):
     return call(HOOK_NAME, HOOK_PATH, HOOK_IFACE, method, args, signature).unpack()[0]
 
 
+# ------------------------------------------------------------- Recent Items
+RECENT_XBEL = os.path.join(os.environ.get("HOME", "/root"), ".local/share/recently-used.xbel")
+
+
+def recent_xbel(*entries):
+    """An XBEL recent list of (uri, stamp) entries, newest stamp first in the menu."""
+    bookmarks = "".join(
+        f'  <bookmark href="{uri}" added="{stamp}" modified="{stamp}" visited="{stamp}">\n'
+        f'  </bookmark>\n' for uri, stamp in entries)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<xbel version="1.0"\n'
+            '      xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"\n'
+            '      xmlns:mime="http://www.freedesktop.org/standards/shared-mime-info">\n'
+            f'{bookmarks}</xbel>\n')
+
+
+def write_recent(text):
+    # Replaced the way GTK writes it: a new file renamed over the old one.
+    os.makedirs(os.path.dirname(RECENT_XBEL), exist_ok=True)
+    temporary = RECENT_XBEL + ".pear-up-test"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(temporary, RECENT_XBEL)
+
+
+def recent_items_checks():
+    import threading
+    import time
+
+    home = os.environ.get("HOME", "/root")
+    present = os.path.join(home, "pear-up-recent-present.txt")
+    missing = os.path.join(home, "pear-up-recent-missing.txt")
+    listed = recent_xbel((f"file://{present}", "2026-10-30T12:00:03Z"),
+                         (f"file://{missing}", "2026-10-30T12:00:02Z"),
+                         ("sftp://example.org/srv/notes.txt", "2026-10-30T12:00:01Z"))
+
+    def recent_labels():
+        hook("OpenSystemMenu")
+        GLib.usleep(1500 * 1000)
+        opened = json.loads(hook("OpenSubMenu", ("Recent Items",), "(s)")) or []
+        hook("CloseSystemMenu")
+        GLib.usleep(300 * 1000)
+        return [item["label"] for item in opened if item["label"]]
+
+    writer = None
+    fed = []
+    try:
+        with open(present, "w", encoding="utf-8") as handle:
+            handle.write("Pear Up test\n")
+        if os.path.exists(missing):
+            os.remove(missing)
+        if os.path.lexists(RECENT_XBEL):
+            os.remove(RECENT_XBEL)
+        os.makedirs(os.path.dirname(RECENT_XBEL), exist_ok=True)
+        os.mkfifo(RECENT_XBEL)
+        GLib.usleep(500 * 1000)
+
+        def feed():
+            # Waits for a reader, then puts the real list in the pipe's place
+            # before handing the reader its contents, so a second read set off
+            # by the change finds a file rather than a pipe nobody writes to.
+            # Gives up after ten seconds rather than strand the suite.
+            deadline = time.monotonic() + 10
+            time.sleep(3)
+            while time.monotonic() < deadline:
+                try:
+                    fd = os.open(RECENT_XBEL, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError:
+                    time.sleep(0.1)
+                    continue
+                try:
+                    write_recent(listed)
+                    os.write(fd, listed.encode())
+                finally:
+                    os.close(fd)
+                fed.append(True)
+                return
+
+        writer = threading.Thread(target=feed, daemon=True)
+        writer.start()
+        started = time.monotonic()
+        hook("OpenSystemMenu")
+        took = time.monotonic() - started
+        answered = False
+        try:
+            hook("CloseSystemMenu")
+            answered = True
+        except GLib.Error:
+            pass
+        check("the System Menu opens at once while the recent list cannot be read",
+              took < 1.0 and answered, f"opening took {took:.2f} s")
+        writer.join(12)
+        writer = None
+        check("the stalled read was handed the list in the end", bool(fed))
+        GLib.usleep(500 * 1000)
+
+        labels = recent_labels()
+        check("Recent Items lists a document that is there and its server, read in the background",
+              "pear-up-recent-present.txt" in labels and any("example.org" in l for l in labels),
+              f"found {labels}")
+        check("and leaves out a document that is gone",
+              "pear-up-recent-missing.txt" not in labels, f"found {labels}")
+
+        # Deleting a document does not touch the list, so each opening checks
+        # again whether the documents are still there.
+        os.remove(present)
+        GLib.usleep(300 * 1000)
+        labels = recent_labels()
+        labels = recent_labels() if "pear-up-recent-present.txt" in labels else labels
+        check("a document deleted since is gone by the next opening",
+              "pear-up-recent-present.txt" not in labels, f"found {labels}")
+    except (GLib.Error, OSError) as exc:
+        check("Recent Items could be exercised", False, str(exc).splitlines()[0])
+    finally:
+        try:
+            if os.path.lexists(RECENT_XBEL):
+                os.remove(RECENT_XBEL)
+            if os.path.exists(present):
+                os.remove(present)
+        except OSError:
+            pass
+
+
 # ------------------------------------------------------------ enabled state
 info = extension_info()
 # 1 is ACTIVE in the shell's own enumeration.
@@ -480,6 +603,14 @@ if menus:
                   labels and (labels == ["No Recent Items"] or "Clear Menu" in labels),
                   f"found {labels}")
 
+            # Read off the shell's thread. The recent list is a file in the home
+            # folder and its documents can be anywhere, a hung network mount
+            # among them: read or checked on the shell's thread, either one
+            # stalls the whole desktop for as long as it hangs. A pipe in place
+            # of the file is the same stall, made to order: reading it waits
+            # for a writer, which comes three seconds later.
+            recent_items_checks()
+
         # The slider writes system-menu-font-size. Assert the labels actually
         # drew at that size — not that the key was stored, and not that a
         # style string was set on a parent that the theme might ignore.
@@ -667,6 +798,98 @@ finally:
         dialog.terminate()
         dialog.wait()
         GLib.usleep(800 * 1000)
+
+# ------------------------------------------------- the bar is kept, not rebuilt
+# Focus moves between windows of one app all the time, and lands on a window as
+# its open animation starts or as a desktop switch ends. The bar used to be torn
+# down and built again — seven menus of St widgets — for every one of those,
+# with nothing about it different. The same app keeps its bar; another app, or a
+# change to the menu settings, gets a new one. Menus are made as they first
+# open, so a bar that was just built holds no items until then. The timings are
+# printed for the record: they are this container's, not a desktop's.
+OTHER_APP_CLASS = "io.github.maddinek.PearUpTestOther"
+print()
+print("  menu bar sync:")
+other_app = None
+try:
+    for _ in range(2):
+        subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        GLib.usleep(1500 * 1000)
+    other_app = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js",
+                                  OTHER_APP_CLASS],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def count(wm_class):
+        return hook("CountWindows", (wm_class,), "(s)")
+
+    for _ in range(20):
+        if count("io.github.maddinek.PearUpTestWindow") >= 2 and count(OTHER_APP_CLASS) >= 1:
+            break
+        GLib.usleep(250 * 1000)
+
+    def measure(classes, rounds=12):
+        return json.loads(hook("MeasureMenuSync", (classes, rounds), "(si)"))
+
+    def timing(result):
+        return (f"{result.get('syncs')} syncs, median {result.get('medianMs')} ms, "
+                f"p95 {result.get('p95Ms')} ms, max {result.get('maxMs')} ms")
+
+    same = measure("io.github.maddinek.PearUpTestWindow")
+    if "error" in same:
+        check("two windows of one app could be put in front by turns", False, same["error"])
+    else:
+        check("switching between two windows of one app keeps its menu bar",
+              same["syncs"] >= same["rounds"] // 2 and same["rebuilds"] == 0,
+              f"{same['rebuilds']} rebuilds in {same['rounds']} switches; {timing(same)}")
+
+    mixed = measure(f"io.github.maddinek.PearUpTestWindow,{OTHER_APP_CLASS}")
+    if "error" in mixed:
+        check("windows of two apps could be put in front by turns", False, mixed["error"])
+    else:
+        check("switching between two apps builds each one's menu bar",
+              mixed["rebuilds"] == mixed["rounds"] and len(set(mixed["labels"])) == 2,
+              f"{mixed['rebuilds']} rebuilds in {mixed['rounds']} switches, "
+              f"app menus {sorted(set(mixed['labels']))}; {timing(mixed)}")
+
+    hook("FocusWindowOf", ("io.github.maddinek.PearUpTestWindow",), "(s)")
+    GLib.usleep(600 * 1000)
+    before = json.loads(hook("GetBarIdentity"))
+    pear_up_setting("menu-help-enabled", "false")
+    GLib.usleep(600 * 1000)
+    without_help = json.loads(hook("GetBarIdentity"))
+    pear_up_setting("menu-help-enabled", "true")
+    GLib.usleep(600 * 1000)
+    rebuilt = json.loads(hook("GetBarIdentity"))
+    serials = lambda bar: [button["serial"] for button in bar]
+    labels_of = lambda bar: [button["label"] for button in bar]
+    check("a change to the menu settings builds the bar again",
+          "Help" not in labels_of(without_help) and "Help" in labels_of(rebuilt)
+          and not set(serials(before)) & set(serials(rebuilt)),
+          f"before {labels_of(before)}, without Help {labels_of(without_help)}, "
+          f"after {labels_of(rebuilt)}")
+
+    unopened = {button["label"]: button["items"] for button in rebuilt}
+    check("a newly built bar makes no menu items until a menu opens",
+          bool(unopened) and all(items == 0 for items in unopened.values()),
+          f"items per menu {unopened}")
+    first_open = json.loads(hook("MeasureFirstOpen"))
+    print("  note: opening each menu, first and second time (ms): " +
+          ", ".join(f"{label} {t['firstMs']}/{t['secondMs']}"
+                    for label, t in first_open.items()))
+    opened = {button["label"]: button["items"] for button in json.loads(hook("GetBarIdentity"))}
+    check("and every menu has its items once opened",
+          bool(opened) and all(items > 0 for items in opened.values()),
+          f"items per menu {opened}")
+except FileNotFoundError:
+    print("  note: gjs missing, cannot open windows")
+except GLib.Error as exc:
+    check("the menu bar sync could be measured", False, exc.message.splitlines()[0])
+finally:
+    if other_app:
+        other_app.terminate()
+        other_app.wait()
+        GLib.usleep(500 * 1000)
 
 # ------------------------------------------------------------ Cmd+Q quits
 # Two windows of one app, then Cmd+Q: both have to go. Closing only the one in
@@ -1251,12 +1474,38 @@ if state:
               f"display is the shell's: {before['popupDisplayIsShells']}, "
               f"rule is the shell's: {before['stripRuleIsShells']}")
 
+        bar_before = json.loads(hook("GetBarIdentity"))
+        hook("WatchBarBuilds", (True,), "(b)")
         popup, there = switch_desktop("Page_Down")
+        # The desktop switched to is empty, so its bar has no app menus. The
+        # bar has to change for it — after the slide, not during it.
+        for _ in range(30):
+            if not json.loads(hook("GetBarIdentity")):
+                break
+            GLib.usleep(50 * 1000)
+        watched = json.loads(hook("WatchBarBuilds", (False,), "(b)"))
+        bar_there = json.loads(hook("GetBarIdentity"))
+        builds = watched["records"]
+        during = [b for b in builds if b["switching"]]
+        check("the menu bar follows a desktop switch once the slide is over, not during it",
+              bar_before and not bar_there and builds and watched["sawSwitch"] and not during,
+              f"{len(builds)} bar changes, {len(during)} during the slide, "
+              f"slide seen: {watched['sawSwitch']}, buttons before {len(bar_before)}, "
+              f"after {len(bar_there)}")
         check("switching desktops with the keyboard shows no popup",
               there["active"] != before["active"] and not popup,
               f"desktop {before['active']} -> {there['active']} of {there['count']}, "
               f"popup {'seen' if popup else 'not seen'}")
         popup, back = switch_desktop("Page_Up")
+        for _ in range(30):
+            bar_back = json.loads(hook("GetBarIdentity"))
+            if bar_back:
+                break
+            GLib.usleep(50 * 1000)
+        check("and the app's menu bar is back with its window",
+              [b["label"] for b in bar_back] == [b["label"] for b in bar_before],
+              f"before {[b['label'] for b in bar_before]}, "
+              f"back {[b['label'] for b in bar_back]}")
         check("and switching back shows none either",
               back["active"] == before["active"] and not popup,
               f"desktop {there['active']} -> {back['active']}, popup {'seen' if popup else 'not seen'}")
@@ -2795,6 +3044,21 @@ try:
               "; ".join(said + failed) or "nothing")
 except OSError as exc:
     print(f"  note: the shell's log could not be read ({exc})")
+
+# ------------------------------------------------------------------ logout
+# Armed last: run-tests.sh stops this shell once the suite is done, which is the
+# logout path, and reads what the shell logged on its way out. The suite ends
+# with Pear Up switched off, so it goes back on first: a logout is with it on.
+try:
+    if extension_info().get("state") != 1:
+        call("org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell.Extensions",
+             "EnableExtension", (UUID,), "(s)")
+        GLib.usleep(3 * 1000 * 1000)
+    check("Pear Up is on for the logout", extension_info().get("state") == 1,
+          f"state={extension_info().get('state')}")
+    hook("ArmShutdownProbe")
+except GLib.Error as exc:
+    print(f"  note: the shutdown probe could not be armed ({exc.message.splitlines()[0]})")
 
 # ------------------------------------------------------------------ summary
 failures = [label for label, ok, _ in results if not ok]
