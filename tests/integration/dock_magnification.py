@@ -406,10 +406,13 @@ class DockChecks:
                 GLib.usleep(300 * 1000)
             finally:
                 trace = json.loads(self._hook("TraceWork", (False,), "(b)"))
-            return {place.split("/")[-1].split(":")[0]: counts["added"]
-                    for place, counts in trace.items()
-                    if place.startswith("idle_add") and
-                    ("dockMagnifier.js" in place or "dockBounce.js" in place)}
+            scans = {}
+            for place, counts in trace.items():
+                if place.startswith("idle_add") and (
+                        "dockMagnifier.js" in place or "dockBounce.js" in place):
+                    module = place.split("/")[-1].split(":")[0]
+                    scans[module] = scans.get(module, 0) + counts["added"]
+            return scans
 
         # The bounce only watches the UI group while a bounce setting is on.
         bounce_was = subprocess.run(
@@ -429,7 +432,7 @@ class DockChecks:
             self._pear_up_setting("dock-bounce-on-attention", bounce_was)
             GLib.usleep(300 * 1000)
         self._check("other actors coming and going in the UI group send nothing looking for docks",
-                    not unrelated and set(dock_named) == {"dockMagnifier.js", "dockBounce.js"},
+                    not unrelated and dock_named == {"dockMagnifier.js": 1, "dockBounce.js": 1},
                     f"for plain actors {unrelated}, for ones named like a dock {dock_named}")
 
     def _check_resting(self, target, pointer):
