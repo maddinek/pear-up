@@ -279,6 +279,12 @@ export class SmoothBrightness {
         // where the screen is.
         if (!(manager._abTarget >= 0))
             manager._abTarget = this._currentLevel();
+        // The sensor may send the level already applied, or take back a goal
+        // before the next tick. Neither needs a timer or another backlight sync.
+        if (target === manager._abTarget) {
+            this._stop();
+            return;
+        }
         this._start();
     }
 
@@ -351,6 +357,8 @@ export class SmoothBrightness {
             return true;
 
         const distance = goal - level;
+        if (distance === 0)
+            return true;
         const time = distance > 0 ? BRIGHTEN_SECONDS : DARKEN_SECONDS;
         let step = distance * (1 - Math.exp(-seconds / time));
         if (Math.abs(step) < MIN_STEP)

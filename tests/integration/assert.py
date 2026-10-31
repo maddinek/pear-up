@@ -2443,6 +2443,13 @@ elif bright:
               half is not None and 1000 <= half <= 3000,
               f"half-way after {half / 1000:.2f}s" if half is not None else "never half-way")
 
+        noop = json.loads(hook("CheckBrightnessNoop"))
+        check("an already applied brightness needs no tick or backlight sync",
+              noop.get('ready') and not noop['samePending'] and noop['syncs'] == 0
+              and noop['arrived'] and noop['level'] == 0.3, str(noop))
+        check("a repeated goal keeps an unfinished fade, but a goal at the applied level cancels it",
+              noop.get('repeatedGoalKeepsFade') and noop.get('cancelled'), str(noop))
+
         # The slider moves the screen at once, with the automatic level as it is.
         hook("ClearBrightnessWrites")
         moved = brightness_slider(0.7)

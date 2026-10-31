@@ -354,6 +354,9 @@ const IFACE = `
     <method name="GetBrightnessState">
       <arg type="s" direction="out" name="state"/>
     </method>
+    <method name="CheckBrightnessNoop">
+      <arg type="s" direction="out" name="result"/>
+    </method>
     <method name="ClearBrightnessWrites">
       <arg type="b" direction="out" name="cleared"/>
     </method>
@@ -2422,6 +2425,45 @@ export default class TestHookExtension extends Extension {
     ClearBrightnessWrites() {
         brightnessTest.writes = [];
         return true;
+    }
+
+    // Count syncs as well as writes: the shell can suppress a duplicate
+    // backlight write after Pear Up has already spent a timer and a sync on it.
+    // The two retargets run in one turn, before a pending tick can fire.
+    CheckBrightnessNoop() {
+        const manager = Main.brightnessManager;
+        const smooth = Main.extensionManager.lookup(PEAR_UP_UUID)?.stateObj?._smoothBrightness;
+        if (!manager || !smooth?._manager || !(manager._abTarget >= 0))
+            return JSON.stringify({ ready: false });
+
+        const level = manager._abTarget;
+        const own = Object.getOwnPropertyDescriptor(manager, '_sync');
+        const sync = manager._sync;
+        let syncs = 0;
+        manager._sync = function (...args) {
+            syncs++;
+            return sync.apply(this, args);
+        };
+        try {
+            manager.autoBrightnessTarget = level;
+            const samePending = !!smooth._tickId;
+            const goal = level < 0.5 ? 0.8 : 0.2;
+            manager.autoBrightnessTarget = goal;
+            const pending = smooth._tickId;
+            manager.autoBrightnessTarget = goal;
+            const repeatedGoalKeepsFade = !!pending && smooth._tickId === pending;
+            manager.autoBrightnessTarget = level;
+            const cancelled = !smooth._tickId;
+            const arrived = smooth._step();
+            return JSON.stringify({ ready: true, samePending, repeatedGoalKeepsFade,
+                cancelled, arrived, syncs, level: manager._abTarget });
+        } finally {
+            smooth._stop();
+            if (own)
+                Object.defineProperty(manager, '_sync', own);
+            else
+                delete manager._sync;
+        }
     }
 
     // As the slider in Quick Settings sets it, or the brightness keys.
