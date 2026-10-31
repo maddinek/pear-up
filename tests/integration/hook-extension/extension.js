@@ -225,6 +225,11 @@ const IFACE = `
       <arg type="b" direction="in" name="on"/>
       <arg type="s" direction="out" name="trace"/>
     </method>
+    <method name="ChurnUiGroup">
+      <arg type="u" direction="in" name="count"/>
+      <arg type="s" direction="in" name="name"/>
+      <arg type="b" direction="out" name="churned"/>
+    </method>
     <method name="FrameTimes">
       <arg type="u" direction="in" name="ms"/>
       <arg type="s" direction="out" name="times"/>
@@ -1531,6 +1536,18 @@ export default class TestHookExtension extends Extension {
             return GLib.SOURCE_REMOVE;
         });
         this._frameCounts.add(stop);
+    }
+
+    // Adds and takes away plain actors in the UI group, as menus, tooltips and
+    // notifications do all the time, none of them a dock — or, given Dash to
+    // Dock's name, ones that could be one until looked at.
+    ChurnUiGroup(count, name) {
+        for (let i = 0; i < count; i++) {
+            const actor = new Clutter.Actor({ name: name || 'pear-up-test-churn' });
+            Main.layoutManager.uiGroup.add_child(actor);
+            actor.destroy();
+        }
+        return true;
     }
 
     // When each frame ran, in ms from the start, over `ms`: a clock that ticks

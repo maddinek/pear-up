@@ -19,6 +19,7 @@ from gi.repository import GLib
 DOCK_UUID = "dash-to-dock@micxgx.gmail.com"
 DOCK_SCHEMA = "org.gnome.shell.extensions.dash-to-dock"
 OVERLAY = "pearup-dock-magnifier"
+DOCK_ACTOR = "dashtodockContainer"
 BLUR_UUID = "blur-my-shell@aunetx"
 BLUR_SCHEMA = "org.gnome.shell.extensions.blur-my-shell.dash-to-dock"
 
@@ -392,6 +393,45 @@ class DockChecks:
         check("and goes again when it is switched back off", plain_again == 0,
               f"alpha={plain_again}")
 
+    def _check_no_rescan(self):
+        """Menus, tooltips and notifications are added to the UI group and
+        taken away all the time, and each one used to send the magnifier and
+        the bounce looking for docks again, on an idle of their own. Only a
+        dock coming or going does now; that a rebuilt dock is still found is
+        checked at the bottom edge."""
+        def scans_after(name):
+            self._hook("TraceWork", (True,), "(b)")
+            try:
+                self._hook("ChurnUiGroup", (10, name), "(us)")
+                GLib.usleep(300 * 1000)
+            finally:
+                trace = json.loads(self._hook("TraceWork", (False,), "(b)"))
+            return {place.split("/")[-1].split(":")[0]: counts["added"]
+                    for place, counts in trace.items()
+                    if place.startswith("idle_add") and
+                    ("dockMagnifier.js" in place or "dockBounce.js" in place)}
+
+        # The bounce only watches the UI group while a bounce setting is on.
+        bounce_was = subprocess.run(
+            ["gsettings", "get", "org.gnome.shell.extensions.pear-up", "dock-bounce-on-attention"],
+            env={**os.environ, "GSETTINGS_SCHEMA_DIR":
+                 f"{os.environ.get('HOME', '/root')}/.local/share/gnome-shell"
+                 f"/extensions/{self._uuid}/schemas"},
+            capture_output=True, text=True, check=False).stdout.strip() or "false"
+        self._pear_up_setting("dock-bounce-on-attention", "true")
+        GLib.usleep(500 * 1000)
+        try:
+            unrelated = scans_after("")
+            # And one that is named like a dock, which both have to look at:
+            # what shows they are listening at all.
+            dock_named = scans_after(DOCK_ACTOR)
+        finally:
+            self._pear_up_setting("dock-bounce-on-attention", bounce_was)
+            GLib.usleep(300 * 1000)
+        self._check("other actors coming and going in the UI group send nothing looking for docks",
+                    not unrelated and set(dock_named) == {"dockMagnifier.js", "dockBounce.js"},
+                    f"for plain actors {unrelated}, for ones named like a dock {dock_named}")
+
     def _check_resting(self, target, pointer):
         """A swell that has settled under a resting pointer draws nothing more
         until something changes, and still follows the pointer once it moves.
@@ -516,6 +556,9 @@ class DockChecks:
         check("a running frame clock is counted, and an idle one is not",
               self._busy_frames >= 20 and self._idle_frames <= FRAME_SLACK,
               f"{self._busy_frames} frames in 1 s running, {self._idle_frames} in 2 s idle")
+
+        # ---- other things come and go in the UI group: no looking for docks
+        self._check_no_rescan()
 
         # ---- the backdrop behind the focused app, with the pointer elsewhere
         self._check_focus_highlight()

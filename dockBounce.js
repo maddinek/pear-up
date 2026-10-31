@@ -327,8 +327,10 @@ export class DockBounce {
     }
 
     // -------------------------------------------------------------- docks
+    // A dock coming or going, and nothing else of the UI group's comings and
+    // goings, as for the magnifier (dockMagnifier.js).
     _onUiGroupChanged(child) {
-        if (!child?.name?.startsWith('pearup-dock-'))
+        if (child?.name === DOCK_ACTOR_NAME)
             this._queueScan();
     }
 

@@ -240,10 +240,13 @@ export class DockMagnifier {
             dock.cancelWake();
     }
 
-    // The overlay itself comes and goes as a child of the UI group too, and is
-    // not a reason to look for docks; nor is the bounce overlay (dockBounce.js).
+    // Only a dock coming or going is a reason to look for docks. Everything
+    // else in the UI group comes and goes far more often: every menu the bar
+    // builds, tooltips, notifications, this overlay and the bounce's. Dash to
+    // Dock names its container as it makes it, before adding it, so the name
+    // is there to tell by; whether it is a dock yet is left to the scan.
     _onUiGroupChanged(child) {
-        if (!child?.name?.startsWith('pearup-dock-'))
+        if (child?.name === DOCK_ACTOR_NAME)
             this._queueScan();
     }
 
