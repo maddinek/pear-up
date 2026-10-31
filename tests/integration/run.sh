@@ -6,6 +6,7 @@
 #   tests/integration/run.sh 48                     # GNOME 48, via Fedora 42
 #   PEAR_UP_SCREENSHOT=0 tests/integration/run.sh   # skip the picture
 #   PEAR_UP_ENERGY=60 tests/integration/run.sh      # measure idle cost, no checks
+#   PEAR_UP_ENERGY=idle tests/integration/run.sh    # only the check at rest
 #
 # Nothing is installed on this machine and no display is used, so this is a way
 # to try a change before letting it near a desktop you depend on. It needs no

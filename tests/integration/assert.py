@@ -23,6 +23,7 @@ from gi.repository import Gio, GLib
 
 from dock_bounce import BounceChecks
 from dock_magnification import DockChecks
+from energy import IdleChecks
 
 UUID = sys.argv[1]
 ARTIFACTS = sys.argv[2] if len(sys.argv) > 2 else "/artifacts"
@@ -2851,6 +2852,18 @@ if dock.ready:
         bounce_ready = bounce.ready
     except GLib.Error as exc:
         check("the dock bounce could be exercised", False, exc.message.splitlines()[0])
+
+# ------------------------------------------------------- a shell at rest
+# Everything above has settled, Dash to Dock and its magnifier included: ten
+# seconds with nothing happening, Pear Up on and then off, counted from outside.
+# Anything of Pear Up's that ticks while nobody does anything shows here.
+print()
+print("  at rest:")
+GLib.usleep(3 * 1000 * 1000)
+try:
+    IdleChecks(bus, check, UUID).run()
+except (GLib.Error, RuntimeError, OSError) as exc:
+    check("the shell at rest could be measured", False, str(exc).splitlines()[0])
 
 # ------------------------------------------------------------ clean teardown
 # Disabled with the dock still magnified, so there is something to undo.

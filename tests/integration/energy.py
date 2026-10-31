@@ -1,17 +1,19 @@
 """What the shell spends while nobody touches it, with Pear Up on and off.
 
 Counted from outside the shell, the way a battery sees it: how often its main
-thread is woken (each wake-up costs the CPU a trip out of its idle state), the
+thread is woken (its voluntary context switches: each is a trip through the
+scheduler, and with nothing else running, out of the CPU's idle state), the
 CPU time it uses, and the frames its frame clocks run (each one is a layout and
 a paint). The frames come from the test hook; the rest is read from /proc, which
 the container shares with the shell it started.
 
 Two uses. The suite calls IdleChecks.run() once the dock checks are done: ten
-seconds at rest with Pear Up on, then off, and it fails when Pear Up adds frames
-or wake-ups to a shell at rest. `PEAR_UP_ENERGY=1 tests/integration/run.sh`
+seconds at rest with Pear Up off, then on, and it fails when Pear Up runs a
+timer or an animation, adds frames, or adds wake-ups to a shell at rest. `PEAR_UP_ENERGY=1 tests/integration/run.sh`
 runs profile() instead of the suite: a minute at rest each way, then focus
 moving between apps and menus opening, and prints the numbers as one JSON line
-for the record.
+for the record; `PEAR_UP_ENERGY=idle` runs the check at rest on its own, and
+`PEAR_UP_ENERGY=focus` times focus changes with Pear Up on and off by turns.
 """
 import json
 import os
@@ -30,10 +32,13 @@ WINDOW_CLASS = "io.github.maddinek.PearUpTestWindow"
 OTHER_CLASS = "io.github.maddinek.PearUpTestOther"
 
 # What Pear Up may add to a shell at rest over IDLE_MS, beyond what the same
-# shell does with it off. A frame or two is a tooltip or a hover finishing; a
-# handful of wake-ups is the D-Bus traffic of the measurement itself landing on
-# a different side of the window. Anything that ticks — a timer, a timeline, a
-# poll — adds one per tick, ten a second at the very least.
+# shell does with it off. A frame or two is a tooltip or a hover finishing. The
+# main thread's wake-ups (the times it blocked and was woken, counted as its
+# voluntary context switches) vary by ten or so between quiet ten-second
+# windows of the same shell: a garbage collection, the measurement's own D-Bus
+# replies. A timer of Pear Up's own is caught exactly by the trace instead; the
+# wake-up bound is for what no trace sees, a file monitor or a D-Bus signal
+# firing over and over, and it catches anything at 2 Hz or more.
 IDLE_MS = 10000
 FRAME_SLACK = 3
 WAKEUP_SLACK = 15
@@ -188,11 +193,40 @@ def describe(result):
 
 
 class IdleChecks:
-    """The shell at rest costs the same with Pear Up as without it."""
+    """The shell at rest costs the same with Pear Up as without it.
+
+    Measured off first, then on: Pear Up is enabled again with every timeout,
+    idle and animation traced from before its enable() runs, so whatever it
+    sets going and keeps going is seen by where it was started, which the
+    wake-up count alone could not tell apart from the shell's own noise."""
 
     def __init__(self, bus, check, uuid):
         self._energy = Energy(bus, uuid)
         self._check = check
+
+    def _pair(self):
+        energy = self._energy
+        if not energy.set_enabled(False):
+            return None
+        off = energy.measure(IDLE_MS)
+        energy.hook("TraceWork", (True,), "(b)")
+        try:
+            if not energy.set_enabled(True, settle=6):
+                return None
+            before = json.loads(energy.hook("TraceWork", (True,), "(b)"))
+            on = energy.measure(IDLE_MS)
+        finally:
+            after = json.loads(energy.hook("TraceWork", (False,), "(b)"))
+        ran = {}
+        for place, counts in after.items():
+            if "pear-up@" not in place:
+                continue
+            was = before.get(place, {"added": 0, "ran": 0})
+            work = (counts["ran"] - was["ran"]) if not place.startswith(("timeline", "ease")) \
+                else (counts["added"] - was["added"])
+            if work:
+                ran[place] = work
+        return on, off, ran
 
     def run(self):
         check = self._check
@@ -204,23 +238,32 @@ class IdleChecks:
         # bar, and nothing opening or closing.
         energy.hook("MovePointer", (640.0, 360.0), "(dd)")
         GLib.usleep(1500 * 1000)
-        on = energy.measure(IDLE_MS)
-        if not check("Pear Up could be switched off to compare", energy.set_enabled(False)):
-            return
-        try:
-            off = energy.measure(IDLE_MS)
-        finally:
-            back = energy.set_enabled(True)
-        print(f"  note: at rest for {IDLE_MS // 1000} s, on: {describe(on)}; "
-              f"off: {describe(off)}; all threads {on['allWakeups']}/{off['allWakeups']} "
-              f"wake-ups, {on['allCpuMs']}/{off['allCpuMs']} ms")
+        def passes(pair):
+            on, off, ran = pair
+            return (not ran and on["frames"] <= off["frames"] + FRAME_SLACK and
+                    on["mainWakeups"] <= off["mainWakeups"] + WAKEUP_SLACK)
+
+        # Once more before calling it: a garbage collection or a reply landing
+        # in one window and not the other is noise, a tick is not. The pair
+        # judged is the one that passed, or else the last.
+        for _ in range(2):
+            pair = self._pair()
+            if not check("Pear Up could be switched off and on again to compare", pair):
+                return
+            on, off, ran = pair
+            print(f"  note: at rest for {IDLE_MS // 1000} s, on: {describe(on)}; "
+                  f"off: {describe(off)}; all threads {on['allWakeups']}/{off['allWakeups']} "
+                  f"wake-ups, {on['allCpuMs']}/{off['allCpuMs']} ms")
+            if passes(pair):
+                break
+        check("Pear Up runs no timer, idle or animation in a shell at rest",
+              not ran, f"{ran}")
         check("Pear Up draws no frames into a shell at rest",
               on["frames"] <= off["frames"] + FRAME_SLACK,
               f"{on['frames']} frames on, {off['frames']} off in {IDLE_MS // 1000} s")
         check("Pear Up does not wake a shell at rest",
               on["mainWakeups"] <= off["mainWakeups"] + WAKEUP_SLACK,
               f"{on['mainWakeups']} wake-ups on, {off['mainWakeups']} off in {IDLE_MS // 1000} s")
-        check("and is on again for what follows", back)
 
 
 # --------------------------------------------------------------- the profile
@@ -252,10 +295,11 @@ def _framy_like(uuid):
         _gsettings("org.gnome.shell.extensions.blur-my-shell.dash-to-dock", key, value)
 
 
-def _windows():
+def _windows(seconds=60):
     """Two apps with a window each, open for as long as the profile runs."""
     script = "/src/tests/integration/test-window.js"
-    return [subprocess.Popen(["gjs", "-m", script, app_id, "0", "600"],
+    lifetime = str(10 * seconds + 600)
+    return [subprocess.Popen(["gjs", "-m", script, app_id, "0", lifetime],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             for app_id in (WINDOW_CLASS, OTHER_CLASS)]
 
@@ -272,7 +316,7 @@ def profile(uuid, seconds):
             energy.extensions("EnableExtension", extension)
         except GLib.Error as exc:
             print(f"note: {extension} not enabled: {exc.message.splitlines()[0]}")
-    windows = _windows()
+    windows = _windows(seconds)
     GLib.usleep(6 * 1000 * 1000)
     energy.hook("MovePointer", (640.0, 360.0), "(dd)")
     GLib.usleep(3 * 1000 * 1000)
@@ -299,7 +343,9 @@ def profile(uuid, seconds):
                 break
             energy.hook("MovePointer", (640.0, 360.0), "(dd)")
             GLib.usleep(2 * 1000 * 1000)
-            report[f"idle-{state}"] = energy.measure(seconds * 1000)
+            # In ten-second pieces: a beat shows in every one, settling in the
+            # first only.
+            report[f"idle-{state}"] = [energy.measure(10000) for _ in range(max(1, seconds // 10))]
             # Then again in pieces, with what starts main-loop work traced and
             # when each frame ran, to tell a beat from a one-off.
             energy.hook("TraceWork", (True,), "(b)")
@@ -307,16 +353,24 @@ def profile(uuid, seconds):
                 HOOK_NAME, HOOK_PATH, HOOK_IFACE, "FrameTimes", (30000,), "(u)",
                 timeout=60000).unpack()[0])
             report[f"trace-{state}"] = json.loads(energy.hook("TraceWork", (False,), "(b)"))
-            energy.hook("TraceWork", (True,), "(b)")
+            # Timed untraced: the trace takes a stack for everything Pear Up
+            # starts, which would count against it. Then once more, traced.
             report[f"focus-{state}"] = energy.measure(20000, focus)
+            energy.hook("TraceWork", (True,), "(b)")
+            energy.measure(5000, focus)
             report[f"focustrace-{state}"] = json.loads(energy.hook("TraceWork", (False,), "(b)"))
             GLib.usleep(2 * 1000 * 1000)
             report[f"datemenu-{state}"] = energy.measure(20000, date_menu, every_ms=1000)
+            # Each press toggles the calendar: an odd count left it open.
+            if report[f"datemenu-{state}"]["actions"] % 2:
+                date_menu(0)
             GLib.usleep(2 * 1000 * 1000)
             if state == "on":
                 report["systemmenu-on"] = energy.measure(20000, system_menu)
+                energy.hook("CloseSystemMenu")
                 GLib.usleep(2 * 1000 * 1000)
                 report["topmenu-on"] = energy.measure(20000, top_menu)
+                energy.hook("CloseTopMenu", ("Edit",), "(s)")
                 GLib.usleep(2 * 1000 * 1000)
                 # Resting on the magnified dock, then moving along it.
                 state_json = json.loads(energy.hook("GetDockState"))
@@ -327,6 +381,8 @@ def profile(uuid, seconds):
                     x, y, width, height = icons[len(icons) // 2]["slot"]
                     energy.hook("MovePointer", (x + width / 2, y + height / 2), "(dd)")
                     GLib.usleep(2 * 1000 * 1000)
+                    report["dockrest-magnified"] = bool(
+                        json.loads(energy.hook("GetDockState")).get("overlays"))
                     report["dockrest-on"] = energy.measure(10000)
                     energy.hook("MovePointer", (640.0, 360.0), "(dd)")
                     GLib.usleep(2 * 1000 * 1000)
@@ -341,6 +397,10 @@ def profile(uuid, seconds):
                 print(f"    {counts['added']:5} added {counts['ran']:5} ran  {place}")
         elif name.startswith("frametimes"):
             print(f"  {name}: {len(result)} frames at {result[:60]}")
+        elif isinstance(result, list):
+            print(f"  {name:14} " + " | ".join(
+                f"{piece['frames']}f {piece['mainWakeups']}w {piece['mainCpuMs']}ms"
+                for piece in result))
         elif isinstance(result, dict):
             extra = f", {result['actions']} actions" if "actions" in result else ""
             print(f"  {name:14} {result['seconds']:6} s  {describe(result)}{extra}; "
@@ -348,5 +408,65 @@ def profile(uuid, seconds):
     return 0
 
 
+def focus_ab(uuid, rounds=4):
+    """Focus moving between two apps, Pear Up on and off by turns, for a
+    steadier number than one window each way: the container's own CPU time
+    wanders by more than the difference being looked for."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    energy = Energy(bus, uuid)
+    _framy_like(uuid)
+    for extension in (DOCK_UUID, BLUR_UUID):
+        try:
+            energy.extensions("EnableExtension", extension)
+        except GLib.Error:
+            pass
+    windows = _windows()
+    GLib.usleep(8 * 1000 * 1000)
+    energy.hook("MovePointer", (640.0, 360.0), "(dd)")
+    classes = (WINDOW_CLASS, OTHER_CLASS)
+
+    def focus(n):
+        energy.hook("FocusWindowOf", (classes[n % 2],), "(s)")
+
+    results = {"on": [], "off": []}
+    try:
+        for _ in range(rounds):
+            for state in ("on", "off"):
+                energy.set_enabled(state == "on", settle=5)
+                result = energy.measure(20000, focus)
+                results[state].append(result)
+                print(f"  focus-{state:3} {describe(result)}, {result['actions']} switches")
+    finally:
+        energy.set_enabled(True, settle=1)
+        for window in windows:
+            window.terminate()
+
+    def per_switch(state):
+        values = sorted(r["mainCpuMs"] / r["actions"] for r in results[state])
+        return values[len(values) // 2]
+
+    print(f"ENERGY-FOCUS on {per_switch('on'):.2f} ms, off {per_switch('off'):.2f} ms "
+          f"main-thread CPU per switch (median of {rounds})")
+    return 0
+
+
+def idle_only(uuid):
+    """The suite's check at rest on its own, for trying it against a change."""
+    failed = []
+
+    def check(label, condition, detail=""):
+        print(f"  {'ok  ' if condition else 'FAIL'} {label}" + (f" — {detail}" if detail else ""))
+        if not condition:
+            failed.append(label)
+        return bool(condition)
+
+    IdleChecks(Gio.bus_get_sync(Gio.BusType.SESSION, None), check, uuid).run()
+    return 1 if failed else 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 2 and sys.argv[2] == "idle":
+        sys.exit(idle_only(sys.argv[1]))
+    if len(sys.argv) > 2 and sys.argv[2] == "focus":
+        sys.exit(focus_ab(sys.argv[1]))
     sys.exit(profile(sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 60))

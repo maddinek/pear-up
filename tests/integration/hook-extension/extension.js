@@ -1563,21 +1563,35 @@ export default class TestHookExtension extends Extension {
         const times = [];
         const id = global.stage.connect('before-update',
             () => times.push(Math.round((GLib.get_monotonic_time() - start) / 1000)));
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+        this._frameCounts ??= new Set();
+        let timeoutId = 0;
+        const stop = () => {
+            this._frameCounts?.delete(stop);
+            if (timeoutId)
+                GLib.source_remove(timeoutId);
+            timeoutId = 0;
             global.stage.disconnect(id);
             invocation.return_value(new GLib.Variant('(s)', [JSON.stringify(times)]));
+        };
+        timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+            timeoutId = 0;
+            stop();
             return GLib.SOURCE_REMOVE;
         });
+        this._frameCounts.add(stop);
     }
 
     // Who adds main-loop work while tracing is on: every timeout, idle and
     // timeline started from an extension's file, by the place that started it,
-    // with how often it was added and how often it ran. Off returns the trace
-    // and puts GLib and Clutter back as they were.
+    // with how often it was added and how often it ran. Only work added once
+    // tracing is on is seen, so to see what an extension keeps running, trace
+    // from before it is enabled. On returns the trace so far, which a caller
+    // can subtract; off returns it too, and puts GLib and Clutter back.
     TraceWork(on) {
         if (on) {
             if (this._traceRestore)
-                return '{}';
+                return JSON.stringify(Object.fromEntries(
+                    [...this._trace].map(([place, counts]) => [place, { ...counts }])));
             const counts = new Map();
             this._trace = counts;
             const where = () => {
