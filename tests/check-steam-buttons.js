@@ -229,6 +229,27 @@ const fakeWm = () => ({
     },
 });
 const realMonitor = path => Gio.File.new_for_path(path).monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, null);
+// Count the actual reads the keeper asks for, without changing how its file
+// work runs. The last synchronous comparison inside a patch stays separate.
+function* countReads(steps, reads) {
+    let step = steps.next();
+    while (!step.done) {
+        if (step.value.op === 'read') {
+            const path = step.value.path;
+            reads.set(path, (reads.get(path) ?? 0) + 1);
+        }
+        let answer;
+        try {
+            answer = yield step.value;
+        } catch (e) {
+            step = steps.throw(e);
+            continue;
+        }
+        step = steps.next(answer);
+    }
+    return step.value;
+}
+
 // A look for Steam that waits to be let go, and says when it has been asked,
 // so that a case can act while the keeper's pass is really in the middle.
 const later = () => {
@@ -257,24 +278,43 @@ const later = () => {
     const same = install();
     const wmFake = fakeWm();
     const settings = fakeSettings(true);
-    const keeper = new SteamButtonsKeeper('test', settings,
-        { findRoots: async () => [at], monitorDirectory: realMonitor, wm: wmFake });
+    const reads = new Map();
+    const targets = ['library.css', 'gamerecording.css'].map(name => `${at}/steamui/css/${name}`);
+    const keeper = new SteamButtonsKeeper('test', settings, {
+        findRoots: async () => [at],
+        monitorDirectory: realMonitor,
+        runSteps: (steps, current) => runAsync(countReads(steps, reads), current),
+        wm: wmFake,
+    });
     check('the keeper connects nothing until it is started', wmFake.handlers.size === 0);
     keeper.start();
     check('started, it watches the layout', wmFake.handlers.size === 1);
     await keeper.settled;
+    check('a keeper pass reads each target once before the final patch comparison',
+        targets.every(path => reads.get(path) === 1));
     applySteamButtons(same, LEFT);
     check('the keeper patches as the synchronous functions do',
         steamState(at).on && read(`${at}/steamui/css/library.css`) === read(`${same}/steamui/css/library.css`) &&
+        read(`${at}/steamui/css/gamerecording.css`) === read(`${same}/steamui/css/gamerecording.css`) &&
         read(`${at}/steamui/pear-up/window-buttons.css`) === read(`${same}/steamui/pear-up/window-buttons.css`) &&
-        read(`${at}/steamui/css/library.pear-up-original.css`) === LIBRARY);
+        read(`${at}/steamui/css/library.pear-up-original.css`) === LIBRARY &&
+        read(`${at}/steamui/css/gamerecording.pear-up-original.css`) === RECORDING);
     check('and watches the stylesheets', keeper._monitors.length === 1);
+    reads.clear();
+    keeper.sync();
+    await keeper.settled;
+    check('an already patched pass reads each target once',
+        targets.every(path => reads.get(path) === 1));
+    reads.clear();
     settings.on = false;
     keeper.sync();
     await keeper.settled;
+    check('a restore pass reads each target once', targets.every(path => reads.get(path) === 1));
     check('switched off, the keeper puts Steam\'s files back',
-        read(`${at}/steamui/css/library.css`) === LIBRARY && !exists(`${at}/steamui/pear-up`) &&
-        !exists(`${at}/steamui/css/library.pear-up-original.css`));
+        read(`${at}/steamui/css/library.css`) === LIBRARY &&
+        read(`${at}/steamui/css/gamerecording.css`) === RECORDING && !exists(`${at}/steamui/pear-up`) &&
+        !exists(`${at}/steamui/css/library.pear-up-original.css`) &&
+        !exists(`${at}/steamui/css/gamerecording.pear-up-original.css`));
     check('and stops watching them', keeper._monitors.length === 0);
     keeper.destroy();
     check('destroyed, it leaves nothing connected', wmFake.handlers.size === 0);

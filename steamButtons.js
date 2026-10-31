@@ -269,10 +269,13 @@ export function steamRoots(dataDir, home) {
 // What each of the two files is now: Pear Up's patch, Adwaita for Steam's,
 // Steam's own, or not there. `on` is every file that is there patched by Pear
 // Up; `stale` is a file Steam has written afresh since.
-function* stateSteps(root) {
+function* stateSteps(root, contents = new Map()) {
     const files = [];
-    for (const name of TARGETS)
-        files.push({ name, kind: kindOf(yield read(GLib.build_filenamev([cssDir(root), name]))) });
+    for (const name of TARGETS) {
+        const bytes = yield read(GLib.build_filenamev([cssDir(root), name]));
+        contents.set(name, bytes);
+        files.push({ name, kind: kindOf(bytes) });
+    }
     const present = files.filter(file => file.kind !== 'missing');
     return {
         files,
@@ -411,8 +414,10 @@ function patchBytes(name, size) {
 // up to date: Steam's files patched again after an update, the stylesheet
 // written for the layout now. Returns whether anything was written. Throws,
 // touching nothing, where Adwaita for Steam has patched the files.
-function* applySteps(root, layout, classes = undefined) {
-    const state = yield* stateSteps(root);
+function* applySteps(root, layout, classes = undefined, {
+    state = null, contents = new Map(),
+} = {}) {
+    state ??= yield* stateSteps(root, contents);
     if (state.adwaita)
         throw new Error('Adwaita for Steam has patched Steam’s stylesheets: use its own window-buttons option');
 
@@ -432,7 +437,9 @@ function* applySteps(root, layout, classes = undefined) {
 
     for (const name of TARGETS) {
         const path = GLib.build_filenamev([cssDir(root), name]);
-        const original = yield read(path);
+        // The state pass already read it. The patch operation checks it again
+        // immediately before writing, so a concurrent change still wins.
+        const original = contents.get(name);
         if (kindOf(original) !== 'steam')
             continue;
         const patched = patchBytes(name, original.length);
@@ -501,7 +508,7 @@ export function restoreSteamButtons(root) {
 //
 // Making one does nothing; start() connects it and runs the first pass. Runs
 // go one at a time, and a newer request drops what is left of an older one.
-// `findRoots` and `monitorDirectory` are there for the tests.
+// The discovery, monitors and step runner can be replaced by the tests.
 const SETTLE_MS = 3000;
 
 export class SteamButtonsKeeper {
@@ -509,12 +516,14 @@ export class SteamButtonsKeeper {
         findRoots = () => runAsync(steamRootsSteps()),
         monitorDirectory = path => Gio.File.new_for_path(path)
             .monitor_directory(Gio.FileMonitorFlags.WATCH_MOVES, null),
+        runSteps = runAsync,
         wm = null,
     } = {}) {
         this._uuid = uuid;
         this._settings = settings;
         this._findRoots = findRoots;
         this._monitorDirectory = monitorDirectory;
+        this._runSteps = runSteps;
         this._wm = wm;
         this._layoutId = 0;
         this._monitors = [];
@@ -571,11 +580,14 @@ export class SteamButtonsKeeper {
         const layout = this._wm.get_string('button-layout');
         for (const root of roots) {
             try {
-                const state = on ? await runAsync(stateSteps(root), current) : null;
+                const contents = new Map();
+                const state = on ? await this._runSteps(stateSteps(root, contents), current) : null;
                 if (on && state && !state.adwaita)
-                    await runAsync(applySteps(root, layout), current);
+                    await this._runSteps(applySteps(root, layout, undefined, {
+                        state, contents,
+                    }), current);
                 else if (!on)
-                    await runAsync(restoreSteps(root), current);
+                    await this._runSteps(restoreSteps(root), current);
             } catch (e) {
                 if (current())
                     console.warn(`[${this._uuid}] ${on ? 'patching' : 'restoring'} Steam's window buttons in ${root} failed:`, e);
