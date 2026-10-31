@@ -135,6 +135,13 @@ dbus-run-session -- bash -c '
     # Extensions are enabled shortly after the shell claims its bus name.
     sleep 6
 
+    # PEAR_UP_ENERGY=<seconds> measures instead of checking: what the shell
+    # spends at rest and per event with Pear Up on and off (energy.py).
+    if [[ -n "${PEAR_UP_ENERGY:-}" && "${PEAR_UP_ENERGY:-0}" != "0" ]]; then
+        python3 /src/tests/integration/energy.py "$UUID" "$PEAR_UP_ENERGY"
+        exit $?
+    fi
+
     python3 /src/tests/integration/assert.py "$UUID" "$ARTIFACTS"
     status=$?
 

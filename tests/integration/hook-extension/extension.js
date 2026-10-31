@@ -221,6 +221,14 @@ const IFACE = `
       <arg type="b" direction="in" name="ticking"/>
       <arg type="u" direction="out" name="frames"/>
     </method>
+    <method name="TraceWork">
+      <arg type="b" direction="in" name="on"/>
+      <arg type="s" direction="out" name="trace"/>
+    </method>
+    <method name="FrameTimes">
+      <arg type="u" direction="in" name="ms"/>
+      <arg type="s" direction="out" name="times"/>
+    </method>
     <method name="MoveClock">
       <arg type="s" direction="in" name="box"/>
       <arg type="b" direction="out" name="moved"/>
@@ -689,6 +697,7 @@ export default class TestHookExtension extends Extension {
         for (const stop of this._frameCounts ?? [])
             stop();
         this._frameCounts = null;
+        this.TraceWork(false);
         this._pointer = null;
         this._keyboard = null;
         this._export?.unexport();
@@ -1522,6 +1531,83 @@ export default class TestHookExtension extends Extension {
             return GLib.SOURCE_REMOVE;
         });
         this._frameCounts.add(stop);
+    }
+
+    // When each frame ran, in ms from the start, over `ms`: a clock that ticks
+    // shows as a steady beat, a one-off as a burst.
+    FrameTimesAsync([ms], invocation) {
+        const start = GLib.get_monotonic_time();
+        const times = [];
+        const id = global.stage.connect('before-update',
+            () => times.push(Math.round((GLib.get_monotonic_time() - start) / 1000)));
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+            global.stage.disconnect(id);
+            invocation.return_value(new GLib.Variant('(s)', [JSON.stringify(times)]));
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Who adds main-loop work while tracing is on: every timeout, idle and
+    // timeline started from an extension's file, by the place that started it,
+    // with how often it was added and how often it ran. Off returns the trace
+    // and puts GLib and Clutter back as they were.
+    TraceWork(on) {
+        if (on) {
+            if (this._traceRestore)
+                return '{}';
+            const counts = new Map();
+            this._trace = counts;
+            const where = () => {
+                const lines = (new Error().stack ?? '').split('\n').slice(2);
+                const line = lines.find(l => l.includes('/extensions/') &&
+                    !l.includes('pear-up-test-hook')) ?? lines.find(l => !l.includes('pear-up-test-hook'));
+                return (line ?? '?').replace(/^.*\/extensions\//, '').replace(/^.*@resource:\/\/\/org\/gnome\/shell\//, 'shell/');
+            };
+            const entry = key => {
+                let found = counts.get(key);
+                if (!found)
+                    counts.set(key, found = { added: 0, ran: 0 });
+                return found;
+            };
+            const restore = [];
+            for (const name of ['timeout_add', 'timeout_add_seconds', 'idle_add']) {
+                const original = GLib[name];
+                GLib[name] = function (...args) {
+                    const record = entry(`${name} ${where()}`);
+                    record.added++;
+                    const index = args.findIndex(arg => typeof arg === 'function');
+                    if (index >= 0) {
+                        const fn = args[index];
+                        args[index] = (...callArgs) => {
+                            record.ran++;
+                            return fn(...callArgs);
+                        };
+                    }
+                    return original.apply(GLib, args);
+                };
+                restore.push(() => (GLib[name] = original));
+            }
+            const start = Clutter.Timeline.prototype.start;
+            Clutter.Timeline.prototype.start = function (...args) {
+                entry(`timeline ${where()}`).added++;
+                return start.apply(this, args);
+            };
+            restore.push(() => (Clutter.Timeline.prototype.start = start));
+            const ease = Clutter.Actor.prototype.ease;
+            Clutter.Actor.prototype.ease = function (...args) {
+                entry(`ease ${where()}`).added++;
+                return ease.apply(this, args);
+            };
+            restore.push(() => (Clutter.Actor.prototype.ease = ease));
+            this._traceRestore = restore;
+            return '{}';
+        }
+        for (const undo of this._traceRestore ?? [])
+            undo();
+        this._traceRestore = null;
+        const trace = Object.fromEntries(this._trace ?? []);
+        this._trace = null;
+        return JSON.stringify(trace);
     }
 
     _backgroundAlpha(actor) {

@@ -10,12 +10,14 @@
 //
 // Optional arguments: another application id, so a desktop entry of that name
 // can launch it as an app of its own (the dock bounce checks), and a delay in
-// milliseconds before the window appears, the time an app takes to start.
+// milliseconds before the window appears, the time an app takes to start, and
+// how many seconds the window stays open (the energy profile runs for longer).
 import Gtk from 'gi://Gtk?version=4.0';
 import GLib from 'gi://GLib';
 import system from 'system';
 
-const [appId = 'io.github.maddinek.PearUpTestWindow', delay = '0'] = system.programArgs;
+const [appId = 'io.github.maddinek.PearUpTestWindow', delay = '0', lifetime = '90'] =
+    system.programArgs;
 
 const application = new Gtk.Application({
     application_id: appId,
@@ -47,7 +49,7 @@ function present(app) {
     window.present();
 
     // Long enough for the assertions to run against it, then gone.
-    GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 90, () => {
+    GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, Number(lifetime) || 90, () => {
         window.close();
         return GLib.SOURCE_REMOVE;
     });
