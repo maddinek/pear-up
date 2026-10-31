@@ -207,6 +207,13 @@ const WINDOW_BUTTONS_CSS = [
 // that is not Pear Up's is never written over or removed.
 const SCROLL_PLUGIN = '10-pear-up-scroll-acceleration.lua';
 const SCROLL_PLUGIN_SPEED = /^local SPEED = ([0-9.]+)$/m;
+// The Mac scroll engine's switch, in the same file (experimental, off unless
+// switched on): the plugin then paces the scroll and glides itself, the same
+// for every app. A copy without the line is from before it, and has it off.
+const SCROLL_PLUGIN_ENGINE = /^local ENGINE = (true|false)$/m;
+// The speed the plugin scrolls at with the engine on (its ENGINE_SPEED): a
+// MacBook's, which the browsers' scale follows then.
+const SCROLL_ENGINE_SPEED = 0.34;
 const SCROLL_PLUGIN_OLD_GAIN = /^local SLOW_GAIN = ([0-9.]+)$/m;
 const PLUGINS_SHELL = 50;
 const PLUGINS_LIBINPUT = [1, 30];
@@ -1855,7 +1862,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             speeds.splice(SCROLL_SPEEDS.length, speeds.get_n_items() - SCROLL_SPEEDS.length,
                 custom ? [`Custom (${state.speed})`] : []);
             speedRow.set_selected(custom ? SCROLL_SPEEDS.length : index < 0 ? SCROLL_SPEED_DEFAULT : index);
-            speedRow.set_sensitive(state.installed);
+            // With the engine on the plugin scrolls as far as a MacBook,
+            // whatever the speed says: the speed was there to make up for the
+            // apps' short glides, and the engine glides itself.
+            speedRow.set_sensitive(state.installed && !state.engine);
             busy = false;
         };
         refresh();
@@ -1864,7 +1874,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         const followers = [];
         const write = speed => {
             const before = this._scrollLevel();
-            problem = this._setScrollPlugin(speed);
+            problem = this._setScrollPlugin(speed, this._scrollPluginState().engine);
             const after = this._scrollLevel();
             if (after !== before) {
                 for (const follow of followers)
@@ -1892,6 +1902,40 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             write(speed.speed);
         });
 
+        // The Mac scroll engine, in the same plugin: experimental, off.
+        const engineSubtitle = 'Experimental. The plugin makes the whole scroll itself, as macOS does: the page ' +
+            'moves evenly with the screen while the fingers move, glides on after a flick as a MacBook’s does, ' +
+            'and stops when a finger touches, the same in every app. It scrolls as far as a MacBook, so Scroll ' +
+            'Speed rests while it is on. Takes effect at the next login.';
+        const engineRow = new Adw.SwitchRow({ title: 'Mac Scroll Engine (Experimental)', subtitle: engineSubtitle });
+        engineRow.set_subtitle_lines(0);
+        group.add(engineRow);
+        let engineBusy = false;
+        const engineRefresh = () => {
+            engineBusy = true;
+            const state = this._scrollPluginState();
+            engineRow.set_active(state.installed && state.engine);
+            engineRow.set_sensitive(state.installed && state.speed !== null);
+            engineBusy = false;
+        };
+        engineRefresh();
+        row.connect('notify::active', () => engineRefresh());
+        engineRow.connect('notify::active', () => {
+            const state = this._scrollPluginState();
+            if (engineBusy || !state.installed || state.speed === null || engineRow.active === state.engine)
+                return;
+            const before = this._scrollLevel();
+            let failed = this._setScrollPlugin(state.speed, engineRow.active);
+            const after = this._scrollLevel();
+            if (after !== before) {
+                for (const follow of followers)
+                    failed = follow(before, after) ?? failed;
+            }
+            engineRow.set_subtitle(failed ?? engineSubtitle);
+            refresh();
+            engineRefresh();
+        });
+
         const browser = this._buildBrowserScrollRows(group, home);
         followers.push(browser[2]);
         const firefox = this._buildFirefoxMomentumRow(group, home);
@@ -1903,6 +1947,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // was 1 at 80 mm/s too.
     _scrollLevel() {
         const state = this._scrollPluginState();
+        if (state.installed && state.engine)
+            return SCROLL_ENGINE_SPEED;
         return state.installed && state.speed ? state.speed : 1;
     }
 
@@ -2360,12 +2406,15 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
     // The plugin as this version of Pear Up ships it, with `speed` written into
     // its speed line.
-    _scrollPluginText(speed) {
+    _scrollPluginText(speed, engine = false) {
         const [, bytes] = GLib.file_get_contents(GLib.build_filenamev([this.path, 'libinput', SCROLL_PLUGIN]));
         const source = new TextDecoder().decode(bytes);
         if (source.match(new RegExp(SCROLL_PLUGIN_SPEED.source, 'gm'))?.length !== 1)
             throw new Error('the plugin Pear Up ships has no speed line');
-        return source.replace(SCROLL_PLUGIN_SPEED, `local SPEED = ${speed}`);
+        if (source.match(new RegExp(SCROLL_PLUGIN_ENGINE.source, 'gm'))?.length !== 1)
+            throw new Error('the plugin Pear Up ships has no engine line');
+        return source.replace(SCROLL_PLUGIN_SPEED, `local SPEED = ${speed}`)
+            .replace(SCROLL_PLUGIN_ENGINE, `local ENGINE = ${engine ? 'true' : 'false'}`);
     }
 
     // What is installed: Pear Up's plugin, with its speed and whether it is
@@ -2384,26 +2433,27 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             // Up's to replace.
             const absent = [Gio.IOErrorEnum.NOT_FOUND, Gio.IOErrorEnum.NOT_DIRECTORY]
                 .some(code => e.matches?.(Gio.IOErrorEnum, code));
-            return { installed: false, foreign: !absent, speed: null, current: true };
+            return { installed: false, foreign: !absent, speed: null, engine: false, current: true };
         }
         const speed = text.match(SCROLL_PLUGIN_SPEED);
         const old = text.match(SCROLL_PLUGIN_OLD_GAIN);
         if ((!speed && !old) || !text.includes('Pear Up'))
-            return { installed: false, foreign: true, speed: null, current: true };
+            return { installed: false, foreign: true, speed: null, engine: false, current: true };
         if (!speed)
-            return { installed: true, foreign: false, speed: null, current: false };
+            return { installed: true, foreign: false, speed: null, engine: false, current: false };
+        const engine = text.match(SCROLL_PLUGIN_ENGINE)?.[1] === 'true';
         let current = true;
         try {
-            current = text === this._scrollPluginText(Number(speed[1]));
+            current = text === this._scrollPluginText(Number(speed[1]), engine);
         } catch {
             // Without the shipped copy there is nothing to compare with.
         }
-        return { installed: true, foreign: false, speed: Number(speed[1]), current };
+        return { installed: true, foreign: false, speed: Number(speed[1]), engine, current };
     }
 
     // Installs the plugin with `speed`, or with null removes Pear Up's copy and
     // only that. Returns what went wrong, or null.
-    _setScrollPlugin(speed) {
+    _setScrollPlugin(speed, engine = false) {
         const path = this._scrollPluginPath();
         if (this._scrollPluginState().foreign)
             return `${this._tildePath(path)} is not Pear Up’s, and is left alone`;
@@ -2414,7 +2464,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                     file.delete(null);
                 return null;
             }
-            const text = this._scrollPluginText(speed);
+            const text = this._scrollPluginText(speed, engine);
             const dir = GLib.path_get_dirname(path);
             if (GLib.mkdir_with_parents(dir, 0o755) !== 0)
                 throw new Error(`${this._tildePath(dir)} cannot be created`);

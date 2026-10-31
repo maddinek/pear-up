@@ -1,0 +1,17 @@
+<!doctype html>
+<!-- Chromium scroll probe for the end-to-end test: a tall page that logs every
+     wheel event (deltaY, timeStamp) and, on every animation frame, the frame
+     time and window.scrollY: what is drawn, Chromium's fling included. Lines
+     go to the console as "E2E {json}", which --enable-logging=stderr prints. -->
+<meta charset="utf-8">
+<title>scroll-probe</title>
+<style>body{margin:0;height:400000px;background:linear-gradient(#fff,#ccc)}</style>
+<script>
+const log = o => console.log('E2E ' + JSON.stringify(o));
+addEventListener('load', () => { scrollTo(0, 200000); log({k: 'ready'}); });
+let moves = 0;
+addEventListener('pointermove', e => { if (moves++ < 3) log({k: 'move', x: e.clientX, y: e.clientY}); });
+addEventListener('wheel', e => log({k: 'wheel', dy: e.deltaY, t: e.timeStamp, mode: e.deltaMode}), {passive: true});
+const frame = t => { log({k: 'frame', t, y: scrollY}); requestAnimationFrame(frame); };
+requestAnimationFrame(frame);
+</script>

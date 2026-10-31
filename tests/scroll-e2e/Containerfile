@@ -1,0 +1,9 @@
+# The scroll end-to-end test's image: Pear Up's GNOME 50 test image (systemd,
+# logind, gnome-shell 50, pipewire; tests/integration/Containerfile) plus real
+# libinput and umockdev for stage 1, Chromium as a second client, matplotlib
+# for the report. tests/run-scroll-e2e.sh builds the base first.
+ARG BASE=localhost/pear-up-test:gnome50
+FROM ${BASE}
+RUN dnf install -y --setopt=install_weak_deps=False \
+        lua libinput umockdev diffutils gtk4 chromium python3-matplotlib \
+    && dnf clean all

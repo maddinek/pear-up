@@ -61,10 +61,13 @@ PLUGIN_NAME="10-pear-up-scroll-acceleration.lua"
 PLUGIN_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/libinput/plugins/$PLUGIN_NAME"
 if [[ -f "$PLUGIN_PATH" ]] && grep -q 'Pear Up' "$PLUGIN_PATH"; then
     speed="$(sed -n 's/^local SPEED = \([0-9.]*\)$/\1/p' "$PLUGIN_PATH" | head -n 1)"
+    # The Mac scroll engine's switch is kept too; a copy from before it has it off.
+    engine="$(sed -n 's/^local ENGINE = \(true\|false\)$/\1/p' "$PLUGIN_PATH" | head -n 1)"
     if [[ -n "$speed" ]] || grep -q '^local SLOW_GAIN = ' "$PLUGIN_PATH"; then
         echo "🖱️ Updating the scroll acceleration plugin..."
         if [[ -n "$speed" ]]; then
-            sed "s/^local SPEED = [0-9.]*$/local SPEED = $speed/" \
+            sed -e "s/^local SPEED = [0-9.]*$/local SPEED = $speed/" \
+                -e "s/^local ENGINE = [a-z]*$/local ENGINE = ${engine:-false}/" \
                 "$SOURCE_DIR/libinput/$PLUGIN_NAME" > "$PLUGIN_PATH.pear-up-new"
         else
             cp "$SOURCE_DIR/libinput/$PLUGIN_NAME" "$PLUGIN_PATH.pear-up-new"

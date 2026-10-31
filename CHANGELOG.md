@@ -14,6 +14,43 @@ it back when they are switched off.
 
 ### Added
 
+- **Mac Scroll Engine (Experimental)** (Keyboard ▸ Trackpad, off). The scroll
+  plugin makes the whole scroll stream itself, as macOS does, below every app:
+  while two fingers scroll, libinput is told where they are on a fixed 480 Hz
+  beat (four steps a 120 Hz frame) instead of at the touchpad's 7 ms, which
+  landed one report in most frames and two in every fifth. Fingers that rest
+  past libinput's tap timeout and then scroll slowly are helped past its
+  one-millimetre wait, so the scroll starts as on a Mac; a two-finger tap
+  still right-clicks. After a lift at 28 mm/s or more the fingers are kept
+  down for libinput and glide on as a MacBook Air's measured momentum does
+  (1.30 of the lift speed, held 120 ms, then τ 200 ms); they rest 260 ms
+  before the stop, so GTK, Chromium and Firefox start no glide of their own
+  (their windows are 150, 200 and 100 ms). A finger down stops the glide; two
+  take it over and the glide fades under them while they get going. At the
+  pad's edge the resting fingers are moved back in one jump libinput
+  discards. With the engine on the plugin scrolls at a MacBook's speed and
+  Scroll Speed rests; the browsers' scale follows. Written as an `ENGINE`
+  line into the plugin, kept by install.sh. Its timer never asks libinput
+  for a moment already past (once it did, after a touch rested on a glide,
+  and libinput's timer loop held mutter's input thread); should it ever
+  misbehave again — asking for the past three times in a second, running
+  over 1000 times a second, or any error — the engine switches itself off
+  until the next login, lets its fingers go and leaves plain acceleration.
+  Its steps stay inside libinput's jump limits as libinput measures them
+  (over the time since its last frame, the touchpad's own included), so no
+  real finger movement is thrown away, and the first gesture after login
+  is paced too (the kernel had not named its slot). New end-to-end test,
+  `tests/run-scroll-e2e.sh`: recorded gestures written to a uinput
+  touchpad (grabbed, so the desktop never sees them), the plugin live
+  inside the host's libinput, and a headless GNOME Shell to a GTK 4 and a
+  Chromium client, measured against a MacBook Air's own stream; its
+  hand-off checks fail a run that spins libinput's timer. Off by default:
+  on 2026-10-14 an earlier build's timer held mutter's input thread (no
+  mouse, keyboard or wake) until gnome-shell was killed; fixed, with the
+  fail-safe above, but the switch stays Experimental. Its first scroll now
+  comes no later than without it: the fingers go unscaled until libinput
+  has decided they scroll (1.5 mm on both, or 1 mm after 150 ms), and are
+  drawn with no delay until then, easing back to 9 ms over 100 ms after.
 - **Scrolling as on a MacBook** (Keyboard ▸ Trackpad). The scroll plugin's
   curve is now macOS's own (IOHIDPointerScrollFilter with a MacBook Air's
   table): 0.43 of the 80 mm/s rate at 10 mm/s, 0.64 at 20, 1.08 from 160,

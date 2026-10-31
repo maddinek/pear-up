@@ -33,6 +33,13 @@ echo
 echo "  the plugin in libinput:"
 python3 "$SRC/tests/libinput/check-with-libinput.py" "$PLUGIN" | sed 's/^/  /'
 
+# The Mac scroll engine: random frames for errors and fingers left down. Its
+# hand-offs (glide, stop, touch, take-over) need the plugin live in libinput on
+# a uinput touchpad, so they run on a host: tests/run-scroll-e2e.sh.
+echo
+echo "  the Mac scroll engine, fuzzed:"
+lua "$SRC/tests/scroll-e2e/fuzz.lua" "$PLUGIN" 1000 "${FUZZ_SEED:-$RANDOM}" | sed 's/^/  /'
+
 # The macOS keys: the logic with keys of its own, then the plugin in real
 # libinput against a keyboard umockdev makes up.
 echo
