@@ -259,6 +259,15 @@ const TopLevelMenuButton = GObject.registerClass(
             this._refreshChildren = refreshChildren;
     }
 
+    // The app menu of a kept bar, for the next app: its title, and the name a
+    // screen reader gives the button.
+    setTitle(title) {
+        if (this.label && this.label.text !== title)
+            this.label.text = title;
+        if (this.accessible_name !== title)
+            this.accessible_name = title;
+    }
+
     _queuePin() {
         if (this._pinIdle)
             return;
@@ -653,6 +662,7 @@ export class MenuManager {
         // What the bar on the panel was built for, and a count of the menu
         // settings changes seen; see _barKey().
         this._key = null;
+        this._app = null;
         this._serial = 0;
         // Shell chrome only — not the file manager. A visible Nautilus
         // window should still get File/Edit/View like any other app.
@@ -738,30 +748,60 @@ export class MenuManager {
         const appMenuChildren = () =>
             this._appMenuChildren(detectedApp, appName, desktopId);
 
-        // Focus moves between windows of one app all the time — and lands on
-        // a window as its open animation starts, or as a desktop switch ends.
-        // The bar for that is the bar already there.
-        const key = this._barKey(isAppFocused, desktopId, appName, isFiles);
+        // Nothing in front: keep the System Menu (pear) and any custom
+        // menus, but do not pretend Nautilus/Finder is the focused app.
+        const menuData = isAppFocused
+            ? this._appMenuData(appName, isFiles)
+            : this._buildCustomMenus();
+        const appMenuIndex = isAppFocused && this._settings.get_boolean('menu-app-enabled')
+            ? 0 : -1;
+
+        // Focus moves between windows all the time — and lands on a window as
+        // its open animation starts, or as a desktop switch ends. Most apps
+        // share one bar: File, Edit, View, Go, Window and Help say the same for
+        // all of them, and the app menu is filled as it opens. So the bar is
+        // kept when another app comes to the front as well, and only the app
+        // menu's title changes. It is built again when a menu would hold
+        // something else, as the file manager's do.
+        //
+        // A menu left open as another app comes to the front would still show
+        // the last app's windows and name while acting on the new one's, so it
+        // closes, as it did when the bar was built again.
+        const key = this._barKey(isAppFocused, menuData, appMenuIndex);
+        const app = JSON.stringify([desktopId, appName]);
         if (this._canReuse(key)) {
-            for (const btn of this._buttons)
+            const otherApp = app !== this._app;
+            this._buttons.forEach((btn, index) => {
+                if (otherApp && btn.menu?.isOpen)
+                    btn.menu.close();
                 btn.setApp(detectedApp, appMenuChildren);
+                if (index === appMenuIndex)
+                    btn.setTitle(appName);
+            });
+            this._app = app;
             return false;
         }
 
-        // Nothing in front: keep the System Menu (pear) and any custom
-        // menus, but do not pretend Nautilus/Finder is the focused app.
-        if (!isAppFocused) {
-            this.clear();
-            this._buildCustomMenus().forEach((item, index) => {
-                let btn = new TopLevelMenuButton(item.label, item.children, null, false);
-                Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, this._slotFor(index), 'left');
-                this._buttons.push(btn);
-            });
-            this._applyBarChrome();
-            this._key = key;
-            return true;
-        }
+        this.clear();
 
+        menuData.forEach((item, index) => {
+            let isAppMenu = index === appMenuIndex;
+            let refresh = isAppMenu ? appMenuChildren : null;
+            let btn = new TopLevelMenuButton(item.label, item.children, detectedApp, isAppMenu, refresh);
+            Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, this._slotFor(index), 'left');
+            this._buttons.push(btn);
+        });
+        this._applyBarChrome();
+        // Published last: a build that threw part-way leaves no key, so the
+        // next sync builds again rather than trusting half a bar.
+        this._key = key;
+        this._app = app;
+        return true;
+    }
+
+    // The menus of the bar for the app in front, as data: cheap to make, and
+    // what a kept bar is compared by.
+    _appMenuData(appName, isFiles) {
         let menuData = [];
 
         // The app menu's items come from live window state, so they are made
@@ -785,28 +825,17 @@ export class MenuManager {
             menuData.push(helpMenu());
 
         menuData.push(...this._buildCustomMenus());
-
-        this.clear();
-
-        menuData.forEach((item, index) => {
-            let isAppMenu = this._settings.get_boolean('menu-app-enabled') && index === 0;
-            let refresh = isAppMenu ? appMenuChildren : null;
-            let btn = new TopLevelMenuButton(item.label, item.children, detectedApp, isAppMenu, refresh);
-            Main.panel.addToStatusArea(`${this.uuid}-${index}`, btn, this._slotFor(index), 'left');
-            this._buttons.push(btn);
-        });
-        this._applyBarChrome();
-        // Published last: a build that threw part-way leaves no key, so the
-        // next sync builds again rather than trusting half a bar.
-        this._key = key;
-        return true;
+        return menuData;
     }
 
-    // Everything the bar's contents follow: which app, whether it is the file
-    // manager (its own File and Go menus), the name the app menu carries, and
-    // the menu settings, through the count of their changes.
-    _barKey(isAppFocused, desktopId, appName, isFiles) {
-        return JSON.stringify([isAppFocused, desktopId, appName, isFiles, this._serial]);
+    // Everything the bar's contents follow: whether an app is in front, every
+    // menu's title and items but the app menu's title, which a kept bar takes
+    // from the app in front, and the menu settings, through the count of their
+    // changes.
+    _barKey(isAppFocused, menuData, appMenuIndex) {
+        return JSON.stringify([isAppFocused, this._serial,
+            menuData.map((item, index) =>
+                index === appMenuIndex ? null : [item.label, item.children])]);
     }
 
     // The bar on the panel can be kept only if it is still the one built for

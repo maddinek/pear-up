@@ -803,14 +803,17 @@ finally:
 # Focus moves between windows of one app all the time, and lands on a window as
 # its open animation starts or as a desktop switch ends. The bar used to be torn
 # down and built again — seven menus of St widgets — for every one of those,
-# with nothing about it different. The same app keeps its bar; another app, or a
-# change to the menu settings, gets a new one. Menus are made as they first
-# open, so a bar that was just built holds no items until then. The timings are
-# printed for the record: they are this container's, not a desktop's.
+# with nothing about it different. The same app keeps its bar, and so does
+# another app whose menus say the same, with its own name on the app menu; the
+# file manager, whose File and Go menus differ, or a change to the menu
+# settings, gets a new one. Menus are made as they first open, so a bar that
+# was just built holds no items until then. The timings are printed for the
+# record: they are this container's, not a desktop's.
 OTHER_APP_CLASS = "io.github.maddinek.PearUpTestOther"
+FILES_CLASS = "org.gnome.Nautilus"
 print()
 print("  menu bar sync:")
-other_app = None
+other_app = files_app = None
 try:
     for _ in range(2):
         subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js"],
@@ -819,12 +822,16 @@ try:
     other_app = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js",
                                   OTHER_APP_CLASS],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    files_app = subprocess.Popen(["gjs", "-m", "/src/tests/integration/test-window.js",
+                                  FILES_CLASS],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def count(wm_class):
         return hook("CountWindows", (wm_class,), "(s)")
 
     for _ in range(20):
-        if count("io.github.maddinek.PearUpTestWindow") >= 2 and count(OTHER_APP_CLASS) >= 1:
+        if (count("io.github.maddinek.PearUpTestWindow") >= 2 and count(OTHER_APP_CLASS) >= 1
+                and count(FILES_CLASS) >= 1):
             break
         GLib.usleep(250 * 1000)
 
@@ -847,10 +854,50 @@ try:
     if "error" in mixed:
         check("windows of two apps could be put in front by turns", False, mixed["error"])
     else:
-        check("switching between two apps builds each one's menu bar",
-              mixed["rebuilds"] == mixed["rounds"] and len(set(mixed["labels"])) == 2,
+        check("switching between two apps keeps the bar, with each one's name on its app menu",
+              mixed["rebuilds"] == 0 and len(set(mixed["labels"])) == 2,
               f"{mixed['rebuilds']} rebuilds in {mixed['rounds']} switches, "
               f"app menus {sorted(set(mixed['labels']))}; {timing(mixed)}")
+
+    # A menu open as another app comes to the front closes, as it did when the
+    # bar was built again, rather than go on showing the last app's windows.
+    hook("FocusWindowOf", ("io.github.maddinek.PearUpTestWindow",), "(s)")
+    GLib.usleep(600 * 1000)
+    bar = json.loads(hook("GetBarIdentity"))
+    opened = json.loads(hook("OpenTopMenu", (bar[0]["label"],), "(s)")) if bar else None
+    GLib.usleep(300 * 1000)
+    was_open = any(button["open"] for button in json.loads(hook("GetBarIdentity")))
+    hook("FocusWindowOf", (OTHER_APP_CLASS,), "(s)")
+    GLib.usleep(600 * 1000)
+    after = json.loads(hook("GetBarIdentity"))
+    check("an app menu open as another app comes to the front closes, on the kept bar",
+          opened is not None and was_open and not any(button["open"] for button in after)
+          and [b["serial"] for b in after] == [b["serial"] for b in bar]
+          and after[0]["label"] != bar[0]["label"],
+          f"open before: {was_open}, open after: {[b['label'] for b in after if b['open']]}, "
+          f"kept: {[b['serial'] for b in after] == [b['serial'] for b in bar]}, "
+          f"{bar[0]['label'] if bar else None} -> {after[0]['label'] if after else None}")
+
+    # The kept bar speaks for the app now in front: its app menu, filled as it
+    # opens, quits that app and lists its windows.
+    app_menu = next((menu for menu in menu_tree()
+                     if menu["role"].endswith("-0")), None)
+    app_items = [item.get("label") for item in (app_menu or {}).get("items", [])]
+    check("and the kept bar's app menu is the app's in front",
+          app_menu is not None and app_menu["label"] in OTHER_APP_CLASS
+          and any(label and label.startswith("Quit ") and label[5:] == app_menu["label"]
+                  for label in app_items),
+          f"{app_menu and app_menu['label']}: {app_items}")
+
+    with_files = measure(f"io.github.maddinek.PearUpTestWindow,{FILES_CLASS}")
+    if "error" in with_files:
+        check("an app and the file manager could be put in front by turns", False,
+              with_files["error"])
+    else:
+        check("switching to the file manager and back builds the bar each time",
+              with_files["rebuilds"] == with_files["rounds"],
+              f"{with_files['rebuilds']} rebuilds in {with_files['rounds']} switches; "
+              f"{timing(with_files)}")
 
     hook("FocusWindowOf", ("io.github.maddinek.PearUpTestWindow",), "(s)")
     GLib.usleep(600 * 1000)
@@ -886,10 +933,11 @@ except FileNotFoundError:
 except GLib.Error as exc:
     check("the menu bar sync could be measured", False, exc.message.splitlines()[0])
 finally:
-    if other_app:
-        other_app.terminate()
-        other_app.wait()
-        GLib.usleep(500 * 1000)
+    for app in (other_app, files_app):
+        if app:
+            app.terminate()
+            app.wait()
+    GLib.usleep(500 * 1000)
 
 # ------------------------------------------------------------ Cmd+Q quits
 # Two windows of one app, then Cmd+Q: both have to go. Closing only the one in

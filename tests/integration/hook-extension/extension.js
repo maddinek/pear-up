@@ -2451,6 +2451,7 @@ export default class TestHookExtension extends Extension {
                     label: button?.label?.text ?? null,
                     serial: serialOf(button),
                     items: button?.menu?._getMenuItems?.().length ?? 0,
+                    open: button?.menu?.isOpen ?? false,
                 };
             }));
     }
