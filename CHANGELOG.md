@@ -649,6 +649,15 @@ it back when they are switched off.
 
 ### Changed
 
+- **Less work when you switch apps.** The menu bar is kept when another app
+  with the same menus comes to the front, with only the app menu's name
+  changing (a sync went from 4.6 ms to 0.7 ms); a menu left open closes when
+  another app comes to the front. The dock magnifier and bounce look for Dash
+  to Dock only when a dock comes or goes, not whenever a menu, tooltip or
+  notification appears. Smaller savings: no brightness timer for a level
+  already reached, no Recent Items watcher while Recent Items is off, and
+  Steam's stylesheets read once per check instead of three times.
+
 - **The menu bar stays put while you move between windows of the same app**,
   instead of being rebuilt on every focus change (about 13 ms each time, now
   under half a millisecond). Its menus are built the first time they open, and
@@ -720,6 +729,10 @@ it back when they are switched off.
   integration suite loads a stand-in for Vitals' stylesheet, one that sets a
   size and weight of its own too, and reads what the theme resolves for the
   readouts with Pear Up on and off.
+
+- **Tests:** the integration suite now fails if Pear Up runs any timer, idle
+  or animation, or adds frames or wake-ups, while the shell is at rest;
+  `PEAR_UP_ENERGY=60|idle|focus tests/integration/run.sh` measures it.
 
 ### Fixed
 
