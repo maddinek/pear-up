@@ -13,7 +13,7 @@ import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import { spawnCommandLine } from './util.js';
-import { recentSections, clearRecent } from './recentItems.js';
+import { RecentList, clearRecent } from './recentItems.js';
 import { ForceQuitPicker } from './forceQuit.js';
 
 // The panel role this button is registered under. Shared, because the menu bar
@@ -154,6 +154,9 @@ export const SystemMenuButton = GObject.registerClass(
         this._extensionPath = extensionPath;
         this._systemActions = SystemActions.getDefault();
         this._actionItems = [];
+        this._recentList = new RecentList(settings.get_int('recent-items-limit'));
+        this._recentMenuGeneration = 0;
+        this._recentDestroyed = false;
 
         this._icon = new St.Icon({
             style_class: 'pearup-logo-icon system-status-icon',
@@ -180,6 +183,7 @@ export const SystemMenuButton = GObject.registerClass(
         }, this);
 
         this.connect('destroy', this._onDestroy.bind(this));
+        this._recentList.refresh();
     }
 
     _syncIcon() {
@@ -226,6 +230,9 @@ export const SystemMenuButton = GObject.registerClass(
     // menu ends up opening with a separator on top, or two in a row, whenever
     // a setting is turned off.
     _rebuildMenu() {
+        this._recentMenuGeneration++;
+        this._recentMenu = null;
+        this._recentSignature = null;
         this.menu.removeAll();
         this._actionItems = [];
         this._iconTheme = this._newIconTheme();
@@ -391,8 +398,8 @@ export const SystemMenuButton = GObject.registerClass(
         return iconNames.find(name => this._iconTheme.has_icon(name)) ?? null;
     }
 
-    // The list changes with every file opened anywhere on the system, so it is
-    // rebuilt each time the menu around it opens.
+    // The list changes with every file opened anywhere on the system. Show
+    // the cached list immediately, then refresh without delaying the shell.
     //
     // Not when the submenu itself opens, which is the obvious place for it:
     // PopupSubMenu.open() returns early for an empty menu, so a submenu that
@@ -406,10 +413,22 @@ export const SystemMenuButton = GObject.registerClass(
         if (submenu.icon)
             submenu.icon.icon_size = this._menuIconSize();
 
-        this._fillRecentItems(submenu.menu);
+        const menu = submenu.menu;
+        const generation = this._recentMenuGeneration;
+        this._recentMenu = menu;
+        this._fillRecentItems(menu);
+        // A settings change can replace this submenu while I/O is in flight,
+        // even though the panel button itself is still alive.
+        const refreshed = () => {
+            if (!this._recentDestroyed && generation === this._recentMenuGeneration &&
+                this._recentMenu === menu)
+                this._fillRecentItems(menu);
+        };
         this.menu.connectObject('open-state-changed', (_menu, isOpen) => {
-            if (isOpen)
-                this._fillRecentItems(submenu.menu);
+            if (!isOpen)
+                return;
+            this._fillRecentItems(menu);
+            this._recentList.refresh(refreshed);
         }, submenu);
 
         this.menu.addMenuItem(submenu);
@@ -417,10 +436,18 @@ export const SystemMenuButton = GObject.registerClass(
     }
 
     _fillRecentItems(menu) {
-        menu.removeAll();
-
         const limit = this._settings.get_int('recent-items-limit');
-        const sections = recentSections(limit);
+        const sections = this._recentList.sections(limit);
+        const signature = JSON.stringify(sections.map(section => [
+            section.heading,
+            section.items.map(entry => [entry.label, entry.identity]),
+        ]));
+        // Preserve the user's focus and open submenu when only the refresh
+        // completed; replacing identical actors would make the menu jump.
+        if (signature === this._recentSignature)
+            return;
+        this._recentSignature = signature;
+        menu.removeAll();
 
         if (sections.length === 0) {
             const empty = new PopupMenu.PopupMenuItem('No Recent Items', { activate: false });
@@ -682,6 +709,11 @@ export const SystemMenuButton = GObject.registerClass(
     }
 
     _onDestroy() {
+        this._recentDestroyed = true;
+        this._recentMenuGeneration++;
+        this._recentMenu = null;
+        this._recentList?.destroy();
+        this._recentList = null;
         this._picker?.destroy();
         this._picker = null;
         this._settings = null;

@@ -4,7 +4,7 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
-import { MenuManager } from './menuManager.js';
+import { MenuManager, MENU_CONTENT_KEYS } from './menuManager.js';
 import { SystemMenuButton, LOGO_ROLE } from './systemMenu.js';
 import { SearchButton } from './searchButton.js';
 import { DockMagnifier } from './dockMagnifier.js';
@@ -12,6 +12,8 @@ import { DockBounce } from './dockBounce.js';
 import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
 import { SpacesSpring, SPACES_SPRING_KEY } from './spacesSpring.js';
+import { GestureDirection, GESTURE_DIRECTION_KEY } from './gestureDirection.js';
+import { OverviewSwipeGuard } from './overviewSwipeGuard.js';
 import { ScreenshotThumbnail, SCREENSHOT_THUMBNAIL_KEY } from './screenshotThumbnail.js';
 import { WindowAnimations, WINDOW_ANIMATIONS_KEY } from './windowAnimations.js';
 import { SteamButtonsKeeper, STEAM_BUTTONS_KEY } from './steamButtons.js';
@@ -52,21 +54,12 @@ const CLOCK_RETURN_WINDOW_US = 10 * GLib.USEC_PER_SEC;
 // that inspects the panel from outside, so this one carries no test surface and
 // no way in for anything else.
 
-// Only these change what the menu bar contains. Anything else — an icon, a
-// command string, a System Menu item — is handled where it is used, so the bar
-// is not torn down and rebuilt for it.
-const MENU_CONTENT_KEYS = [
-    'show-indicator',
-    'desktop-app-name',
-    'menu-app-enabled',
-    'menu-file-enabled',
-    'menu-edit-enabled',
-    'menu-view-enabled',
-    'menu-go-enabled',
-    'menu-window-enabled',
-    'menu-help-enabled',
-    'custom-menus',
-];
+// A menu bar sync that lands while a desktop switch is sliding is held until
+// the slide ends, so St widgets are not built in the middle of its frames —
+// checked this often, and never held longer than this, so the bar cannot be
+// left showing the desktop just left.
+const MENU_SYNC_SWITCH_POLL_MS = 50;
+const MENU_SYNC_SWITCH_LIMIT_US = GLib.USEC_PER_SEC;
 
 // Both are read live: the magnifier is built or torn down by the first, and
 // picks up a new size from the second on its next frame.
@@ -112,6 +105,8 @@ export default class GlobalMenuExtension extends Extension {
         this._shellTweaks = null;
         this._smoothBrightness = null;
         this._spacesSpring = null;
+        this._gestureDirection = null;
+        this._overviewSwipeGuard = null;
         this._screenshotThumbnail = null;
         this._windowAnimations = null;
         this._steamButtons = null;
@@ -137,6 +132,8 @@ export default class GlobalMenuExtension extends Extension {
         this._resyncId = 0;
         this._indicatorPaddingId = 0;
         this._menuSyncId = 0;
+        this._menuSyncDeadline = 0;
+        this._shellGone = false;
         this._hiddenSpacers = [];
         this._gapped = new Set();
         this._padded = new Set();
@@ -182,6 +179,18 @@ export default class GlobalMenuExtension extends Extension {
         this._hiddenSpacers = [];
         this._spotlightMoved = null;
         this._overviewHidden = false;
+        this._menuSyncDeadline = 0;
+        this._shellGone = false;
+
+        // At logout the shell's own shutdown handler destroys uiGroup — the
+        // panel with it — and then runs a main loop of its own while it saves
+        // the session history. Idles queued here would run in that loop
+        // against actors already disposed, which is the "already disposed"
+        // and GC-sweep noise in the journal at every logout. The destroy
+        // arrives before that loop, so stop queuing and drop what is queued
+        // there. Nothing is touched from the handler itself.
+        Main.layoutManager.uiGroup.connectObject('destroy', () => this._onShellGone(), this);
+        Main.panel.connectObject('destroy', () => this._onShellGone(), this);
 
         this._menuManager = new MenuManager(this.metadata.uuid, this._settings);
 
@@ -208,6 +217,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._smoothBrightness?.sync();
             else if (key === SPACES_SPRING_KEY)
                 this._spacesSpring?.sync();
+            else if (key === GESTURE_DIRECTION_KEY)
+                this._gestureDirection?.sync();
             else if (key === SCREENSHOT_THUMBNAIL_KEY)
                 this._guard('updating the screenshot thumbnail', () => this._screenshotThumbnail?.sync());
             else if (key === WINDOW_ANIMATIONS_KEY)
@@ -268,6 +279,19 @@ export default class GlobalMenuExtension extends Extension {
             this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
         });
 
+        // Not an option: a fix for the shell, which throws at the end of a
+        // swipe that never opened the overview and leaves it half made.
+        this._guard('guarding the overview swipe', () => {
+            this._overviewSwipeGuard = new OverviewSwipeGuard(this.metadata.uuid);
+        });
+
+        // The shell's swipes follow the fingers, as Spaces and Mission Control
+        // do, whatever Natural Scrolling says. In the gestures beneath the
+        // trackers the spring wraps, so it goes first and comes off last.
+        this._guard('turning the swipes the macOS way', () => {
+            this._gestureDirection = new GestureDirection(this.metadata.uuid, this._settings);
+        });
+
         // Desktop switching on a spring, with a rubber band at the ends, as
         // Spaces move on macOS.
         this._guard('putting desktop switching on a spring', () => {
@@ -288,6 +312,7 @@ export default class GlobalMenuExtension extends Extension {
         // patched again when a Steam update writes its stylesheets afresh.
         this._guard('watching Steam\'s window buttons', () => {
             this._steamButtons = new SteamButtonsKeeper(this.metadata.uuid, this._settings);
+            this._steamButtons.start();
         });
 
         // GNOME can close a window from the keyboard but has nothing that
@@ -363,6 +388,9 @@ export default class GlobalMenuExtension extends Extension {
         // Rebuilding the panel drops buttons this extension added, so put the
         // System Menu and the app menus back.
         if (clockWasMoved !== this._clockMoved && this._menuManager) {
+            // The buttons may survive the rebuild in name only, so build the
+            // bar afresh rather than keep it.
+            this._menuManager.invalidate();
             if (this._logoButton) {
                 this._logoButton.destroy();
                 this._logoButton = null;
@@ -579,13 +607,13 @@ export default class GlobalMenuExtension extends Extension {
     // when it arrives — its extension keeps building it for a moment longer — so
     // waiting for idle lets it settle, and one pass covers a burst of them.
     _queueIndicatorPadding() {
-        if (this._indicatorPaddingId)
+        if (this._indicatorPaddingId || this._shellGone)
             return;
 
         this._indicatorPaddingId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._indicatorPaddingId = 0;
             // A queued signal can still arrive after disable() has run.
-            if (this._settings)
+            if (this._settings && !this._shellGone)
                 this._guard('padding a late indicator', () => this._applyIconPadding());
             return GLib.SOURCE_REMOVE;
         });
@@ -796,13 +824,13 @@ export default class GlobalMenuExtension extends Extension {
     // The system item is built asynchronously while the shell starts, and
     // nothing announces its arrival, so poll briefly rather than give up.
     _retryHidePowerButton() {
-        if (this._powerRetryId || this._powerRetries >= PANEL_RETRY_LIMIT)
+        if (this._powerRetryId || this._powerRetries >= PANEL_RETRY_LIMIT || this._shellGone)
             return;
 
         this._powerRetries++;
         this._powerRetryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
             this._powerRetryId = 0;
-            if (this._settings?.get_boolean('hide-power-button'))
+            if (!this._shellGone && this._settings?.get_boolean('hide-power-button'))
                 this._guard('hiding the power icon', () => this._hidePowerButton());
             return GLib.SOURCE_REMOVE;
         });
@@ -831,12 +859,13 @@ export default class GlobalMenuExtension extends Extension {
 
     // Re-apply the tweaks once the current batch of panel changes has settled.
     _queuePanelResync() {
-        if (this._resyncId)
+        if (this._resyncId || this._shellGone)
             return;
 
         this._resyncId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._resyncId = 0;
-            this._guard('re-applying panel tweaks', () => this._syncPanelTweaks());
+            if (!this._shellGone)
+                this._guard('re-applying panel tweaks', () => this._syncPanelTweaks());
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -936,12 +965,13 @@ export default class GlobalMenuExtension extends Extension {
     // actor tree during a signal can abort the shell. Our own rebuilds move it
     // too, and the check on idle finds it where it belongs and does nothing.
     _queueClockHold() {
-        if (this._clockHoldId)
+        if (this._clockHoldId || this._shellGone)
             return;
 
         this._clockHoldId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._clockHoldId = 0;
-            this._guard('keeping the clock on the right', () => this._holdClock());
+            if (!this._shellGone)
+                this._guard('keeping the clock on the right', () => this._holdClock());
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -1141,13 +1171,14 @@ export default class GlobalMenuExtension extends Extension {
 
     // Roughly ten seconds of waiting for the button to turn up.
     _retryHideOverviewButton() {
-        if (this._overviewRetryId || this._overviewRetries >= PANEL_RETRY_LIMIT)
+        if (this._overviewRetryId || this._overviewRetries >= PANEL_RETRY_LIMIT || this._shellGone)
             return;
 
         this._overviewRetries++;
         this._overviewRetryId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
             this._overviewRetryId = 0;
-            this._guard('hiding the Activities button', () => this._syncOverviewButton());
+            if (!this._shellGone)
+                this._guard('hiding the Activities button', () => this._syncOverviewButton());
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -1182,14 +1213,71 @@ export default class GlobalMenuExtension extends Extension {
     // used to rebuild the menu synchronously. Coalesce them onto an idle so
     // the work happens once per burst instead of once per signal.
     _queueMenuSync() {
-        if (this._menuSyncId)
+        if (this._menuSyncId || this._shellGone)
             return;
 
         this._menuSyncId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this._menuSyncId = 0;
-            this._guard('syncing menu visibility', () => this._syncMenuVisibility());
+            this._runMenuSync();
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    // A desktop switch moves focus as it starts, so the sync for it would
+    // otherwise build the new app's bar during the slide. Hold it, polling,
+    // until the switch is over or the limit is reached. The window in front is
+    // read when the sync finally runs, so a hold never shows a stale one. The
+    // limit counts from the first hold and is not extended by later signals.
+    _runMenuSync() {
+        if (this._shellGone)
+            return;
+
+        if (this._workspaceSwitching()) {
+            const now = GLib.get_monotonic_time();
+            if (!this._menuSyncDeadline)
+                this._menuSyncDeadline = now + MENU_SYNC_SWITCH_LIMIT_US;
+            if (now < this._menuSyncDeadline) {
+                this._menuSyncId = GLib.timeout_add(GLib.PRIORITY_DEFAULT,
+                    MENU_SYNC_SWITCH_POLL_MS, () => {
+                        this._menuSyncId = 0;
+                        this._runMenuSync();
+                        return GLib.SOURCE_REMOVE;
+                    });
+                return;
+            }
+        }
+
+        this._menuSyncDeadline = 0;
+        this._guard('syncing menu visibility', () => this._syncMenuVisibility());
+    }
+
+    // The window manager's switch animation holds its switch data from the
+    // moment a switch or swipe is prepared until it has landed. A shell
+    // without one simply never holds the sync.
+    _workspaceSwitching() {
+        try {
+            return !!Main.wm?._workspaceAnimation?._switchData;
+        } catch {
+            return false;
+        }
+    }
+
+    // See _enable(): the shell is going away under us. Only bookkeeping here —
+    // the actors are mid-destroy.
+    _onShellGone() {
+        this._shellGone = true;
+        this._dropQueuedSources();
+    }
+
+    _dropQueuedSources() {
+        for (const source of ['_resyncId', '_indicatorPaddingId', '_menuSyncId', '_powerRetryId', '_overviewRetryId',
+            '_clockHoldId']) {
+            if (this[source]) {
+                GLib.source_remove(this[source]);
+                this[source] = 0;
+            }
+        }
+        this._menuSyncDeadline = 0;
     }
 
     _syncMenuVisibility() {
@@ -1257,13 +1345,11 @@ export default class GlobalMenuExtension extends Extension {
             this._sessionModeId = 0;
         }
 
-        for (const source of ['_resyncId', '_indicatorPaddingId', '_menuSyncId', '_powerRetryId', '_overviewRetryId',
-            '_clockHoldId']) {
-            if (this[source]) {
-                GLib.source_remove(this[source]);
-                this[source] = 0;
-            }
-        }
+        this._dropQueuedSources();
+        this._guard('unwatching the shell', () => {
+            Main.layoutManager.uiGroup?.disconnectObject(this);
+            Main.panel?.disconnectObject(this);
+        });
 
         if (this._quitBound) {
             Main.wm.removeKeybinding('quit-app');
@@ -1305,6 +1391,12 @@ export default class GlobalMenuExtension extends Extension {
 
         this._guard('taking desktop switching off its spring', () => this._spacesSpring?.destroy());
         this._spacesSpring = null;
+
+        this._guard('giving the swipes back their direction', () => this._gestureDirection?.destroy());
+        this._gestureDirection = null;
+
+        this._guard('removing the overview swipe guard', () => this._overviewSwipeGuard?.destroy());
+        this._overviewSwipeGuard = null;
 
         // Takes away a thumbnail still showing, and the notification it held back.
         this._guard('removing the screenshot thumbnail', () => this._screenshotThumbnail?.destroy());

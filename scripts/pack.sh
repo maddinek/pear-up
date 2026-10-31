@@ -39,6 +39,8 @@ EXTRA_SOURCES=(
     shellTweaks.js
     smoothBrightness.js
     spacesSpring.js
+    gestureDirection.js
+    overviewSwipeGuard.js
     screenshotThumbnail.js
     windowAnimations.js
     steamButtons.js

@@ -73,6 +73,24 @@ const MENU_WINDOW_TYPES = new Set([
     Meta.WindowType.MODAL_DIALOG,
 ]);
 
+// Only these change what the menu bar contains. Anything else — an icon, a
+// command string, a System Menu item — is handled where it is used, so the bar
+// is not torn down and rebuilt for it. The extension resyncs the bar when one
+// changes; the manager counts the changes, so a bar built before one is never
+// mistaken for current.
+export const MENU_CONTENT_KEYS = [
+    'show-indicator',
+    'desktop-app-name',
+    'menu-app-enabled',
+    'menu-file-enabled',
+    'menu-edit-enabled',
+    'menu-view-enabled',
+    'menu-go-enabled',
+    'menu-window-enabled',
+    'menu-help-enabled',
+    'custom-menus',
+];
+
 // Chosen from the context menu opened by Shift+F10 above. This assumes an
 // English menu, so it will miss in other languages.
 const OPEN_WITH_MNEMONIC = 'h';
@@ -96,7 +114,10 @@ const TopLevelMenuButton = GObject.registerClass(
     _init(label, children, appInstance = null, isAppMenu = false, refreshChildren = null) {
       super._init(0.5, label);
       this._appInstance = appInstance;
+      this._children = children;
       this._refreshChildren = refreshChildren;
+      this._filled = false;
+      this._destroyed = false;
       this._timeoutIds = [];
       this._pinIdle = 0;
       this._pinning = false;
@@ -123,7 +144,11 @@ const TopLevelMenuButton = GObject.registerClass(
       titleLabel.set_style('max-width: none;');
       this.x_expand = false;
 
-      this._buildSubMenu(children, this.menu);
+      // The items are not built here. The bar is built for every app that
+      // comes to the front, and most of its menus are never opened; seven
+      // menus of St widgets made on the way to a window's open animation is
+      // the cost the bar used to pay for nothing. They are made the first time
+      // their menu opens instead — see _fill().
 
       if (this.menu) {
           // macOS puts the dropdown's left edge under the title's left edge;
@@ -148,6 +173,14 @@ const TopLevelMenuButton = GObject.registerClass(
           const isInstant = animate =>
               animate === false || animate === none;
           const openAndPin = animate => {
+              // Opening an open menu is a no-op upstream; keep it one here, or
+              // the app menu would rebuild under the pointer.
+              if (this.menu.isOpen)
+                  return;
+              // Filled before the prototype runs: PopupMenu.open() returns
+              // early for an empty menu, so a menu that filled itself once
+              // open would never open at all.
+              this._fill();
               openProto.call(this.menu, none);
               this._queuePin();
               if (isInstant(animate) || !this.menu.actor)
@@ -176,17 +209,8 @@ const TopLevelMenuButton = GObject.registerClass(
           this.menu.actor.connectObject(
               'notify::allocation', () => this._queuePin(), this.menu);
           this.menu.connectObject('open-state-changed', (menu, isOpen) => {
-              if (!isOpen)
-                  return;
-              // The menu bar is rebuilt when the focused app changes, so items
-              // derived from window state — the list of open windows and their
-              // titles — are otherwise a snapshot from whenever that happened.
-              // Titles change constantly, so refresh them on the way open.
-              if (this._refreshChildren) {
-                  menu.removeAll();
-                  this._buildSubMenu(this._refreshChildren(), menu);
-              }
-              this._queuePin();
+              if (isOpen)
+                  this._queuePin();
           }, this);
       }
 
@@ -195,6 +219,7 @@ const TopLevelMenuButton = GObject.registerClass(
       // the shell shuts down, and that path never calls the JS method. A timer
       // outliving the button would type into whatever has focus by then.
       this.connect('destroy', () => {
+          this._destroyed = true;
           if (this._pinIdle) {
               GLib.source_remove(this._pinIdle);
               this._pinIdle = 0;
@@ -204,6 +229,34 @@ const TopLevelMenuButton = GObject.registerClass(
           this._timeoutIds = [];
           this._virtualDevice = null;
       });
+    }
+
+    // The menu bar is kept while the same app stays in front, so items derived
+    // from window state — the list of open windows and their titles — would
+    // otherwise be a snapshot from whenever the bar was built. Titles change
+    // constantly, so a menu with a refresh is rebuilt on every open; the rest
+    // depend only on what the bar is keyed on and are built once.
+    _fill() {
+        if (!this.menu)
+            return;
+        if (this._refreshChildren) {
+            this.menu.removeAll();
+            this._buildSubMenu(this._refreshChildren(), this.menu);
+            return;
+        }
+        if (this._filled)
+            return;
+        this._filled = true;
+        this._buildSubMenu(this._children ?? [], this.menu);
+        this._children = null;
+    }
+
+    // A bar kept for the next window of the same app speaks for that window's
+    // app object from now on: Quit, New Window and the window list act on it.
+    setApp(appInstance, refreshChildren) {
+        this._appInstance = appInstance;
+        if (this._refreshChildren && refreshChildren)
+            this._refreshChildren = refreshChildren;
     }
 
     _queuePin() {
@@ -597,6 +650,10 @@ export class MenuManager {
         this.uuid = uuid;
         this._settings = settings;
         this._buttons = [];
+        // What the bar on the panel was built for, and a count of the menu
+        // settings changes seen; see _barKey().
+        this._key = null;
+        this._serial = 0;
         // Shell chrome only — not the file manager. A visible Nautilus
         // window should still get File/Edit/View like any other app.
         this._blacklist = ['gjs', 'org.gnome.gjs', 'gnome-shell', 'mutter'];
@@ -608,6 +665,8 @@ export class MenuManager {
         this._barChromeIds = [
             settings.connect('changed::menu-bar-font-size', () => this._applyBarChrome()),
             settings.connect('changed::menu-bar-padding', () => this._applyBarChrome()),
+            ...MENU_CONTENT_KEYS.map(key =>
+                settings.connect(`changed::${key}`, () => this._serial++)),
         ];
     }
 
@@ -676,6 +735,19 @@ export class MenuManager {
 
         let isFiles = isFileManager(desktopId, wmClass);
 
+        const appMenuChildren = () =>
+            this._appMenuChildren(detectedApp, appName, desktopId);
+
+        // Focus moves between windows of one app all the time — and lands on
+        // a window as its open animation starts, or as a desktop switch ends.
+        // The bar for that is the bar already there.
+        const key = this._barKey(isAppFocused, desktopId, appName, isFiles);
+        if (this._canReuse(key)) {
+            for (const btn of this._buttons)
+                btn.setApp(detectedApp, appMenuChildren);
+            return false;
+        }
+
         // Nothing in front: keep the System Menu (pear) and any custom
         // menus, but do not pretend Nautilus/Finder is the focused app.
         if (!isAppFocused) {
@@ -686,17 +758,16 @@ export class MenuManager {
                 this._buttons.push(btn);
             });
             this._applyBarChrome();
-            return;
+            this._key = key;
+            return true;
         }
-
-        const appMenuChildren = () =>
-            this._appMenuChildren(detectedApp, appName, desktopId);
-        let firstMenuChildren = appMenuChildren();
 
         let menuData = [];
 
+        // The app menu's items come from live window state, so they are made
+        // as it opens rather than here.
         if (this._settings.get_boolean('menu-app-enabled')) {
-            menuData.push({ type: "submenu", label: appName, children: firstMenuChildren });
+            menuData.push({ type: "submenu", label: appName, children: null });
         }
 
         if (this._settings.get_boolean('menu-file-enabled'))
@@ -725,6 +796,40 @@ export class MenuManager {
             this._buttons.push(btn);
         });
         this._applyBarChrome();
+        // Published last: a build that threw part-way leaves no key, so the
+        // next sync builds again rather than trusting half a bar.
+        this._key = key;
+        return true;
+    }
+
+    // Everything the bar's contents follow: which app, whether it is the file
+    // manager (its own File and Go menus), the name the app menu carries, and
+    // the menu settings, through the count of their changes.
+    _barKey(isAppFocused, desktopId, appName, isFiles) {
+        return JSON.stringify([isAppFocused, desktopId, appName, isFiles, this._serial]);
+    }
+
+    // The bar on the panel can be kept only if it is still the one built for
+    // this key and still where it was put. A panel rebuild, another extension
+    // destroying a role or slotting an indicator in among ours, and a new
+    // System Menu button all leave the key unchanged, so check the buttons as
+    // well: each alive, still holding its role, and in its slot after the pear.
+    _canReuse(key) {
+        if (this._key === null || key !== this._key)
+            return false;
+
+        const box = Main.panel._leftBox;
+        const children = box?.get_children() ?? [];
+        return this._buttons.every((btn, index) =>
+            !btn._destroyed &&
+            Main.panel.statusArea[`${this.uuid}-${index}`] === btn &&
+            btn.container?.get_parent() === box &&
+            children.indexOf(btn.container) === this._slotFor(index, children));
+    }
+
+    // The next sync builds the bar afresh, whatever it finds.
+    invalidate() {
+        this._key = null;
     }
 
     // Type size and title spacing are settings. Applied as inline style
@@ -753,13 +858,13 @@ export class MenuManager {
     // slot, and then every menu inserted at a fixed index pushes our button one
     // place further right. On Bazzite, whose distro logo menu does exactly that,
     // the System Menu ended up ninth — behind the whole menu bar.
-    _slotFor(index) {
+    _slotFor(index, children = null) {
         const box = Main.panel._leftBox;
         const logo = Main.panel.statusArea[LOGO_ROLE]?.container;
         if (!box || !logo)
             return index;
 
-        const after = box.get_children().indexOf(logo) + 1;
+        const after = (children ?? box.get_children()).indexOf(logo) + 1;
         return (after > 0 ? after : 0) + index;
     }
 
@@ -857,6 +962,7 @@ export class MenuManager {
     }
 
     clear() {
+        this._key = null;
         // One button throwing must not strand the rest on the panel.
         this._buttons.forEach(btn => {
             try {

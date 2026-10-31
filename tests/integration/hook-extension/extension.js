@@ -20,6 +20,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as WindowManager from 'resource:///org/gnome/shell/ui/windowManager.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 import * as Screenshot from 'resource:///org/gnome/shell/ui/screenshot.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import * as WorkspaceSwitcherPopup from 'resource:///org/gnome/shell/ui/workspaceSwitcherPopup.js';
@@ -34,6 +35,24 @@ const IFACE = `
     </method>
     <method name="GetMenuTree">
       <arg type="s" direction="out" name="tree"/>
+    </method>
+    <method name="GetBarIdentity">
+      <arg type="s" direction="out" name="bar"/>
+    </method>
+    <method name="MeasureMenuSync">
+      <arg type="s" direction="in" name="wmClasses"/>
+      <arg type="i" direction="in" name="rounds"/>
+      <arg type="s" direction="out" name="result"/>
+    </method>
+    <method name="MeasureFirstOpen">
+      <arg type="s" direction="out" name="result"/>
+    </method>
+    <method name="WatchBarBuilds">
+      <arg type="b" direction="in" name="on"/>
+      <arg type="s" direction="out" name="builds"/>
+    </method>
+    <method name="ArmShutdownProbe">
+      <arg type="b" direction="out" name="armed"/>
     </method>
     <method name="FocusFirstWindow">
       <arg type="b" direction="out" name="focused"/>
@@ -147,6 +166,11 @@ const IFACE = `
       <arg type="s" direction="in" name="wmClass"/>
       <arg type="i" direction="out" name="closed"/>
     </method>
+    <method name="SetWindowsState">
+      <arg type="s" direction="in" name="wmClass"/>
+      <arg type="s" direction="in" name="state"/>
+      <arg type="i" direction="out" name="changed"/>
+    </method>
     <method name="CountWindows">
       <arg type="s" direction="in" name="wmClass"/>
       <arg type="i" direction="out" name="count"/>
@@ -191,6 +215,11 @@ const IFACE = `
     <method name="SaveStage">
       <arg type="s" direction="in" name="path"/>
       <arg type="b" direction="out" name="saved"/>
+    </method>
+    <method name="CountFrames">
+      <arg type="u" direction="in" name="ms"/>
+      <arg type="b" direction="in" name="ticking"/>
+      <arg type="u" direction="out" name="frames"/>
     </method>
     <method name="MoveClock">
       <arg type="s" direction="in" name="box"/>
@@ -259,6 +288,44 @@ const IFACE = `
     </method>
     <method name="SampleSwitch">
       <arg type="s" direction="out" name="samples"/>
+    </method>
+    <method name="RecordGestures">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="GetGestureState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="FeedSwipe">
+      <arg type="s" direction="in" name="target"/>
+      <arg type="d" direction="in" name="dx"/>
+      <arg type="d" direction="in" name="dy"/>
+      <arg type="i" direction="in" name="steps"/>
+      <arg type="s" direction="out" name="result"/>
+    </method>
+    <method name="FeedSwipeThen">
+      <arg type="s" direction="in" name="target"/>
+      <arg type="d" direction="in" name="dx"/>
+      <arg type="d" direction="in" name="dy"/>
+      <arg type="i" direction="in" name="steps"/>
+      <arg type="s" direction="in" name="how"/>
+      <arg type="s" direction="out" name="result"/>
+    </method>
+    <method name="ClaimSwitchKey">
+      <arg type="s" direction="in" name="name"/>
+      <arg type="b" direction="in" name="claim"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="WrapSwitchTracker">
+      <arg type="b" direction="in" name="wrap"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="WatchSwitchTransition">
+      <arg type="b" direction="in" name="fresh"/>
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="GetOverviewSwipeState">
+      <arg type="s" direction="in" name="uuid"/>
+      <arg type="s" direction="out" name="state"/>
     </method>
     <method name="SwipeTouchpad">
       <arg type="s" direction="in" name="phase"/>
@@ -340,6 +407,48 @@ function describeItem(item, withChildren = true) {
             : null,
     };
 }
+
+// A number per panel button, given the first time the hook sees it, so the
+// suite can tell a bar that was kept from one built again with the same titles.
+const buttonSerials = new WeakMap();
+let nextButtonSerial = 1;
+function serialOf(button) {
+    if (!button)
+        return null;
+    if (!buttonSerials.has(button))
+        buttonSerials.set(button, nextButtonSerial++);
+    return buttonSerials.get(button);
+}
+
+// What a menu holds is what it shows when it opens: Pear Up makes a menu's
+// items the first time it opens, and the app menu again on every open. So the
+// hook opens a closed menu, without animation, reads it and closes it again.
+function itemsWhenOpen(menu) {
+    if (!menu)
+        return [];
+    if (menu.isOpen)
+        return menu._getMenuItems?.() ?? [];
+    menu.open(BoxPointer.PopupAnimation.NONE);
+    const items = menu._getMenuItems?.() ?? [];
+    menu.close(BoxPointer.PopupAnimation.NONE);
+    return items;
+}
+
+function median(values) {
+    if (values.length === 0)
+        return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+}
+
+function percentile(values, p) {
+    if (values.length === 0)
+        return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)];
+}
+
+const round2 = v => (v === null ? null : Math.round(v * 100) / 100);
 
 // Pear Up names its panel buttons after its own UUID, plus the System Menu.
 const PEAR_UP_UUID = 'pear-up@maddinek.github.io';
@@ -543,6 +652,24 @@ function screenshotNotifications() {
         .flatMap(source => [...(source.notifications ?? [])]);
 }
 
+// The shell's swipe trackers, by what they move, and the touchpad settings each
+// one's gesture held when first recorded: the shell's own Gio.Settings.
+const shellTouchpadSettings = new WeakMap();
+
+function swipeTrackers() {
+    const controls = Main.overview._overview?.controls;
+    const appDisplay = controls?._appDisplay;
+    const found = [
+        ['desktops', Main.wm._workspaceAnimation?._swipeTracker],
+        ['overview', Main.overview._swipeTracker],
+        ['overview desktops', controls?._workspacesDisplay?._swipeTracker],
+        ['app grid', appDisplay?._swipeTracker],
+    ];
+    for (const icon of appDisplay?._folderIcons ?? [])
+        found.push(['folder', icon?.view?._swipeTracker]);
+    return found.filter(([, tracker]) => tracker?._touchpadGesture);
+}
+
 export default class TestHookExtension extends Extension {
     enable() {
         watchStartup();
@@ -551,11 +678,17 @@ export default class TestHookExtension extends Extension {
     }
 
     disable() {
+        this._measurement?.end({ error: 'the hook was disabled' });
+        this._disarmShutdownProbe();
+        this.WatchBarBuilds(false);
         this._stopWatchingAnimations();
         this.StandInLikeMagicLamp(false);
         this.LogoutCalls();
         this.ReleaseLeftEdge();
         this._stopBannerTrace();
+        for (const stop of this._frameCounts ?? [])
+            stop();
+        this._frameCounts = null;
         this._pointer = null;
         this._keyboard = null;
         this._export?.unexport();
@@ -1100,6 +1233,29 @@ export default class TestHookExtension extends Extension {
         return windows.length;
     }
 
+    // Minimizes, unminimizes, maximizes or unmaximizes the windows of a class,
+    // which the shell animates with ease()s of their own.
+    SetWindowsState(wmClass, state) {
+        const windows = global.display.list_all_windows()
+            .filter(window => window.get_wm_class() === wmClass);
+        for (const window of windows) {
+            if (state === 'minimize') {
+                window.minimize();
+            } else if (state === 'unminimize') {
+                window.unminimize();
+            } else {
+                // mutter 49 dropped the flags these took.
+                const method = state === 'maximize' ? 'maximize' : 'unmaximize';
+                try {
+                    window[method](Meta.MaximizeFlags.BOTH);
+                } catch {
+                    window[method]();
+                }
+            }
+        }
+        return windows.length;
+    }
+
     CountWindows(wmClass) {
         return global.get_window_actors()
             .filter(actor => actor.meta_window?.get_wm_class() === wmClass).length;
@@ -1336,6 +1492,38 @@ export default class TestHookExtension extends Extension {
         return true;
     }
 
+    // How many frames the shell's frame clocks ran over `ms` milliseconds: the
+    // stage's before-update, which every frame clock dispatch emits whether or
+    // not anything is then redrawn, so a timeline left running with nothing
+    // to show is counted too. With `ticking` a repeating timeline of the
+    // hook's own runs meanwhile, which shows what a busy clock counts here.
+    CountFramesAsync([ms, ticking], invocation) {
+        let frames = 0;
+        const id = global.stage.connect('before-update', () => frames++);
+        let timeline = null;
+        if (ticking) {
+            timeline = new Clutter.Timeline({ actor: global.stage, duration: 1000, repeat_count: -1 });
+            timeline.start();
+        }
+        this._frameCounts ??= new Set();
+        let timeoutId = 0;
+        const stop = () => {
+            this._frameCounts?.delete(stop);
+            if (timeoutId)
+                GLib.source_remove(timeoutId);
+            timeoutId = 0;
+            global.stage.disconnect(id);
+            timeline?.stop();
+            invocation.return_value(new GLib.Variant('(u)', [frames]));
+        };
+        timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+            timeoutId = 0;
+            stop();
+            return GLib.SOURCE_REMOVE;
+        });
+        this._frameCounts.add(stop);
+    }
+
     _backgroundAlpha(actor) {
         try {
             return actor.get_theme_node().get_background_color().alpha;
@@ -1390,8 +1578,20 @@ export default class TestHookExtension extends Extension {
                     };
                 });
                 const next = children[children.indexOf(dock) + 1];
+                // Blur my Shell's dock blur, beside the dash; its background
+                // is clipped to where the blur is drawn.
+                const blur = dash.get_parent()?.get_children()
+                    .find(child => child.name === 'bms-dash-backgroundgroup');
+                const blurred = blur?.get_first_child();
                 return {
                     position: dock._position,
+                    slideX: dock._slider?.slideX ?? null,
+                    blur: blur ? {
+                        visible: blur.visible,
+                        box: stageBox(blur),
+                        clip: blurred?.has_clip ? blurred.get_clip() : null,
+                        clipOrigin: blurred ? [...blurred.get_transformed_position()] : null,
+                    } : null,
                     box: stageBox(dock),
                     background: dash._background ? stageBox(dash._background) : null,
                     backgroundOpacity: dash._background?.opacity ?? null,
@@ -1779,7 +1979,8 @@ export default class TestHookExtension extends Extension {
     }
 
     // Pauses the switch the shell is animating and reads its curve, by
-    // setting its timeline to each 20 ms in turn, then lets it finish.
+    // setting its timeline to each 20 ms in turn, then lets it finish; and how
+    // many times the group's progress was set for each of those frames.
     SampleSwitch() {
         const group = Main.wm._workspaceAnimation?._switchData?.monitors?.[0];
         const transition = group?.get_transition('progress');
@@ -1788,18 +1989,218 @@ export default class TestHookExtension extends Extension {
         transition.pause();
         const duration = transition.get_duration();
         const samples = [];
+        const writes = [];
+        let written = 0;
+        const notifyId = group.connect('notify::progress', () => written++);
         const seek = ms => {
             transition.advance(ms);
+            written = 0;
             transition.emit('new-frame', ms);
+            writes.push(written);
         };
-        for (let ms = 0; ms <= duration; ms += 20) {
-            seek(ms);
-            samples.push([ms, group.progress]);
+        try {
+            for (let ms = 0; ms <= duration; ms += 20) {
+                seek(ms);
+                samples.push([ms, group.progress]);
+            }
+            seek(duration);
+            samples.push([duration, group.progress]);
+        } finally {
+            group.disconnect(notifyId);
         }
-        seek(duration);
-        samples.push([duration, group.progress]);
         transition.start();
-        return JSON.stringify({ duration, samples });
+        return JSON.stringify({ duration, samples, writes });
+    }
+
+    // Notes each swipe gesture's touchpad settings as the shell made them; only
+    // called while Pear Up leaves them alone.
+    RecordGestures() {
+        for (const [, tracker] of swipeTrackers()) {
+            const gesture = tracker._touchpadGesture;
+            if (!shellTouchpadSettings.has(gesture))
+                shellTouchpadSettings.set(gesture, gesture._touchpadSettings);
+        }
+        return this.GetGestureState();
+    }
+
+    // Whether each swipe gesture still has the shell's own settings, and what
+    // it reads for Natural Scrolling through them, against the setting itself.
+    GetGestureState() {
+        const touchpad = new Gio.Settings({ schema_id: 'org.gnome.desktop.peripherals.touchpad' });
+        return JSON.stringify({
+            natural: touchpad.get_boolean('natural-scroll'),
+            gestures: swipeTrackers().map(([name, tracker]) => {
+                const gesture = tracker._touchpadGesture;
+                const shells = shellTouchpadSettings.get(gesture);
+                return {
+                    name,
+                    recorded: !!shells,
+                    shells: shells !== undefined && gesture._touchpadSettings === shells,
+                    reads: gesture._touchpadSettings.get_boolean('natural-scroll'),
+                };
+            }),
+        });
+    }
+
+    // A three-finger swipe through the gesture's own event handler, as the
+    // touchpad delivers it: a begin with no motion, `steps` updates of (dx, dy)
+    // 50 ms apart — slow enough that letting go settles back rather than flings
+    // — and an end. What the gesture passed on to its tracker, and the
+    // progress the tracker made of it.
+    FeedSwipe(target, dx, dy, steps) {
+        return this.FeedSwipeThen(target, dx, dy, steps, 'end');
+    }
+
+    // FeedSwipe, ended as `how` says: 'end', the fingers lifting; 'interrupt',
+    // the tracker turned off and on again before they lift, as the shell does
+    // when its mode changes (SwipeTracker._interrupt emits the end itself);
+    // 'cancel', the tracker's cancelled-gesture path (a touch swipe's, which
+    // reaches _endGesture with the swipe cancelled), before they lift. A lift
+    // after either finds the swipe already over. 'noupdate': begun and ended
+    // with no update at all, which GNOME 48 throws on too.
+    FeedSwipeThen(target, dx, dy, steps, how) {
+        const tracker = swipeTrackers().find(([name]) => name === target)?.[1];
+        if (!tracker)
+            return JSON.stringify(null);
+        const gesture = tracker._touchpadGesture;
+        const deltas = [];
+        const progress = [];
+        const gestureId = gesture.connect('update', (_g, _time, delta) => deltas.push(delta));
+        const trackerId = tracker.connect('update', (_t, value) => progress.push(value));
+        const monitor = Main.layoutManager.primaryMonitor;
+        const [x, y] = [monitor.x + monitor.width / 2, monitor.y + monitor.height / 2];
+        let time = global.get_current_time();
+        const event = (phase, mx, my) => ({
+            type: () => Clutter.EventType.TOUCHPAD_SWIPE,
+            get_gesture_phase: () => phase,
+            get_touchpad_gesture_finger_count: () => 3,
+            get_time: () => time,
+            get_coords: () => [x, y],
+            get_gesture_motion_delta_unaccelerated: () => [mx, my],
+            get_gesture_motion_delta: () => [mx, my],
+        });
+        try {
+            if (how === 'noupdate') {
+                // Begun and ended with no update between, through the
+                // gesture's own signals: its event handler always sends an
+                // update with the begin.
+                gesture.emit('begin', time, x, y);
+                gesture.emit('end', time + 50, tracker.distance || 300);
+                return JSON.stringify({ deltas, progress: [0] });
+            }
+            gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.BEGIN, 0, 0));
+            for (let i = 0; i < steps; i++) {
+                time += 50;
+                gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.UPDATE, dx, dy));
+            }
+            if (how === 'interrupt') {
+                tracker.enabled = false;
+                tracker.enabled = true;
+            } else if (how === 'cancel') {
+                // GNOME 48 calls it _cancelTouchGesture and wants the time.
+                if (typeof tracker._cancelPanGesture === 'function')
+                    tracker._cancelPanGesture();
+                else if (typeof tracker._cancelTouchGesture === 'function')
+                    tracker._cancelTouchGesture(null, time, tracker.distance);
+                else
+                    return JSON.stringify({ deltas, progress, unsupported: true });
+            }
+            time += 50;
+            gesture._handleEvent(global.stage, event(Clutter.TouchpadGesturePhase.END, 0, 0));
+        } finally {
+            gesture.disconnect(gestureId);
+            tracker.disconnect(trackerId);
+        }
+        return JSON.stringify({ deltas, progress });
+    }
+
+    // What a swipe that ended while the overview was hidden may have left
+    // behind: the overview's shown state, its controls' gesture, the desktops'
+    // views made for it, the tracker's own state, and Pear Up's guard on it.
+    GetOverviewSwipeState(uuid) {
+        const tracker = Main.overview._swipeTracker;
+        const controls = Main.overview._overview?.controls;
+        const display = controls?._workspacesDisplay;
+        const guard = Main.extensionManager.lookup(uuid)?.stateObj?._overviewSwipeGuard;
+        return JSON.stringify({
+            shownState: Main.overview._shownState,
+            visible: Main.overview.visible,
+            gestureInProgress: !!controls?._stateAdjustment?.gestureInProgress,
+            controlsState: controls?._stateAdjustment?.value ?? null,
+            displayVisible: !!display?.visible,
+            views: display?._workspacesViews?.length ?? null,
+            trackerState: tracker?._state ?? null,
+            trackerProgress: tracker?._progress ?? null,
+            emitOwn: !!tracker && Object.hasOwn(tracker, 'emit'),
+            // GNOME 48.3 and 49 on: updates at progress 0 do not begin to
+            // show the overview (gnome-shell fb30a942), which is the bug.
+            ignoresZeroProgress: /progress\s*===\s*0/.test(Main.overview._gestureUpdate?.toString() ?? ''),
+            guard: guard?.state ?? null,
+        });
+    }
+
+    // The desktops' progress transition of the switch now running, kept (with
+    // `fresh`) to be asked about again after it has stopped: how far along, its
+    // length and curve, and whether anything is still connected to its frames.
+    WatchSwitchTransition(fresh) {
+        if (fresh)
+            this._watchedTransition = Main.wm._workspaceAnimation?._switchData?.monitors?.[0]
+                ?.get_transition('progress') ?? null;
+        const transition = this._watchedTransition;
+        if (!transition)
+            return JSON.stringify(null);
+        const frameSignal = GObject.signal_lookup('new-frame', Clutter.Timeline.$gtype);
+        return JSON.stringify({
+            playing: transition.is_playing(),
+            progress: transition.get_progress(),
+            duration: transition.get_duration(),
+            linear: transition.get_progress_mode() === Clutter.AnimationMode.LINEAR,
+            frameHandlers: GObject.signal_has_handler_pending(transition, frameSignal, 0, true),
+        });
+    }
+
+    // Another extension taking one of the switch keys, as GNOME's API lets it,
+    // and giving it back to the shell; how often its handler has run, and the
+    // action modes the shell holds for the key.
+    ClaimSwitchKey(name, claim) {
+        const wm = Main.wm;
+        const modes = Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW;
+        if (claim) {
+            this._claimedRuns = 0;
+            wm.setCustomKeybindingHandler(name, modes, () => this._claimedRuns++);
+        } else {
+            wm.setCustomKeybindingHandler(name, modes, wm._showWorkspaceSwitcher.bind(wm));
+        }
+        return JSON.stringify({ runs: this._claimedRuns ?? 0, modes: wm._allowedKeybindings?.[name] ?? null });
+    }
+
+    // Another extension wrapping the desktop switcher's tracker, as own
+    // properties over whatever is there, Pear Up's included; unwrapped, each
+    // gets back exactly what it covered.
+    WrapSwitchTracker(wrap) {
+        const tracker = Main.wm._workspaceAnimation?._swipeTracker;
+        if (!tracker)
+            return JSON.stringify(null);
+        if (wrap && !this._trackerWraps) {
+            this._trackerWraps = [];
+            for (const name of ['confirmSwipe', '_reset', '_updateGesture', '_endGesture']) {
+                const own = Object.getOwnPropertyDescriptor(tracker, name);
+                const beneath = own?.value;
+                tracker[name] = function (...args) {
+                    return (beneath ?? Object.getPrototypeOf(tracker)[name]).apply(this, args);
+                };
+                this._trackerWraps.push({ name, own, wrapper: tracker[name] });
+            }
+        } else if (!wrap && this._trackerWraps) {
+            for (const { name, own } of this._trackerWraps.reverse()) {
+                if (own)
+                    Object.defineProperty(tracker, name, own);
+                else
+                    delete tracker[name];
+            }
+            this._trackerWraps = null;
+        }
+        return this.GetSwitchState();
     }
 
     // A three-finger touchpad swipe, fed to the desktop switcher's tracker as
@@ -1936,7 +2337,10 @@ export default class TestHookExtension extends Extension {
     // reading them without opening one reports an empty menu.
     OpenSubMenu(label) {
         for (const role of this._pearUpRoles()) {
-            const items = Main.panel.statusArea[role]?.menu?._getMenuItems?.() ?? [];
+            const menu = Main.panel.statusArea[role]?.menu;
+            const items = role === LOGO_ROLE
+                ? menu?._getMenuItems?.() ?? []
+                : itemsWhenOpen(menu);
             const found = items.find(item => item.menu && labelOf(item) === label);
             if (!found)
                 continue;
@@ -1949,12 +2353,289 @@ export default class TestHookExtension extends Extension {
         return JSON.stringify(null);
     }
 
+    // The bar's buttons as they stand, without opening anything: which button
+    // object holds each role, and how many items its menu has been given so far.
+    GetBarIdentity() {
+        return JSON.stringify(this._pearUpRoles()
+            .filter(role => role.startsWith(PEAR_UP_UUID))
+            .map(role => {
+                const button = Main.panel.statusArea[role];
+                return {
+                    role,
+                    label: button?.label?.text ?? null,
+                    serial: serialOf(button),
+                    items: button?.menu?._getMenuItems?.().length ?? 0,
+                };
+            }));
+    }
+
+    _barSerials() {
+        return this._pearUpRoles()
+            .filter(role => role.startsWith(PEAR_UP_UUID))
+            .map(role => serialOf(Main.panel.statusArea[role]));
+    }
+
+    // Puts windows in front by turns and times each menu bar sync that follows,
+    // the way focus moves when someone clicks between windows. wmClasses is one
+    // class (two windows of it, the same app) or two separated by a comma (one
+    // window of each). The time is Pear Up's own sync, timed by wrapping it on
+    // the running extension for the length of the measurement: this is a
+    // measurement, so it reaches inside, and it reports null where it cannot.
+    // A bar counts as rebuilt when any of its buttons is a new object.
+    MeasureMenuSyncAsync([wmClasses, rounds], invocation) {
+        let replied = false;
+        const reply = result => {
+            if (replied)
+                return;
+            replied = true;
+            invocation.return_value(new GLib.Variant('(s)', [JSON.stringify(result)]));
+        };
+        if (this._measurement) {
+            reply({ error: 'a measurement is already running' });
+            return;
+        }
+        const classes = wmClasses.split(',').filter(Boolean);
+        const windowsOf = wmClass => global.get_window_actors()
+            .map(actor => actor.meta_window)
+            .filter(win => win?.get_wm_class() === wmClass &&
+                win.get_window_type() === Meta.WindowType.NORMAL);
+        const windows = classes.length === 1
+            ? windowsOf(classes[0]).slice(0, 2)
+            : classes.map(wmClass => windowsOf(wmClass)[0]).filter(Boolean);
+        if (windows.length < 2) {
+            reply({ error: `found ${windows.length} windows for ${wmClasses}` });
+            return;
+        }
+
+        const pearUp = Main.extensionManager.lookup(PEAR_UP_UUID)?.stateObj;
+        const original = pearUp?._syncMenuVisibility;
+        const durations = [];
+        const wrapper = function (...args) {
+            const start = GLib.get_monotonic_time();
+            try {
+                return original.apply(this, args);
+            } finally {
+                durations.push((GLib.get_monotonic_time() - start) / 1000);
+            }
+        };
+        const hadOwn = pearUp ? Object.hasOwn(pearUp, '_syncMenuVisibility') : false;
+        if (typeof original === 'function')
+            pearUp._syncMenuVisibility = wrapper;
+
+        // Ended once, whichever way: finished, failed, or the hook disabled
+        // (Pear Up's own disable re-enables the hook) — never leaving the
+        // wrapper or the timer behind.
+        const measurement = {
+            sourceId: 0,
+            end: result => {
+                if (measurement.sourceId) {
+                    GLib.source_remove(measurement.sourceId);
+                    measurement.sourceId = 0;
+                }
+                if (pearUp && pearUp._syncMenuVisibility === wrapper) {
+                    if (hadOwn)
+                        pearUp._syncMenuVisibility = original;
+                    else
+                        delete pearUp._syncMenuVisibility;
+                }
+                if (this._measurement === measurement)
+                    this._measurement = null;
+                reply(result);
+            },
+        };
+        this._measurement = measurement;
+
+        let step = 0;
+        let rebuilds = 0;
+        let previous = this._barSerials();
+        const labels = [];
+        const next = () => {
+            try {
+                const serials = this._barSerials();
+                if (step > 0) {
+                    if (serials.length !== previous.length ||
+                        serials.some((serial, i) => serial !== previous[i]))
+                        rebuilds++;
+                    labels.push(Main.panel.statusArea[`${PEAR_UP_UUID}-0`]?.label?.text ?? null);
+                } else {
+                    // The warm-up activation is not counted.
+                    durations.length = 0;
+                }
+                previous = serials;
+                if (step >= rounds) {
+                    measurement.sourceId = 0;
+                    measurement.end({
+                        rounds,
+                        syncs: durations.length,
+                        rebuilds,
+                        labels,
+                        medianMs: round2(median(durations)),
+                        p95Ms: round2(percentile(durations, 0.95)),
+                        maxMs: round2(durations.length ? Math.max(...durations) : null),
+                        timed: typeof original === 'function',
+                    });
+                    return GLib.SOURCE_REMOVE;
+                }
+                windows[step % 2].activate(global.get_current_time());
+                step++;
+                return GLib.SOURCE_CONTINUE;
+            } catch (e) {
+                measurement.sourceId = 0;
+                measurement.end({ error: `${e}` });
+                return GLib.SOURCE_REMOVE;
+            }
+        };
+        try {
+            windows[1].activate(global.get_current_time());
+        } catch (e) {
+            measurement.end({ error: `${e}` });
+            return;
+        }
+        // Long enough for the focus change to reach Pear Up's idle and the bar
+        // to settle; short of anything a person would notice.
+        measurement.sourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, next);
+    }
+
+    // How long each bar menu takes to open, the first time and the second.
+    // Lazily built menus move their cost from the focus change to the first
+    // open, so this is the other half of the measurement above.
+    MeasureFirstOpen() {
+        const result = {};
+        for (const role of this._pearUpRoles().filter(r => r.startsWith(PEAR_UP_UUID))) {
+            const button = Main.panel.statusArea[role];
+            const menu = button?.menu;
+            if (!menu || menu.isOpen)
+                continue;
+            const times = [];
+            for (let i = 0; i < 2; i++) {
+                const start = GLib.get_monotonic_time();
+                menu.open(BoxPointer.PopupAnimation.NONE);
+                times.push(round2((GLib.get_monotonic_time() - start) / 1000));
+                menu.close(BoxPointer.PopupAnimation.NONE);
+            }
+            result[button.label?.text ?? role] = { firstMs: times[0], secondMs: times[1] };
+        }
+        return JSON.stringify(result);
+    }
+
+    // Records every Pear Up button added to or taken off the left box, with
+    // whether a desktop switch was under way at that moment, and samples the
+    // switch meanwhile so the suite knows one was there to be avoided. Turning
+    // it off returns what was recorded.
+    WatchBarBuilds(on) {
+        const box = Main.panel._leftBox;
+        const watched = { records: this._barBuilds ?? [], sawSwitch: !!this._sawSwitch };
+        if (this._barBuildIds) {
+            for (const id of this._barBuildIds)
+                box.disconnect(id);
+            this._barBuildIds = null;
+        }
+        if (this._switchSampleId) {
+            GLib.source_remove(this._switchSampleId);
+            this._switchSampleId = 0;
+        }
+        this._barBuilds = null;
+        this._sawSwitch = false;
+        if (!on)
+            return JSON.stringify(watched);
+
+        const switching = () => !!Main.wm._workspaceAnimation?._switchData;
+        this._barBuilds = [];
+        // A button being destroyed has already given up its role by the time
+        // its container leaves the box, so removals are recognised by the
+        // containers seen holding a Pear Up role.
+        const ours = new Set(Object.keys(Main.panel.statusArea)
+            .filter(r => r.startsWith(PEAR_UP_UUID))
+            .map(r => Main.panel.statusArea[r]?.container));
+        const record = (kind, child) => {
+            const role = Object.keys(Main.panel.statusArea)
+                .find(r => Main.panel.statusArea[r]?.container === child);
+            if (kind === 'added' && role?.startsWith(PEAR_UP_UUID))
+                ours.add(child);
+            if (!ours.has(child))
+                return;
+            this._barBuilds.push({
+                kind,
+                role: role ?? null,
+                switching: switching(),
+                at: GLib.get_monotonic_time() / 1000,
+            });
+        };
+        const added = childAddedSignal(box);
+        const removed = added === 'child-added' ? 'child-removed' : 'actor-removed';
+        this._barBuildIds = [
+            box.connect(added, (_box, child) => record('added', child)),
+            box.connect(removed, (_box, child) => record('removed', child)),
+        ];
+        this._switchSampleId = GLib.timeout_add(GLib.PRIORITY_HIGH, 10, () => {
+            this._sawSwitch ||= switching();
+            return GLib.SOURCE_CONTINUE;
+        });
+        return JSON.stringify({ records: [], sawSwitch: false });
+    }
+
+    // At logout the shell destroys uiGroup and then runs a main loop of its own
+    // (main.js, while it saves the session history), so anything queued on an
+    // idle by then runs against disposed actors. Arms two moments of that for
+    // the shell the suite stops at the end, each making Pear Up want to queue
+    // its padding pass by putting an indicator in the right box:
+    //  - as the shell takes the window group out of uiGroup, just before it
+    //    destroys uiGroup: the pass is queued, and has to be dropped;
+    //  - as uiGroup is destroyed, after Pear Up's own handler (connected
+    //    first): the pass must not be queued at all.
+    // The log lines let run-tests.sh look only at what came after them.
+    ArmShutdownProbe() {
+        if (this._shutdownProbeIds)
+            return true;
+        const uiGroup = Main.layoutManager.uiGroup;
+        const addIndicator = (moment, role) => {
+            try {
+                const button = new PanelMenu.Button(0.5, `Test Shutdown Indicator ${role}`, true);
+                Main.panel.addToStatusArea(role, button, 0, 'right');
+                console.log(`[pear-up-test-hook] shutdown probe: indicator added ${moment}`);
+            } catch (e) {
+                console.log(`[pear-up-test-hook] shutdown probe: could not add an indicator ${moment}: ${e}`);
+            }
+        };
+        // Whether Pear Up has its padding pass queued. Reaching inside, as the
+        // measurement does: the callback guards against a dead shell too, so
+        // only this tells a pass dropped from one that merely did nothing.
+        const queued = () => {
+            const id = Main.extensionManager.lookup(PEAR_UP_UUID)?.stateObj?._indicatorPaddingId;
+            return id === undefined ? 'unknown' : `${!!id}`;
+        };
+        const removed = childAddedSignal(uiGroup) === 'child-added' ? 'child-removed' : 'actor-removed';
+        this._shutdownProbeIds = [
+            uiGroup.connect(removed, (_group, child) => {
+                if (child !== global.window_group)
+                    return;
+                console.log('[pear-up-test-hook] shutdown probe: the shell is going down');
+                addIndicator('before uiGroup is destroyed', 'pear-up-test-shutdown-before');
+                console.log(`[pear-up-test-hook] shutdown probe: padding queued before destroy=${queued()}`);
+            }),
+            uiGroup.connect('destroy', () => {
+                console.log(`[pear-up-test-hook] shutdown probe: padding queued at destroy=${queued()}`);
+                addIndicator('as uiGroup is destroyed', 'pear-up-test-shutdown-during');
+                console.log(`[pear-up-test-hook] shutdown probe: padding queued after destroy=${queued()}`);
+            }),
+        ];
+        return true;
+    }
+
+    _disarmShutdownProbe() {
+        for (const id of this._shutdownProbeIds ?? [])
+            Main.layoutManager.uiGroup.disconnect(id);
+        this._shutdownProbeIds = null;
+    }
+
     // The label on each panel button, and the items inside its menu. Enough to
     // assert that a menu offers what it should without simulating a pointer.
     GetMenuTree() {
         const menus = this._pearUpRoles().map(role => {
             const button = Main.panel.statusArea[role];
-            const items = button?.menu?._getMenuItems?.() ?? [];
+            const items = role === LOGO_ROLE
+                ? button?.menu?._getMenuItems?.() ?? []
+                : itemsWhenOpen(button?.menu);
             return {
                 role,
                 label: button?.label?.text ?? null,

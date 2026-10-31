@@ -138,7 +138,60 @@ dbus-run-session -- bash -c '
     python3 /src/tests/integration/assert.py "$UUID" "$ARTIFACTS"
     status=$?
 
+    # Ended the way a logout ends it, with Pear Up enabled again over the dock,
+    # to catch anything left queued against the torn-down shell.
+    echo
+    echo "  shutdown:"
+    python3 /src/tests/integration/shutdown_check.py "$UUID" $SHELL_PID "$ARTIFACTS/shell.log" \
+        || status=1
+
+    # Stopping the shell is its logout: the suite armed a probe that, as the
+    # shell destroys its UI, makes Pear Up want to queue work on an idle. The
+    # shell then runs a main loop of its own on the way out, so anything still
+    # queued would run against disposed actors and say so in the log.
     kill $SHELL_PID 2>/dev/null
     wait $SHELL_PID 2>/dev/null
+
+    echo
+    echo "  logout:"
+    probe="$(grep "shutdown probe" "$ARTIFACTS/shell.log")"
+    if ! grep -q "indicator added before uiGroup is destroyed" <<< "$probe" ||
+       ! grep -q "indicator added as uiGroup is destroyed" <<< "$probe"; then
+        echo "  FAIL the logout probe fired as the shell went down — ${probe:-it never fired}"
+        status=1
+    else
+        # Queued before the destroy, dropped by it, and not queued again after.
+        if grep -q "padding queued before destroy=true" <<< "$probe" &&
+           grep -q "padding queued at destroy=false" <<< "$probe" &&
+           grep -q "padding queued after destroy=false" <<< "$probe"; then
+            echo "  ok   work queued as the shell goes down is dropped, and none is queued after"
+        else
+            echo "  FAIL work queued as the shell goes down is dropped, and none is queued after — $(grep "padding queued" <<< "$probe" | sed "s/.*probe: //" | tr "\n" " ")"
+            status=1
+        fi
+        # The Pear Up files with frames in an "already disposed" stack after
+        # the probe. Any file listed in PENDING is reported, not failed; none is.
+        PENDING=" "
+        files=$(sed -n "/shutdown probe: the shell is going down/,\$p" "$ARTIFACTS/shell.log" \
+            | grep -A12 "already disposed" | grep -o "extensions/$UUID/[A-Za-z]*\.js:[0-9]*" \
+            | sed "s|.*/||" | sort | uniq -c | sed "s/^ *//" || true)
+        failing=""
+        pending=""
+        while read -r count place; do
+            [[ -z "$place" ]] && continue
+            if [[ "$PENDING" == *" ${place%%:*} "* ]]; then
+                pending+="$place ($count) "
+            else
+                failing+="$place ($count) "
+            fi
+        done <<< "$files"
+        if [[ -z "$failing" ]]; then
+            echo "  ok   nothing of Pear Up runs against the disposed shell at logout"
+        else
+            echo "  FAIL nothing of Pear Up runs against the disposed shell at logout — $failing"
+            status=1
+        fi
+        [[ -n "$pending" ]] && echo "  note: the dock still does, waiting on its own guard: $pending"
+    fi
     exit $status
 '

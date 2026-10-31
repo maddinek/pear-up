@@ -73,8 +73,11 @@
       "AppInfo",
       "DBus",
       "DBusCallFlags",
+      "Cancellable",
       "File",
       "FileCreateFlags",
+      "FileMonitorFlags",
+      "FileQueryInfoFlags",
       "Icon",
       "Settings",
       "SettingsSchemaSource",
@@ -166,7 +169,11 @@
     ],
     "Clutter.Timeline": [
       "start",
-      "stop"
+      "stop",
+      "get_progress"
+    ],
+    "Clutter.Transition": [
+      "set_to"
     ],
     "St.Widget": [
       "get_theme_node",
@@ -202,12 +209,21 @@
     ],
     "Gio.File": [
       "load_contents",
+      "load_contents_async",
       "replace_contents",
+      "replace_contents_async",
+      "query_info_async",
+      "monitor_file",
       "query_exists",
       "get_basename",
       "get_parent",
       "get_parse_name",
-      "get_uri"
+      "get_uri",
+      "enumerate_children_async"
+    ],
+    "Gio.FileEnumerator": [
+      "next_files_async",
+      "close_async"
     ]
   },
 
@@ -264,6 +280,8 @@
     "_shouldAnimateActor",
     "_mapWindow",
     "_destroyWindow",
+    "_mapping",
+    "_destroying",
     "is_attached_dialog",
     "addKeybinding",
     "removeKeybinding",
@@ -348,6 +366,16 @@
     "_finishWorkspaceSwitch",
     "_swipeTracker",
     "_touchpadGesture",
+    "_touchpadSettings",
+    "natural-scroll",
+    "_workspacesDisplay",
+    "_appDisplay",
+    "_folderIcons",
+    "view-loaded",
+    "_shownState",
+    "gestureInProgress",
+    "gestureEnd",
+    "_allowedKeybindings",
     "confirmSwipe",
     "_getBounds",
     "_snapPoints",

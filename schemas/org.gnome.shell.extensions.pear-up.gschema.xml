@@ -24,13 +24,13 @@
     <key name="displaced-keybindings" type="s">
       <default>"{}"</default>
       <summary>Keybindings displaced while a shortcut set is enabled</summary>
-      <description>JSON object mapping "schemaId:key" to the displaced GVariant, serialized so switching a set off can restore the user's own binding even after the preferences window has been closed and reopened.</description>
+      <description>JSON record per shortcut set ({"v": 2, "options": {id: {"added": [...], "keys": {"schemaId:key": {"before", "applied"}}}}}): the accelerators the set added and the bindings it stood down, as printed GVariants, so switching it off takes away only what it added and hands back only what still holds what it wrote, even after the preferences window has been closed and reopened. Notes in the older flat format are kept under "legacy" until their set claims them.</description>
     </key>
 
     <key name="displaced-settings" type="s">
       <default>"{}"</default>
       <summary>Desktop settings displaced while an Appearance or Windows switch is on</summary>
-      <description>JSON object mapping "schemaId:key" to the GVariant the key held before, serialized so switching the look off can give back the user's own fonts, accent and window behaviour even after the preferences window has been closed and reopened. null means the key was at its default and goes back to it.</description>
+      <description>JSON record per switch, in the same form as displaced-keybindings: for each key the switch wrote, the GVariant it held before and the one written, so switching the look off can give back the user's own fonts, accent and window behaviour, but only for keys that still hold what was written. A "before" of null means the key was at its default and goes back to it.</description>
     </key>
 
     <key name="show-logo-menu" type="b"><default>true</default><summary>Show the System Menu button</summary></key>
@@ -155,6 +155,11 @@
       <default>false</default>
       <summary>Switch desktops on a spring, with a rubber band at the ends</summary>
       <description>As Spaces move on macOS: a keyboard switch, and the slide after a three- or four-finger swipe, land softly in about 0.4 seconds; pulled past the first or last desktop they stretch and spring back, and the switch shortcut there gives a small bump. With dynamic workspaces the last desktop is the empty one GNOME keeps.</description>
+    </key>
+    <key name="macos-gesture-direction" type="b">
+      <default>false</default>
+      <summary>Swipe the desktops with the fingers, whatever the scrolling direction</summary>
+      <description>GNOME turns its three-finger swipes round when Natural Scrolling is off. macOS keeps them apart: a swipe to the left brings in the desktop on the right, a swipe up opens Mission Control (here the overview, and again the app grid), a swipe down goes back. Content scrolling keeps its own direction.</description>
     </key>
     <key name="always-show-workspace-thumbnails" type="b">
       <default>true</default>

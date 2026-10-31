@@ -125,6 +125,112 @@ export class MethodPatch {
     }
 }
 
+// Every wrapper InstancePatch has made, to what it knows of it: kept as long as
+// the wrapper is anywhere, so a later enable() knows its own, on top or put
+// back there by whatever wrapped it since.
+const instanceWrappers = new WeakMap();
+
+// MethodPatch for one object the shell keeps for its whole life (a swipe
+// tracker, the window manager): an own property over the class's method, on
+// that one instance, so other instances of the class keep the shell's.
+//
+// The same rules as MethodPatch. Off, the wrapper passes every call to what was
+// beneath it; it is taken out only while it is the one installed, and what was
+// there before goes back exactly (the class's method, or another extension's own
+// property on the same object, which this then sits on). Something that wrapped
+// it since keeps it in their chain, passing through, and turning it on again
+// puts a fresh one on top; once they give it back, it is used again. With
+// nothing of its own beneath, the class's method is looked up at each call, so
+// a patch to the class made later, as Blur my Shell makes to the desktop
+// switch's, is still called.
+//
+// The replacement is called as MethodPatch's is, (original, ...args) with the
+// object as `this`; enable() takes it each time, so a wrapper made by an
+// earlier enable() runs the current one and holds nothing of the old.
+export class InstancePatch {
+    constructor(object, name) {
+        this._object = object;
+        this._name = name;
+        this._installed = null;
+    }
+
+    // What was beneath this patch, to call past it; the object's own method
+    // while there is no patch.
+    get original() {
+        if (this._installed?.owner === this)
+            return this._installed.original;
+        const name = this._name;
+        return function (...args) {
+            return this[name](...args);
+        };
+    }
+
+    // False when there is no method of that name here, or it cannot be replaced.
+    enable(replacement) {
+        const object = this._object;
+        const name = this._name;
+        if (!object)
+            return false;
+
+        // One of ours already there is this patch's from now on: another
+        // patch that still has it loses it, and its disable() does nothing.
+        const own = Object.getOwnPropertyDescriptor(object, name);
+        const ours = typeof own?.value === 'function' ? instanceWrappers.get(own.value) : null;
+        if (ours && ours.object === object && ours.name === name) {
+            ours.state.impl = replacement;
+            ours.owner = this;
+            this._installed = ours;
+            return true;
+        }
+
+        if (typeof object[name] !== 'function')
+            return false;
+        if (own ? !('value' in own) || !own.configurable : !Object.isExtensible(object))
+            return false;
+
+        const beneath = own?.value;
+        const original = beneath ?? function (...args) {
+            return Object.getPrototypeOf(object)[name].apply(this, args);
+        };
+        const state = { impl: replacement };
+        const wrapper = function (...args) {
+            const impl = state.impl;
+            return impl ? impl.call(this, original, ...args) : original.apply(this, args);
+        };
+        Object.defineProperty(object, name, {
+            value: wrapper,
+            writable: true,
+            configurable: true,
+            enumerable: own?.enumerable ?? true,
+        });
+        this._installed = { object, name, wrapper, state, original, own, owner: this };
+        instanceWrappers.set(wrapper, this._installed);
+        return true;
+    }
+
+    // Whether it was on.
+    disable() {
+        const installed = this._installed;
+        if (!installed)
+            return false;
+        this._installed = null;
+        if (installed.owner !== this)
+            return false;
+
+        installed.owner = null;
+        installed.state.impl = null;
+        const object = this._object;
+        const name = this._name;
+        if (Object.getOwnPropertyDescriptor(object, name)?.value === installed.wrapper) {
+            if (installed.own)
+                Object.defineProperty(object, name, installed.own);
+            else
+                delete object[name];
+        }
+        return true;
+    }
+}
+
 // The shell makes the popup in its keybinding handler, hidden, and calls this to
 // show it. Destroying it there is what the shell itself does when a window
 // switcher opens over one, and its destroy signal is how the window manager

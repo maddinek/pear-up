@@ -48,7 +48,7 @@ function shellSetsBrightness() {
 }
 
 // Our own settings keys that remember what a switch on these pages displaced,
-// so switching it off can hand the user's values back (see _getDisplacedMap).
+// so switching it off can hand the user's values back (see _readDisplacedStore).
 const DISPLACED_KEYBINDINGS = 'displaced-keybindings';
 const DISPLACED_SETTINGS = 'displaced-settings';
 
@@ -145,6 +145,9 @@ const GLASS_TINTS = [
 const GLASS_TINT_OTHER = 'Set in Blur my Shell';
 const GLASS_BRIGHTNESS = 0.9;
 const GLASS_BRIGHTNESS_RANGE = { lower: 50, upper: 100 };
+// The Frosted Glass switch's record of what it replaced; the tint and the
+// brightness beside it update it as they move.
+const GLASS_SWITCH_ID = 'frosted-glass';
 
 // Smaller window buttons are CSS in the user's own gtk.css, one file per GTK
 // major version, because an app reads the one for the toolkit it was built
@@ -440,6 +443,10 @@ const DOCK_FUNCTION_KEY_CONFLICTS = [
     ['org.gnome.settings-daemon.plugins.media-keys', 'help', () => GLib.Variant.new_strv(['']),
         "GNOME's help shortcut gives up Cmd+F1"],
 ];
+
+// How long an extension's switch rests before the shell is asked: a few quick
+// flips become one call, or none (see _addExtensionSwitchRow).
+const EXTENSION_SWITCH_SETTLE_MS = 400;
 
 // Schemas that live inside another extension rather than the system set.
 const EXTENSION_SCHEMA_OWNERS = {
@@ -1026,6 +1033,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     _addMacOSTypeRow(group) {
         const family = this._macOSTypeFamily();
         return this._addDisplacingSwitchRow(group, {
+            id: 'macos-type',
             title: 'macOS-Like Type',
             subtitle: `${family ?? MACOS_TYPE_FAMILIES[0]} for the interface, documents and ` +
                 'window titles, with font hinting off, as on macOS',
@@ -1041,6 +1049,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // set, and the row is not shown.
     _addAccentRow(group) {
         return this._addDisplacingSwitchRow(group, {
+            id: 'blue-accent',
             title: 'Blue Accent, Like macOS',
             subtitle: 'The color of selections, switches and buttons in apps that follow GNOME’s accent',
             targets: [[INTERFACE_SCHEMA, 'accent-color', GLib.Variant.new_string('blue')]],
@@ -1070,6 +1079,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             description: 'A GNOME setting, applied at once. Switching it off puts back what it replaced',
         });
         const maximizeRow = this._addDisplacingSwitchRow(openingGroup, {
+            id: 'no-auto-maximize',
             title: 'Don’t Maximize New Windows',
             subtitle: 'GNOME maximizes a window that opens almost as large as the screen; macOS leaves it as it is',
             targets: [[MUTTER_SCHEMA, 'auto-maximize', GLib.Variant.new_boolean(false)]],
@@ -1473,6 +1483,15 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // on whenever the extension is, whoever switched it, follows them when they
     // change elsewhere, and is written only through the shell. A call the shell
     // does not carry out puts the switch back and says why.
+    //
+    // Neither helper has a setting of its own that switches its effect off —
+    // Magic Lamp's are the effect, its duration and tiles; Rounded Window
+    // Corners Reborn reads no global 'enabled' — so this is the only way. It is
+    // a costly one: the shell disables and enables again every extension
+    // loaded after the one switched off (extensionSystem.js, the "rebase"),
+    // rebuilding the dock and its blur. So flips are gathered: the shell is
+    // asked once the switch has rested a moment, one call at a time, and only
+    // for a state that differs from the one it already has.
     _addExtensionSwitchRow(group, { uuid, title, subtitle }) {
         const shell = this._settingsForSchema(SHELL_SCHEMA);
         if (!['enabled-extensions', 'disabled-extensions', 'disable-user-extensions']
@@ -1485,8 +1504,14 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         let problem = null;
         let busy = false;
-        let pending = 0;
         let gone = false;
+        // What the user asked for last and the shell has not been asked yet;
+        // whether a call is out; and the state the shell said yes to, until its
+        // keys say so too — they can come a moment after the reply.
+        let wanted = null;
+        let calling = false;
+        let confirmed = null;
+        let settleId = 0;
         // The subtitle and whether the switch can be used. Extensions switched
         // off as a whole are out of the switch's reach.
         const describe = () => {
@@ -1496,44 +1521,77 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 ? 'Extensions are switched off in GNOME’s Extensions app'
                 : problem ?? subtitle);
         };
-        // While a call is out the switch is the user's, not the keys': they
-        // change in two steps, and reading them between would flick it back.
+        // While a request is waiting or out the switch is the user's, not the
+        // keys': they change in two steps, and reading them between would
+        // flick it back.
         const refresh = () => {
-            if (busy || pending > 0 || gone)
+            if (confirmed !== null && this._extensionEnabled(uuid) === confirmed)
+                confirmed = null;
+            if (busy || wanted !== null || calling || gone)
                 return;
             busy = true;
-            row.set_active(this._extensionEnabled(uuid));
+            row.set_active(confirmed ?? this._extensionEnabled(uuid));
             describe();
             busy = false;
         };
         refresh();
 
-        row.connect('notify::active', () => {
-            if (busy)
+        // Asks the shell for the last flip, once the switch has rested and no
+        // call is out; a call that comes back while it rests leaves it to the
+        // rest's end.
+        const send = () => {
+            if (gone || calling || settleId || wanted === null)
                 return;
-            // Every flip is a request, also one made while another is out: they
-            // reach the shell in order, and the last one is what stands.
-            problem = null;
-            pending++;
-            this._setExtensionEnabled(uuid, row.active).then(reason => {
-                pending--;
-                problem = reason;
+            const asked = wanted;
+            wanted = null;
+            if (asked === (confirmed ?? this._extensionEnabled(uuid))) {
+                refresh();
+                return;
+            }
+            calling = true;
+            this._setExtensionEnabled(uuid, asked).then(reason => {
+                calling = false;
                 if (gone)
                     return;
-                // Done: the keys will say so in a moment, not yet — read at once,
-                // they still show the old state on 45 and 48, where the reply
-                // is ahead of dconf's notice. Refused: they say otherwise now.
-                if (reason === null)
-                    describe();
+                problem = reason;
+                if (reason !== null) {
+                    // Refused: the keys say what is so. Nothing more is sent
+                    // for flips made meanwhile; the switch goes back.
+                    wanted = null;
+                    confirmed = null;
+                    refresh();
+                    return;
+                }
+                confirmed = asked;
+                if (wanted !== null)
+                    send();
                 else
                     refresh();
             });
+        };
+
+        row.connect('notify::active', () => {
+            if (busy)
+                return;
+            problem = null;
+            wanted = row.active;
+            if (settleId)
+                GLib.source_remove(settleId);
+            settleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT,
+                this._extensionSwitchSettleMs ?? EXTENSION_SWITCH_SETTLE_MS, () => {
+                    settleId = 0;
+                    send();
+                    return GLib.SOURCE_REMOVE;
+                });
         });
 
         const watched = ['enabled-extensions', 'disabled-extensions', 'disable-user-extensions']
             .map(key => shell.connect(`changed::${key}`, refresh));
         row.connect('destroy', () => {
             gone = true;
+            if (settleId)
+                GLib.source_remove(settleId);
+            settleId = 0;
             for (const id of watched)
                 shell.disconnect(id);
         });
@@ -1696,6 +1754,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         });
         page.add(shotGroup);
         this._addShortcutSetRow(shotGroup, {
+            id: 'screenshot-shortcuts',
             title: 'macOS Screenshot Shortcuts',
             subtitle: 'Cmd+Shift+3, Cmd+Shift+4 and Cmd+Shift+5',
             shortcuts: MACOS_SCREENSHOT_SHORTCUTS,
@@ -1724,6 +1783,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         const windowGroup = new Adw.PreferencesGroup({ title: 'Windows' });
         page.add(windowGroup);
         this._addShortcutSetRow(windowGroup, {
+            id: 'window-shortcuts',
             title: 'macOS Window Shortcuts',
             subtitle: 'Quit, close, full screen, lock and the overview',
             shortcuts: MACOS_WINDOW_SHORTCUTS,
@@ -1736,6 +1796,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         });
         page.add(windowKeysGroup);
         this._addShortcutSetRow(windowKeysGroup, {
+            id: 'cmd-m-minimizes',
             title: 'Cmd+M Minimizes',
             subtitle: 'Takes Cmd+M from the message tray, which keeps its other shortcuts',
             shortcuts: MINIMIZE_SHORTCUTS,
@@ -1745,11 +1806,13 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             appliedNeedsConflicts: true,
         });
         this._addShortcutSetRow(windowKeysGroup, {
+            id: 'cmd-d-desktop',
             title: 'Cmd+D Shows the Desktop',
             subtitle: 'macOS uses Cmd+F3 or F11; Super+D is the Linux habit, and F3 is a media key on a Framework',
             shortcuts: SHOW_DESKTOP_SHORTCUTS,
         });
         this._addDisplacingSwitchRow(windowKeysGroup, {
+            id: 'restore-window-keys',
             title: 'Restore GNOME Window Keys',
             subtitle: 'Refills Super+↑, Super+↓ and Super+←/→ for maximize, restore and tiling ' +
                 'when another extension has emptied them. Keys that hold something are left alone',
@@ -1769,6 +1832,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             });
             page.add(dockGroup);
             this._addShortcutSetRow(dockGroup, {
+                id: 'dock-function-keys',
                 title: 'Launch Dock Items with Cmd+F1…F9',
                 subtitle: 'On an Apple keyboard these are fn+F1 to fn+F9',
                 shortcuts: DOCK_FUNCTION_KEY_SHORTCUTS,
@@ -1803,12 +1867,12 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         // The trackpad has no page of its own: eight tabs are what the window's
         // width holds, and its neighbour in macOS's settings is the keyboard.
-        this._buildTrackpadGroup(page);
+        this._buildTrackpadGroup(page, settings);
 
         return page;
     }
 
-    _buildTrackpadGroup(page, home = GLib.get_home_dir()) {
+    _buildTrackpadGroup(page, settings, home = GLib.get_home_dir()) {
         const group = new Adw.PreferencesGroup({
             title: 'Trackpad',
             description: 'Scroll acceleration is a plugin for libinput, which GNOME loads when you log in',
@@ -1940,6 +2004,23 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         followers.push(browser[2]);
         const firefox = this._buildFirefoxMomentumRow(group, home);
         followers.push(firefox[1]);
+
+        this._buildGestureDirectionRow(group, settings);
+    }
+
+    // The shell's own swipes, not scrolling: GNOME turns them round with
+    // Natural Scrolling off, macOS never does. Applied by the shell side at once.
+    _buildGestureDirectionRow(group, settings) {
+        const row = new Adw.SwitchRow({
+            title: 'Swipe Between Desktops Like macOS',
+            subtitle: 'Three fingers move the desktops with them, whatever the scrolling direction: left brings ' +
+                'in the desktop on the right, up opens the overview, down goes back. GNOME turns them round ' +
+                'when Natural Scrolling is off',
+        });
+        row.set_subtitle_lines(0);
+        group.add(row);
+        settings.bind('macos-gesture-direction', row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
     }
 
     // The plugin's speed as the browsers' scale is set from it: what is
@@ -2822,60 +2903,203 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         }
     }
 
-    // What a switch displaced has to survive the preferences process exiting:
-    // keeping it only in a Map meant that closing the window between enabling a
-    // shortcut set and disabling it again fell back to settings.reset(), which
-    // clobbers the user's own binding with the schema default. It is stored in
-    // our own settings under `storeKey` as JSON mapping '<schemaId>:<key>' to
-    // the displaced GVariant serialized with variant.print(true), which
-    // round-trips through GLib.Variant.parse. null stands for a key that was at
-    // its default, which has to go back to the default rather than to a copy of
-    // it: the user never set it.
-    _getDisplacedMap(storeKey = DISPLACED_KEYBINDINGS) {
-        this._displacedMaps ??= new Map();
-        if (!this._displacedMaps.has(storeKey)) {
-            const displaced = new Map();
-            this._displacedMaps.set(storeKey, displaced);
-            try {
-                const parsed = JSON.parse(this.getSettings().get_string(storeKey) || '{}');
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                    for (const [id, serialized] of Object.entries(parsed)) {
-                        if (serialized === null) {
-                            displaced.set(id, null);
-                            continue;
-                        }
-                        if (typeof serialized !== 'string')
-                            continue;
-                        try {
-                            // All four arguments: GJS wants the out parameter
-                            // passed as well, and throws without it.
-                            displaced.set(id, GLib.Variant.parse(null, serialized, null, null));
-                        } catch {
-                            // One bad entry must not sink the rest; skip it.
-                        }
-                    }
-                }
-            } catch {
-                // Corrupt or unreadable JSON: start from an empty map rather
-                // than failing to build the page.
-            }
-        }
-        return this._displacedMaps.get(storeKey);
+    // What a switch displaced has to survive the preferences process exiting,
+    // so it is kept in our own settings under `storeKey`, one record per
+    // switch, under the switch's own id:
+    //
+    //   {"v": 2, "options": {"<id>": {"added": [...], "keys": {"<schemaId>:<key>":
+    //       {"before": <printed GVariant or null>, "applied": <printed GVariant or null>}}}}}
+    //
+    // `before` is the user's value the switch replaced, null for a key that was
+    // at its default, which has to go back to the default rather than to a copy
+    // of it. `applied` is what the switch wrote. Switching off hands a key back
+    // only while it still holds that: a key changed since is the user's newer
+    // choice. A key with no record is not the switch's to touch, whatever it
+    // holds, so it is never reset to the schema default on a guess: that is
+    // how a user's own binding used to be lost. `added`, for a shortcut set, is
+    // the accelerators it added itself, as "<schemaId>:<key>:<accel>"; one the
+    // user had before stays when the set goes off. null is not known.
+    //
+    // Variants are printed with variant.print(true), which round-trips through
+    // GLib.Variant.parse. The store is read afresh for every change, so that
+    // two switches never write each other's notes back from a stale copy.
+    //
+    // Older builds kept a flat object instead, '<schemaId>:<key>' to the
+    // printed value or null, with no owner and no applied value. Those notes
+    // are kept under "legacy" until the switch whose key it is claims them
+    // (_claimLegacyNotes).
+    _displacedSettings() {
+        this._displacedSettingsObject ??= this.getSettings();
+        return this._displacedSettingsObject;
     }
 
-    _saveDisplacedMap(storeKey = DISPLACED_KEYBINDINGS) {
-        const displaced = this._displacedMaps?.get(storeKey);
-        if (!displaced)
-            return;
-        const serialized = {};
-        for (const [id, variant] of displaced.entries())
-            serialized[id] = variant === null ? null : variant.print(true);
+    _readDisplacedStore(storeKey) {
+        const store = { options: {}, legacy: {} };
+        let parsed = null;
         try {
-            this.getSettings().set_string(storeKey, JSON.stringify(serialized));
+            parsed = JSON.parse(this._displacedSettings().get_string(storeKey) || '{}');
         } catch {
-            // Losing durability is better than losing the page; the in-memory
-            // map still covers this session.
+            // Corrupt or unreadable JSON: start afresh rather than failing to
+            // build the page. Nothing is then the switch's to hand back.
         }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+            return store;
+        const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
+        if (parsed.v === 2) {
+            if (isObject(parsed.options)) {
+                for (const [id, record] of Object.entries(parsed.options)) {
+                    if (!isObject(record))
+                        continue;
+                    const keys = {};
+                    for (const [keyId, entry] of Object.entries(isObject(record.keys) ? record.keys : {})) {
+                        if (isObject(entry)) {
+                            keys[keyId] = {
+                                before: typeof entry.before === 'string' ? entry.before : null,
+                                applied: typeof entry.applied === 'string' ? entry.applied : null,
+                            };
+                        }
+                    }
+                    const added = Array.isArray(record.added)
+                        ? record.added.filter(accel => typeof accel === 'string') : null;
+                    store.options[id] = { added, keys };
+                }
+            }
+            if (isObject(parsed.legacy))
+                Object.assign(store.legacy, parsed.legacy);
+        } else {
+            Object.assign(store.legacy, parsed);
+        }
+        for (const [keyId, value] of Object.entries(store.legacy)) {
+            if (value !== null && typeof value !== 'string')
+                delete store.legacy[keyId];
+        }
+        return store;
+    }
+
+    // Returns what went wrong, or null.
+    _writeDisplacedStore(storeKey, store) {
+        const settings = this._displacedSettings();
+        try {
+            const empty = Object.keys(store.options).length === 0 && Object.keys(store.legacy).length === 0;
+            let written;
+            if (empty) {
+                settings.reset(storeKey);
+                written = settings.get_user_value(storeKey) === null;
+            } else {
+                const out = { v: 2, options: store.options };
+                if (Object.keys(store.legacy).length > 0)
+                    out.legacy = store.legacy;
+                written = settings.set_string(storeKey, JSON.stringify(out));
+            }
+            return written ? null : 'Pear Up’s own settings are read-only here';
+        } catch (e) {
+            return e.message;
+        }
+    }
+
+    _displacedRecord(storeKey, id) {
+        return this._readDisplacedStore(storeKey).options[id] ?? null;
+    }
+
+    // Stores the record for `id`, or drops it with null. Returns what went
+    // wrong, or null.
+    _setDisplacedRecord(storeKey, id, record) {
+        const store = this._readDisplacedStore(storeKey);
+        if (record)
+            store.options[id] = record;
+        else
+            delete store.options[id];
+        return this._writeDisplacedStore(storeKey, store);
+    }
+
+    // Moves the old-format notes for `keyIds` into the record of switch `id`,
+    // each made an entry by `entryOf(keyId, before)`, `before` the parsed note
+    // (null for a key that was at its default). A record claimed this way does
+    // not know which accelerators it added.
+    _claimLegacyNotes(storeKey, id, keyIds, entryOf) {
+        const store = this._readDisplacedStore(storeKey);
+        const claimed = keyIds.filter(keyId => Object.hasOwn(store.legacy, keyId));
+        if (claimed.length === 0)
+            return;
+        const record = store.options[id] ?? { added: null, keys: {} };
+        for (const keyId of claimed) {
+            const text = store.legacy[keyId];
+            delete store.legacy[keyId];
+            if (Object.hasOwn(record.keys, keyId))
+                continue;
+            let before;
+            try {
+                before = text === null ? null : this._parseVariant(text);
+            } catch {
+                continue;
+            }
+            record.keys[keyId] = entryOf(keyId, before);
+        }
+        store.options[id] = record;
+        this._writeDisplacedStore(storeKey, store);
+    }
+
+    // All four arguments: GJS wants the out parameter passed as well, and
+    // throws without it.
+    _parseVariant(text) {
+        return GLib.Variant.parse(null, text, null, null);
+    }
+
+    // Whether the key still holds what the entry says the switch wrote. An
+    // entry whose value is not known, or does not parse, never does.
+    _holdsApplied(settings, key, entry) {
+        if (!entry || entry.applied === null)
+            return false;
+        try {
+            return settings.get_value(key).equal(this._parseVariant(entry.applied));
+        } catch {
+            return false;
+        }
+    }
+
+    // Puts back what the entry says was there. Returns whether it worked.
+    _restoreDisplaced(settings, key, entry) {
+        try {
+            if (entry.before === null) {
+                settings.reset(key);
+                return settings.get_user_value(key) === null;
+            }
+            return settings.set_value(key, this._parseVariant(entry.before));
+        } catch {
+            return false;
+        }
+    }
+
+    // A control of a displacing switch's own beside it (a slider, a tint)
+    // writes `value` to one of the switch's keys. While the switch owns the
+    // key it owns the new value too: that is noted first, and nothing is
+    // written when it cannot be; a write that fails puts the note back as it
+    // was. Returns what went wrong, or null.
+    _writeFollowed(id, schemaId, key, value) {
+        const settings = this._settingsForSchema(schemaId);
+        const record = this._displacedRecord(DISPLACED_SETTINGS, id);
+        const entry = record?.keys[`${schemaId}:${key}`];
+        const owned = this._holdsApplied(settings, key, entry);
+        const was = entry?.applied ?? null;
+        if (owned) {
+            entry.applied = value.print(true);
+            const unsaved = this._setDisplacedRecord(DISPLACED_SETTINGS, id, record);
+            if (unsaved)
+                return `Not changed: Pear Up could not note it (${unsaved})`;
+        }
+        let written;
+        try {
+            written = settings.set_value(key, value);
+        } catch {
+            written = false;
+        }
+        if (written)
+            return null;
+        if (owned) {
+            entry.applied = was;
+            this._setDisplacedRecord(DISPLACED_SETTINGS, id, record);
+        }
+        return `Could not change ${key}`;
     }
 
     // One switch drives a whole set of accelerators. Each is appended to
@@ -2884,14 +3108,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // other extensions are stood down while the set is on. With
     // `appliedNeedsConflicts` the row only reads on when they are stood down as
     // well, for a set whose accelerator does nothing while another grab holds it.
+    // `id` names the set's record of what it changed (see _readDisplacedStore).
     _addShortcutSetRow(group, {
-        title, subtitle, shortcuts, conflicts = [], rows = null, appliedNeedsConflicts = false,
+        id, title, subtitle, shortcuts, conflicts = [], rows = null, appliedNeedsConflicts = false,
     }) {
-        // Bindings displaced by a set, kept so they can be handed back. Backed
-        // by our own settings rather than memory alone, so they survive the
-        // preferences process exiting between enabling a set and disabling it.
-        const displacedValues = this._getDisplacedMap();
-
         const expander = new Adw.ExpanderRow({ title, subtitle, show_enable_switch: true });
         group.add(expander);
 
@@ -2904,12 +3124,24 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         shortcuts = shortcuts.filter(usable);
         conflicts = conflicts.filter(usable);
 
+        const keyIdOf = ([schemaId, key]) => `${schemaId}:${key}`;
+        const accelIdOf = ([schemaId, key, accel]) => `${schemaId}:${key}:${accel}`;
+        const has = ([schemaId, key, accel]) => this._settingsForSchema(schemaId).get_strv(key).includes(accel);
+
+        // A note from an older build is what the conflict held before the set
+        // stood it down, and the set wrote what its function makes of that.
+        this._claimLegacyNotes(DISPLACED_KEYBINDINGS, id, conflicts.map(keyIdOf), (keyId, before) => {
+            const [schemaId, key, valueWhenApplied] = conflicts.find(conflict => keyIdOf(conflict) === keyId);
+            const settings = this._settingsForSchema(schemaId);
+            const was = before ?? settings.get_default_value(key);
+            return { before: before?.print(true) ?? null, applied: valueWhenApplied(was).print(true) };
+        });
+
         const conflictStoodDown = ([schemaId, key, valueWhenApplied]) => {
             const current = this._settingsForSchema(schemaId).get_value(key);
             return current.equal(valueWhenApplied(current));
         };
-        const isApplied = () => shortcuts.length > 0 && shortcuts.every(([schemaId, key, accel]) =>
-            this._settingsForSchema(schemaId).get_strv(key).includes(accel)) &&
+        const isApplied = () => shortcuts.length > 0 && shortcuts.every(has) &&
             (!appliedNeedsConflicts || conflicts.every(conflictStoodDown));
 
         const detailRows = rows ?? shortcuts.map(([, , accel, description]) => ({
@@ -2926,54 +3158,121 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             }));
         }
 
-        // The expansion state starts as whatever is already applied. GObject
-        // notifies synchronously, so that programmatic write would reach the
-        // handler below as if the user had toggled it on — merely OPENING
-        // Preferences re-applied the set and stood down conflicting grabs.
-        // Flag the initialisation off so the handler ignores exactly that one
-        // invocation; the flag is cleared before returning because notify
-        // handlers run inline, never later on a queue.
-        this._initialisingExpansion = true;
-        expander.set_enable_expansion(isApplied());
-        this._initialisingExpansion = false;
+        // The expansion state starts as whatever is already applied, and goes
+        // back to it after a change. GObject notifies synchronously, so that
+        // programmatic write would reach the handler below as if the user had
+        // toggled it on — merely OPENING Preferences re-applied the set and
+        // stood down conflicting grabs. `busy` has the handler ignore those
+        // writes. One made from inside the handler, putting the switch back,
+        // is notified once more after the handler has returned, so the state
+        // last shown is kept as well, and a notification of it is no news.
+        let busy = false;
+        let shown = null;
+        const show = problem => {
+            busy = true;
+            shown = isApplied();
+            expander.set_enable_expansion(shown);
+            expander.set_subtitle(problem ?? subtitle);
+            busy = false;
+        };
+        show(null);
 
-        expander.connect('notify::enable-expansion', () => {
-            // Set programmatically above when mirroring reality, not by the user.
-            if (this._initialisingExpansion)
-                return;
-
-            const wanted = expander.enable_expansion;
-
-            for (const [schemaId, key, accel] of shortcuts) {
+        // What it adds and what it stands down is noted first, and nothing is
+        // changed when the note cannot be kept.
+        const switchOn = () => {
+            const record = this._displacedRecord(DISPLACED_KEYBINDINGS, id) ?? { added: [], keys: {} };
+            const adding = shortcuts.filter(shortcut => !has(shortcut));
+            const added = record.added === null ? null : [...new Set([
+                ...record.added.filter(accelId =>
+                    shortcuts.some(shortcut => accelIdOf(shortcut) === accelId && has(shortcut))),
+                ...adding.map(accelIdOf),
+            ])];
+            const keys = {};
+            const standingDown = [];
+            for (const conflict of conflicts) {
+                const [schemaId, key, valueWhenApplied] = conflict;
                 const settings = this._settingsForSchema(schemaId);
-                const current = settings.get_strv(key);
-                const has = current.includes(accel);
-                if (wanted && !has)
-                    settings.set_strv(key, [...current, accel]);
-                else if (!wanted && has)
-                    settings.set_strv(key, current.filter(existing => existing !== accel));
+                const current = settings.get_value(key);
+                const old = record.keys[keyIdOf(conflict)];
+                // Still holding what this set stood it down to: that note is
+                // the older, truer one, and is kept. Switching on again must
+                // not note the stood-down value as the user's own.
+                if (this._holdsApplied(settings, key, old)) {
+                    keys[keyIdOf(conflict)] = old;
+                    continue;
+                }
+                const target = valueWhenApplied(current);
+                // Already stood down, by whoever: not this set's to give back.
+                if (current.equal(target))
+                    continue;
+                keys[keyIdOf(conflict)] = {
+                    before: settings.get_user_value(key)?.print(true) ?? null,
+                    applied: target.print(true),
+                };
+                standingDown.push([settings, key, target]);
             }
 
-            for (const [schemaId, key, valueWhenApplied] of conflicts) {
+            const unsaved = this._setDisplacedRecord(DISPLACED_KEYBINDINGS, id, { added, keys });
+            if (unsaved)
+                return `Nothing was changed: Pear Up could not note what this set changes (${unsaved})`;
+
+            const failed = [];
+            for (const [schemaId, key, accel] of adding) {
                 const settings = this._settingsForSchema(schemaId);
-                if (wanted) {
-                    // Keep whatever was there so switching off restores the
-                    // user's own binding rather than the schema default.
-                    const before = settings.get_value(key);
-                    displacedValues.set(`${schemaId}:${key}`, before);
-                    settings.set_value(key, valueWhenApplied(before));
-                } else {
-                    const saved = displacedValues.get(`${schemaId}:${key}`);
-                    if (saved)
-                        settings.set_value(key, saved);
-                    else
-                        settings.reset(key);
-                    displacedValues.delete(`${schemaId}:${key}`);
+                if (!settings.set_strv(key, [...settings.get_strv(key), accel]))
+                    failed.push(key);
+            }
+            for (const [settings, key, target] of standingDown) {
+                if (!settings.set_value(key, target))
+                    failed.push(key);
+            }
+            return failed.length > 0 ? `Could not change ${failed.join(', ')}` : null;
+        };
+
+        // Takes away what the set added, and hands back what it stood down
+        // while that still holds what it was stood down to. An accelerator the
+        // user had before the set went on stays. Without a record of what was
+        // added, the set's own accelerators go: that is what switching off
+        // asks for, and it touches nothing else in the list. A conflict
+        // without a note is left as it is: what it held before is not known.
+        const switchOff = () => {
+            const record = this._displacedRecord(DISPLACED_KEYBINDINGS, id);
+            const failed = [];
+            const stillAdded = [];
+            for (const shortcut of shortcuts) {
+                const [schemaId, key, accel] = shortcut;
+                const ours = !record || record.added === null || record.added.includes(accelIdOf(shortcut));
+                if (!ours || !has(shortcut))
+                    continue;
+                const settings = this._settingsForSchema(schemaId);
+                if (!settings.set_strv(key, settings.get_strv(key).filter(existing => existing !== accel))) {
+                    failed.push(key);
+                    stillAdded.push(accelIdOf(shortcut));
                 }
             }
+            const kept = {};
+            for (const conflict of conflicts) {
+                const [schemaId, key] = conflict;
+                const settings = this._settingsForSchema(schemaId);
+                const entry = record?.keys[keyIdOf(conflict)];
+                if (this._holdsApplied(settings, key, entry) && !this._restoreDisplaced(settings, key, entry)) {
+                    kept[keyIdOf(conflict)] = entry;
+                    failed.push(key);
+                }
+            }
+            // What could not be taken away or handed back stays noted, as the
+            // set's, for another try; the rest of the note goes.
+            const left = failed.length > 0 ? { added: stillAdded, keys: kept } : null;
+            const unsaved = record ? this._setDisplacedRecord(DISPLACED_KEYBINDINGS, id, left) : null;
+            if (failed.length > 0)
+                return `Could not change ${failed.join(', ')}`;
+            return unsaved ? `Pear Up could not clear its note of what this set changed (${unsaved})` : null;
+        };
 
-            // Persist the displacement bookkeeping so it outlives this process.
-            this._saveDisplacedMap();
+        expander.connect('notify::enable-expansion', () => {
+            if (busy || expander.enable_expansion === shown)
+                return;
+            show(expander.enable_expansion ? switchOn() : switchOff());
         });
     }
 
@@ -2983,18 +3282,23 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
     // and follows the keys when they change elsewhere. A target this system
     // cannot take — schema or key absent, a value outside the key's range, a
     // key locked down — is left out, and the row with it when none is left.
+    // `id` names the switch's record of what it changed (see
+    // _readDisplacedStore): only keys it wrote are handed back, and only while
+    // they still hold what it wrote.
     //
     // A target may take two more entries. The value can be a function, asked
     // each time it is written, for one that depends on something that can change
     // while the window is open. And a fourth, `reads(variant)`, says whether what
-    // the key holds already amounts to the look: the switch then reads on for it
-    // and takes it back off, while it still writes the value it was given. That is
-    // for a switch with controls of its own beside it, such as a slider for the
-    // brightness the switch sets: moving the slider is no reason to switch off.
+    // the key holds already amounts to the look: the switch then reads on for it,
+    // while it still writes the value it was given. That is for a switch with
+    // controls of its own beside it, such as a slider for the brightness the
+    // switch sets: moving the slider is no reason to switch off. Such a key is
+    // noted at every switching on, so that what the slider sets later is the
+    // switch's to take back (the slider tells it, see _writeFollowed).
     //
     // `unavailable` is the reason the switch cannot be turned on here, when
     // there is one. The row still shows it, and still turns off while it holds.
-    _addDisplacingSwitchRow(group, { title, subtitle, targets, unavailable = null }) {
+    _addDisplacingSwitchRow(group, { id, title, subtitle, targets, unavailable = null }) {
         const valueOf = ([, , value]) => typeof value === 'function' ? value() : value;
         targets = targets.filter(target => {
             const [schemaId, key] = target;
@@ -3008,85 +3312,126 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         if (targets.length === 0)
             return null;
 
-        const displaced = this._getDisplacedMap(DISPLACED_SETTINGS);
         const idOf = ([schemaId, key]) => `${schemaId}:${key}`;
-        const isSet = target => this._settingsForSchema(target[0]).get_value(target[1]).equal(valueOf(target));
+        const settingsOf = target => this._settingsForSchema(target[0]);
+        const isSet = target => settingsOf(target).get_value(target[1]).equal(valueOf(target));
         const holds = target => {
             const reads = target[3];
-            return reads
-                ? reads(this._settingsForSchema(target[0]).get_value(target[1]))
-                : isSet(target);
+            return reads ? reads(settingsOf(target).get_value(target[1])) : isSet(target);
         };
+
+        // A note from an older build says what was there, not what was
+        // written. Where the value is fixed that is known; one asked of a
+        // function is not, and such a note never hands anything back.
+        this._claimLegacyNotes(DISPLACED_SETTINGS, id, targets.map(idOf), (keyId, before) => {
+            const value = targets.find(target => idOf(target) === keyId)[2];
+            return {
+                before: before?.print(true) ?? null,
+                applied: typeof value === 'function' ? null : value.print(true),
+            };
+        });
 
         const row = new Adw.SwitchRow({ title, subtitle });
         group.add(row);
+
+        // On with a key the user set, and no note of the switch's own: off
+        // would have nothing to take back.
+        const noNoteSubtitle = 'Already set. Pear Up has no saved change to undo, so switching ' +
+            'this off leaves it as it is';
+        const unowned = () => {
+            const record = this._displacedRecord(DISPLACED_SETTINGS, id);
+            return targets.some(target => holds(target) && !record?.keys[idOf(target)] &&
+                settingsOf(target).get_user_value(target[1]) !== null);
+        };
 
         // The row is written from two directions: the keys, and the user. Each
         // key notifies as it lands, so while this row is writing them it must
         // not read half-written state back into itself, and showing the keys
         // must not count as the user turning it on.
+        // A write from inside the handler, putting the switch back, is
+        // notified once more after the handler has returned: the state last
+        // shown is kept, and a notification of it is no news.
         let busy = false;
+        let shown = null;
+        let problem = null;
         const refresh = () => {
             if (busy)
                 return;
             busy = true;
             const on = targets.every(holds);
             const blocked = unavailable !== null && !on;
+            shown = on;
             row.set_active(on);
             row.set_sensitive(!blocked);
-            row.set_subtitle(blocked ? unavailable : subtitle);
+            row.set_subtitle(blocked ? unavailable : problem ?? (on && unowned() ? noNoteSubtitle : subtitle));
             busy = false;
         };
         refresh();
 
         const switchOn = () => {
+            const record = this._displacedRecord(DISPLACED_SETTINGS, id) ?? { added: [], keys: {} };
+            const keys = {};
+            const writes = [];
             for (const target of targets) {
-                const [schemaId, key] = target;
-                const settings = this._settingsForSchema(schemaId);
-                // Note what is there, once. A key that already holds our value
-                // and has a note keeps it: that note is the older, truer one.
-                // Anything else is noted as it stands — even a match, which may
-                // be a user's own choice or only the key's default. The user
-                // value is null while the key is at its default, and that is
-                // what has to come back.
-                if (!displaced.has(idOf(target)) || !holds(target))
-                    displaced.set(idOf(target), settings.get_user_value(key));
-                if (!isSet(target))
-                    settings.set_value(key, valueOf(target));
+                const [, key] = target;
+                const settings = settingsOf(target);
+                const current = settings.get_value(key);
+                const value = valueOf(target);
+                const old = record.keys[idOf(target)];
+                // A key that still holds what this switch wrote keeps its
+                // note: that note is the older, truer one.
+                const owned = this._holdsApplied(settings, key, old);
+                if (!current.equal(value))
+                    writes.push([settings, key, value]);
+                else if (!owned && !target[3])
+                    continue; // already so, and not this switch's doing
+                keys[idOf(target)] = {
+                    before: owned ? old.before : settings.get_user_value(key)?.print(true) ?? null,
+                    applied: value.print(true),
+                };
             }
-            this._saveDisplacedMap(DISPLACED_SETTINGS);
+            const unsaved = this._setDisplacedRecord(DISPLACED_SETTINGS, id, { added: [], keys });
+            if (unsaved)
+                return `Nothing was changed: Pear Up could not note what this replaces (${unsaved})`;
+            const failed = writes.filter(([settings, key, value]) => !settings.set_value(key, value))
+                .map(([, key]) => key);
+            return failed.length > 0 ? `Could not change ${failed.join(', ')}` : null;
         };
 
         const switchOff = () => {
+            const record = this._displacedRecord(DISPLACED_SETTINGS, id);
+            const kept = {};
+            const failed = [];
             for (const target of targets) {
-                const [schemaId, key] = target;
-                const settings = this._settingsForSchema(schemaId);
+                const [, key] = target;
+                const settings = settingsOf(target);
+                const entry = record?.keys[idOf(target)];
                 // A key that has changed since is the user's newer choice and
-                // stays. One that still holds our value gets its note back; with
-                // no note it was set outside this window, so the only thing
-                // known about what came before is the default.
-                if (holds(target)) {
-                    const before = displaced.get(idOf(target)) ?? null;
-                    if (before)
-                        settings.set_value(key, before);
-                    else
-                        settings.reset(key);
+                // stays, and so does one this switch has no note for.
+                if (this._holdsApplied(settings, key, entry) && !this._restoreDisplaced(settings, key, entry)) {
+                    kept[idOf(target)] = entry;
+                    failed.push(key);
                 }
-                displaced.delete(idOf(target));
             }
-            this._saveDisplacedMap(DISPLACED_SETTINGS);
+            const unsaved = record ? this._setDisplacedRecord(DISPLACED_SETTINGS, id,
+                Object.keys(kept).length > 0 ? { added: [], keys: kept } : null) : null;
+            if (failed.length > 0)
+                return `Could not change ${failed.join(', ')}`;
+            if (unsaved)
+                return `Pear Up could not clear its note of what this replaced (${unsaved})`;
+            return targets.every(holds) ? noNoteSubtitle : null;
         };
 
         row.connect('notify::active', () => {
-            if (busy)
+            if (busy || row.active === shown)
                 return;
             busy = true;
             try {
                 // Greyed out is not enough: whatever sets `active` gets here.
                 if (!row.active)
-                    switchOff();
+                    problem = switchOff();
                 else if (unavailable === null)
-                    switchOn();
+                    problem = switchOn();
             } finally {
                 busy = false;
             }
@@ -3094,13 +3439,18 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             refresh();
         });
 
+        // A change elsewhere is news the last problem may no longer be.
         const watched = targets.map(([schemaId, key]) => {
             const settings = this._settingsForSchema(schemaId);
-            return [settings, settings.connect(`changed::${key}`, refresh)];
+            return [settings, settings.connect(`changed::${key}`, () => {
+                if (!busy)
+                    problem = null;
+                refresh();
+            })];
         });
         row.connect('destroy', () => {
-            for (const [settings, id] of watched)
-                settings.disconnect(id);
+            for (const [settings, handlerId] of watched)
+                settings.disconnect(handlerId);
         });
 
         return row;
@@ -3257,6 +3607,7 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         // writes the preset's own values. Blur my Shell only draws the tint
         // while it overrides the dock's background, so that is part of it too.
         this._addDisplacingSwitchRow(group, {
+            id: GLASS_SWITCH_ID,
             title: 'Frosted Glass, Like macOS',
             subtitle: 'Blurs what is behind the dock and tints it, dark or light to match the colour scheme',
             targets: [
@@ -3271,9 +3622,10 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         });
 
         const tints = Gtk.StringList.new(GLASS_TINTS.map(tint => tint.title));
+        const tintSubtitle = 'Light and Dark add a hairline border';
         const tintRow = new Adw.ComboRow({
             title: 'Tint',
-            subtitle: 'Light and Dark add a hairline border',
+            subtitle: tintSubtitle,
             model: tints,
         });
         group.add(tintRow);
@@ -3293,8 +3645,13 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
         syncTint();
         tintRow.connect('notify::selected', () => {
             const tint = GLASS_TINTS[tintRow.selected];
-            if (!syncingTint && tint)
-                blur.set_int('style-dash-to-dock', tint.style);
+            if (syncingTint || !tint)
+                return;
+            const problem = this._writeFollowed(GLASS_SWITCH_ID, BLUR_DOCK_SCHEMA, 'style-dash-to-dock',
+                GLib.Variant.new_int32(tint.style));
+            tintRow.set_subtitle(problem ?? tintSubtitle);
+            if (problem)
+                syncTint();
         });
 
         const brightnessOf = () => Math.round(Math.min(GLASS_BRIGHTNESS_RANGE.upper / 100,
@@ -3305,7 +3662,14 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
                 lower: GLASS_BRIGHTNESS_RANGE.lower, upper: GLASS_BRIGHTNESS_RANGE.upper,
                 marks: [50, 60, 70, 80, 90, 100], unit: '%', pageStep: 10,
                 value: brightnessOf(),
-                onChange: value => blur.set_double('brightness', value / 100),
+                onChange: value => {
+                    const problem = this._writeFollowed(GLASS_SWITCH_ID, BLUR_DOCK_SCHEMA, 'brightness',
+                        GLib.Variant.new_double(value / 100));
+                    if (problem) {
+                        brightness.row.set_subtitle(problem);
+                        brightness.setValue(brightnessOf());
+                    }
+                },
             });
         }
 
