@@ -154,7 +154,7 @@ export const SystemMenuButton = GObject.registerClass(
         this._extensionPath = extensionPath;
         this._systemActions = SystemActions.getDefault();
         this._actionItems = [];
-        this._recentList = new RecentList(settings.get_int('recent-items-limit'));
+        this._recentList = null;
         this._recentMenuGeneration = 0;
         this._recentDestroyed = false;
 
@@ -183,7 +183,6 @@ export const SystemMenuButton = GObject.registerClass(
         }, this);
 
         this.connect('destroy', this._onDestroy.bind(this));
-        this._recentList.refresh();
     }
 
     _syncIcon() {
@@ -235,6 +234,7 @@ export const SystemMenuButton = GObject.registerClass(
         this._recentSignature = null;
         this.menu.removeAll();
         this._actionItems = [];
+        this._syncRecentList();
         this._iconTheme = this._newIconTheme();
 
         const setting = key => this._settings.get_boolean(key);
@@ -396,6 +396,18 @@ export const SystemMenuButton = GObject.registerClass(
             return iconNames[0] ?? null;
 
         return iconNames.find(name => this._iconTheme.has_icon(name)) ?? null;
+    }
+
+    // A hidden Recent Items submenu has no files to show, so it has no monitor
+    // or background read either. Prewarm a fresh cache when it is wanted again.
+    _syncRecentList() {
+        if (!this._settings.get_boolean('show-recent-items')) {
+            this._recentList?.destroy();
+            this._recentList = null;
+        } else if (!this._recentList) {
+            this._recentList = new RecentList(this._settings.get_int('recent-items-limit'));
+            this._recentList.refresh();
+        }
     }
 
     // The list changes with every file opened anywhere on the system. Show

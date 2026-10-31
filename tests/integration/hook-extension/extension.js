@@ -357,6 +357,9 @@ const IFACE = `
     <method name="CheckBrightnessNoop">
       <arg type="s" direction="out" name="result"/>
     </method>
+    <method name="GetRecentListState">
+      <arg type="s" direction="out" name="state"/>
+    </method>
     <method name="ClearBrightnessWrites">
       <arg type="b" direction="out" name="cleared"/>
     </method>
@@ -2464,6 +2467,16 @@ export default class TestHookExtension extends Extension {
             else
                 delete manager._sync;
         }
+    }
+
+    GetRecentListState() {
+        const list = Main.panel.statusArea[LOGO_ROLE]?._recentList;
+        return JSON.stringify({
+            exists: !!list,
+            monitored: !!list?._monitor,
+            refreshing: list?._refreshing ?? false,
+            loaded: list?._loadedGeneration ?? -1,
+        });
     }
 
     // As the slider in Quick Settings sets it, or the brightness keys.

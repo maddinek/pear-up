@@ -132,11 +132,36 @@ def recent_items_checks():
 
     writer = None
     fed = []
+    recent_setting = pear_up_value('show-recent-items')
     try:
         with open(present, "w", encoding="utf-8") as handle:
             handle.write("Pear Up test\n")
         if os.path.exists(missing):
             os.remove(missing)
+
+        # No background list exists while its submenu is switched off, even
+        # when other applications replace XBEL or the System Menu is rebuilt.
+        pear_up_setting('show-recent-items', 'false')
+        GLib.usleep(200 * 1000)
+        write_recent(listed)
+        hook("OpenSystemMenu")
+        hook("CloseSystemMenu")
+        GLib.usleep(300 * 1000)
+        recent = json.loads(hook("GetRecentListState"))
+        check("Recent Items off owns no cache, file monitor or refresh", not recent['exists'], str(recent))
+        pear_up_setting('show-recent-items', 'true')
+        GLib.usleep(500 * 1000)
+        recent = json.loads(hook("GetRecentListState"))
+        check("enabling Recent Items creates and prewarms its monitored cache without opening the menu",
+              recent['exists'] and recent['monitored'] and recent['loaded'] >= 0, str(recent))
+        check("and the enabled submenu shows the current list", "pear-up-recent-present.txt" in recent_labels())
+        pear_up_setting('show-recent-items', 'false')
+        GLib.usleep(200 * 1000)
+        check("disabling Recent Items releases the cache again",
+              not json.loads(hook("GetRecentListState"))['exists'])
+        pear_up_setting('show-recent-items', 'true')
+        GLib.usleep(500 * 1000)
+
         if os.path.lexists(RECENT_XBEL):
             os.remove(RECENT_XBEL)
         os.makedirs(os.path.dirname(RECENT_XBEL), exist_ok=True)
@@ -200,6 +225,7 @@ def recent_items_checks():
     except (GLib.Error, OSError) as exc:
         check("Recent Items could be exercised", False, str(exc).splitlines()[0])
     finally:
+        pear_up_setting('show-recent-items', recent_setting)
         try:
             if os.path.lexists(RECENT_XBEL):
                 os.remove(RECENT_XBEL)
