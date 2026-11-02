@@ -69,6 +69,11 @@ and switching one off gives back what GNOME does.
 move: a keyboard switch and the slide after a swipe land on a spring in about 0.4 s, pulled past the
 first or last desktop they stretch with resistance and spring back, and the switch shortcut there gives
 a small bump (the stretch needs GNOME 49 or later).
+**Low Power Mode: 60 Hz**, in the On Battery group of the General page and off by default, runs the
+built-in screen at 60 Hz while the laptop is on battery, as Low Power Mode caps a ProMotion display, and
+puts back the rate it had when the power is plugged in. It only acts on the built-in screen on its own,
+and a rate changed by hand on battery is left alone. With variable refresh the screen already slows
+right down at rest, so the saving is while something moves: about 1.3 W for a small spinner on framy.
 **Swipe Between Desktops Like macOS**, in Keyboard ▸ Trackpad and off by default, makes the three-finger
 swipes follow the fingers even with Natural Scrolling off, which GNOME otherwise turns round: left brings
 in the desktop on the right, up opens the overview, down goes back. Two-finger scrolling keeps its own

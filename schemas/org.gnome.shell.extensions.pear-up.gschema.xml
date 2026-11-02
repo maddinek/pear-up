@@ -181,6 +181,14 @@
       <description>With Automatic Screen Brightness on, the screen moves to each new light level over a few seconds, brightening faster than it darkens, as on macOS. The brightness slider and keys still act at once, and so does dimming when idle.</description>
     </key>
 
+    <!-- Low Power Mode's 60 Hz cap. Off by default: it changes how motion
+         looks on battery, and it changes the display mode. -->
+    <key name="battery-60hz" type="b">
+      <default>false</default>
+      <summary>Run the built-in screen at 60 Hz on battery</summary>
+      <description>On battery, the built-in screen switches to the same mode at 60 Hz, and back to the rate it had when the power is plugged in. Only when it is the only monitor; a rate changed by hand on battery is left alone.</description>
+    </key>
+
     <!-- The floating thumbnail macOS shows after a screenshot. Off by default:
          it is new, and it reads the shell's screenshot notification. -->
     <key name="screenshot-thumbnail" type="b">

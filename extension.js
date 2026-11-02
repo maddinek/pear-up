@@ -11,6 +11,7 @@ import { DockMagnifier } from './dockMagnifier.js';
 import { DockBounce } from './dockBounce.js';
 import { ShellTweaks, SHELL_TWEAK_KEYS } from './shellTweaks.js';
 import { SmoothBrightness, SMOOTH_BRIGHTNESS_KEY } from './smoothBrightness.js';
+import { BatteryRefreshRate, BATTERY_60HZ_KEY } from './batteryRefreshRate.js';
 import { SpacesSpring, SPACES_SPRING_KEY } from './spacesSpring.js';
 import { GestureDirection, GESTURE_DIRECTION_KEY } from './gestureDirection.js';
 import { OverviewSwipeGuard } from './overviewSwipeGuard.js';
@@ -215,6 +216,8 @@ export default class GlobalMenuExtension extends Extension {
                 this._shellTweaks?.sync();
             else if (key === SMOOTH_BRIGHTNESS_KEY)
                 this._smoothBrightness?.sync();
+            else if (key === BATTERY_60HZ_KEY)
+                this._batteryRefreshRate?.sync();
             else if (key === SPACES_SPRING_KEY)
                 this._spacesSpring?.sync();
             else if (key === GESTURE_DIRECTION_KEY)
@@ -277,6 +280,11 @@ export default class GlobalMenuExtension extends Extension {
         // sets the brightness itself (GNOME 49 on).
         this._guard('smoothing automatic brightness', () => {
             this._smoothBrightness = new SmoothBrightness(this.metadata.uuid, this._settings);
+        });
+
+        // Low Power Mode's 60 Hz on battery, off by default.
+        this._guard('watching the power for the refresh rate', () => {
+            this._batteryRefreshRate = new BatteryRefreshRate(this.metadata.uuid, this._settings);
         });
 
         // Not an option: a fix for the shell, which throws at the end of a
@@ -1388,6 +1396,8 @@ export default class GlobalMenuExtension extends Extension {
         // Stops the fade and applies where it was heading.
         this._guard('restoring automatic brightness', () => this._smoothBrightness?.destroy());
         this._smoothBrightness = null;
+        this._guard('restoring the refresh rate', () => this._batteryRefreshRate?.destroy());
+        this._batteryRefreshRate = null;
 
         this._guard('taking desktop switching off its spring', () => this._spacesSpring?.destroy());
         this._spacesSpring = null;

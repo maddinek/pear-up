@@ -14,6 +14,10 @@ runs profile() instead of the suite: a minute at rest each way, then focus
 moving between apps and menus opening, and prints the numbers as one JSON line
 for the record; `PEAR_UP_ENERGY=idle` runs the check at rest on its own, and
 `PEAR_UP_ENERGY=focus` times focus changes with Pear Up on and off by turns.
+`PEAR_UP_ENERGY=battery` counts what a window opening and closing, a desktop
+switch and a pass over the magnified dock cost with Pear Up's animation and
+without it: the measurement that decided which battery options were worth
+having.
 """
 import json
 import os
@@ -450,6 +454,95 @@ def focus_ab(uuid, rounds=4):
     return 0
 
 
+def battery_ab(uuid, rounds=3):
+    """What each battery option could save: the frames and main-thread CPU of a
+    window opening and closing, a desktop switch and a visit to the dock, with
+    Pear Up's animation and with what the option would leave instead. GNOME's
+    own window animations and desktop slide are those switches off; the swell
+    without its ease is what the magnifier does with animations off."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    energy = Energy(bus, uuid)
+    _framy_like(uuid)
+    for extension in (DOCK_UUID, BLUR_UUID):
+        try:
+            energy.extensions("EnableExtension", extension)
+        except GLib.Error:
+            pass
+    windows = _windows(300)
+    GLib.usleep(8 * 1000 * 1000)
+    energy.hook("MovePointer", (640.0, 360.0), "(dd)")
+    env = {**os.environ,
+           "GSETTINGS_SCHEMA_DIR": f"{os.environ.get('HOME', '/root')}/.local/share/"
+                                   f"gnome-shell/extensions/{uuid}/schemas"}
+    script = "/src/tests/integration/test-window.js"
+    opened = []
+
+    def window(n):
+        if n % 2 == 0:
+            opened.append(subprocess.Popen(["gjs", "-m", script, "io.github.maddinek.PearUpTestThird", "0", "30"],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        else:
+            energy.hook("CloseWindows", ("io.github.maddinek.PearUpTestThird",), "(s)")
+
+    def switch(n):
+        energy.hook("PressKeys", (["Control_L", "Alt_L", "Right" if n % 2 == 0 else "Left"],), "(as)")
+
+    state_json = json.loads(energy.hook("GetDockState"))
+    docks = state_json.get("docks") or []
+    icons = [item for item in (docks[0]["items"] if docks else []) if item["kind"] == "icon"]
+    x, y, width, height = icons[len(icons) // 2]["slot"] if icons else (1270, 400, 16, 16)
+    target = (x + width / 2, y + height / 2)
+
+    def dock(n):
+        start, end = ((640.0, target[1]), target) if n % 2 == 0 else (target, (640.0, target[1]))
+        for step in range(1, 11):
+            f = step / 10
+            energy.hook("MovePointer", (start[0] + (end[0] - start[0]) * f,
+                                        start[1] + (end[1] - start[1]) * f), "(dd)")
+            GLib.usleep(16 * 1000)
+
+    cases = [
+        ("window", "macos-window-animations", window, 1500),
+        ("switch", "spaces-spring", switch, 1000),
+        ("dock", None, dock, 1000),
+    ]
+    results = {}
+    try:
+        for name, key, action, every in cases:
+            # The first round of each runs slow, the shell meeting it for the
+            # first time; it is the warm-up, counted for neither.
+            for mode in ["warm-up"] + ["pear-up", "option"] * rounds:
+                ours = "false" if mode == "option" else "true"
+                if key:
+                    _gsettings("org.gnome.shell.extensions.pear-up", key, ours, env)
+                else:
+                    _gsettings("org.gnome.desktop.interface", "enable-animations", ours)
+                GLib.usleep(1500 * 1000)
+                result = energy.measure(16000, action, every_ms=every)
+                if mode != "warm-up":
+                    results.setdefault(f"{name}-{mode}", []).append(result)
+                print(f"  {name}-{mode:7} {describe(result)}, {result['actions']} actions")
+                energy.hook("CloseWindows", ("io.github.maddinek.PearUpTestThird",), "(s)")
+                energy.hook("MovePointer", (640.0, 360.0), "(dd)")
+                GLib.usleep(1500 * 1000)
+            _gsettings("org.gnome.desktop.interface", "enable-animations", "true")
+    finally:
+        for process in windows + opened:
+            process.terminate()
+
+    def per_action(name, field):
+        values = sorted(r[field] / r["actions"] for r in results[name])
+        return values[len(values) // 2]
+
+    summary = {}
+    for name, *_ in cases:
+        summary[name] = {mode: {"frames": round(per_action(f"{name}-{mode}", "frames"), 1),
+                                "mainCpuMs": round(per_action(f"{name}-{mode}", "mainCpuMs"), 2)}
+                         for mode in ("pear-up", "option")}
+    print("ENERGY-BATTERY " + json.dumps(summary))
+    return 0
+
+
 def idle_only(uuid):
     """The suite's check at rest on its own, for trying it against a change."""
     failed = []
@@ -467,6 +560,8 @@ def idle_only(uuid):
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[2] == "idle":
         sys.exit(idle_only(sys.argv[1]))
+    if len(sys.argv) > 2 and sys.argv[2] == "battery":
+        sys.exit(battery_ab(sys.argv[1]))
     if len(sys.argv) > 2 and sys.argv[2] == "focus":
         sys.exit(focus_ab(sys.argv[1]))
     sys.exit(profile(sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 60))

@@ -38,6 +38,7 @@ EXTRA_SOURCES=(
     dockBounce.js
     shellTweaks.js
     smoothBrightness.js
+    batteryRefreshRate.js
     spacesSpring.js
     gestureDirection.js
     overviewSwipeGuard.js

@@ -345,6 +345,34 @@ const IFACE = `
       <arg type="d" direction="in" name="delta"/>
       <arg type="s" direction="out" name="state"/>
     </method>
+    <method name="FakeDisplayConfig">
+      <arg type="s" direction="in" name="state"/>
+      <arg type="b" direction="out" name="installed"/>
+    </method>
+    <method name="SetFakeMode">
+      <arg type="s" direction="in" name="connector"/>
+      <arg type="s" direction="in" name="mode"/>
+      <arg type="b" direction="out" name="changed"/>
+    </method>
+    <method name="GetBatteryRefresh">
+      <arg type="s" direction="out" name="state"/>
+    </method>
+    <method name="SwitchPearUp">
+      <arg type="b" direction="in" name="on"/>
+      <arg type="b" direction="in" name="locked"/>
+      <arg type="b" direction="out" name="done"/>
+    </method>
+    <method name="HoldFakeCalls">
+      <arg type="s" direction="in" name="method"/>
+      <arg type="b" direction="in" name="fresh"/>
+      <arg type="b" direction="out" name="set"/>
+    </method>
+    <method name="ReleaseFakeCall">
+      <arg type="b" direction="out" name="released"/>
+    </method>
+    <method name="RestoreDisplayConfig">
+      <arg type="b" direction="out" name="restored"/>
+    </method>
     <method name="AddFakeBacklight">
       <arg type="s" direction="out" name="result"/>
     </method>
@@ -523,6 +551,67 @@ function watchStartup() {
 // The range is framy's. Module-level, like the indicators above.
 const FAKE_BACKLIGHT_MAX = 65535;
 const brightnessTest = { backlight: null, writes: [] };
+
+// Pear Up's 60 Hz switch talks to Mutter's DisplayConfig, and the container's
+// virtual monitor has one mode and is not built in. This stands in for its two
+// calls with the monitors of a GetCurrentState given as JSON, framy's own. It
+// takes the parameters as Pear Up builds them for the bus and keeps them; an
+// applied mode becomes the current one and the monitors are said to have
+// changed. Like mutter, it keeps the serial for a mode change. Calls to one
+// method can be held until released one by one, so the tests can change things
+// while one is on its way: read when asked (`fresh` false), the answer leaves
+// out what changes meanwhile; read when released, it has it.
+const displayTest = { state: null, applied: [], hold: null, fresh: false, held: [] };
+
+function setFakeMode(connector, modeId) {
+    const monitor = displayTest.state?.[1].find(([[name]]) => name === connector);
+    if (!monitor?.[1].some(([id]) => id === modeId))
+        return false;
+    for (const mode of monitor[1]) {
+        if (mode[0] === modeId)
+            mode[6]['is-current'] = true;
+        else
+            delete mode[6]['is-current'];
+    }
+    Main.layoutManager.emit('monitors-changed');
+    return true;
+}
+
+function later(ms) {
+    return new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+        resolve();
+        return GLib.SOURCE_REMOVE;
+    }));
+}
+
+async function fakeDisplayConfig(method, parameters) {
+    const copy = () => JSON.parse(JSON.stringify(displayTest.state));
+    let state = copy();
+    if (displayTest.hold === method) {
+        await new Promise(release => displayTest.held.push({ method, release }));
+        if (displayTest.fresh)
+            state = copy();
+    }
+    if (method === 'GetCurrentState')
+        return { recursiveUnpack: () => state };
+    if (method !== 'ApplyMonitorsConfig' ||
+        parameters?.get_type_string() !== '(uua(iiduba(ssa{sv}))a{sv})')
+        throw new Error(`unexpected call ${method} ${parameters?.get_type_string()}`);
+    const [serial, how, logical, properties] = parameters.recursiveUnpack();
+    if (serial !== displayTest.state[0])
+        throw new Error('The requested configuration is based on stale information');
+    displayTest.applied.push({ method: how, logical, properties });
+    await later(0);
+    for (const [, , , , , monitors] of logical) {
+        for (const [connector, mode] of monitors)
+            setFakeMode(connector, mode);
+    }
+    return null;
+}
+
+function batteryRefresh() {
+    return Main.extensionManager.lookup(PEAR_UP_UUID)?.stateObj?._batteryRefreshRate ?? null;
+}
 let FakeBacklight = null;
 
 function fakeBacklight() {
@@ -2387,6 +2476,81 @@ export default class TestHookExtension extends Extension {
     // screen, through its own handler for a change of monitors: the monitor
     // manager's list is answered with that screen for the length of the call,
     // and nothing else runs in between.
+    FakeDisplayConfig(state) {
+        const refresh = batteryRefresh();
+        if (!refresh)
+            return false;
+        displayTest.state = JSON.parse(state);
+        displayTest.applied = [];
+        displayTest.hold = null;
+        refresh.constructor._useDisplayConfig(fakeDisplayConfig);
+        Main.layoutManager.emit('monitors-changed');
+        return true;
+    }
+
+    // An empty method holds nothing more; calls already held stay until
+    // released.
+    HoldFakeCalls(method, fresh) {
+        displayTest.hold = method || null;
+        displayTest.fresh = fresh;
+        return true;
+    }
+
+    ReleaseFakeCall() {
+        const call = displayTest.held.shift();
+        call?.release();
+        return !!call;
+    }
+
+    SetFakeMode(connector, mode) {
+        return setFakeMode(connector, mode);
+    }
+
+    GetBatteryRefresh() {
+        const refresh = batteryRefresh();
+        return JSON.stringify({
+            present: !!refresh,
+            ...refresh?.state,
+            applied: displayTest.applied,
+            held: displayTest.held.map(call => call.method),
+            current: (displayTest.state?.[1] ?? []).map(([[connector], modes]) =>
+                [connector, modes.find(mode => mode[6]['is-current'])?.[0] ?? null]),
+        });
+    }
+
+    // Pear Up switched off, as the lock screen does when `locked`, or on.
+    SwitchPearUp(on, locked) {
+        const before = batteryRefresh();
+        if (on) {
+            Main.extensionManager.enableExtension(PEAR_UP_UUID);
+            const refresh = batteryRefresh();
+            return !!refresh && refresh !== before;
+        }
+        const own = Object.getOwnPropertyDescriptor(Main.sessionMode, 'isLocked');
+        if (locked)
+            Object.defineProperty(Main.sessionMode, 'isLocked', { value: true, configurable: true });
+        try {
+            Main.extensionManager.disableExtension(PEAR_UP_UUID);
+        } finally {
+            if (locked) {
+                delete Main.sessionMode.isLocked;
+                if (own)
+                    Object.defineProperty(Main.sessionMode, 'isLocked', own);
+            }
+        }
+        return !batteryRefresh();
+    }
+
+    RestoreDisplayConfig() {
+        const refresh = batteryRefresh();
+        displayTest.hold = null;
+        for (const call of displayTest.held.splice(0))
+            call.release();
+        displayTest.state = null;
+        refresh?.constructor._useDisplayConfig(null);
+        return !!refresh;
+    }
+
     AddFakeBacklight() {
         const manager = Main.brightnessManager;
         if (typeof manager?._monitorsChanged !== 'function')

@@ -14,6 +14,21 @@ it back when they are switched off.
 
 ### Added
 
+- **Low Power Mode: 60 Hz** (General ▸ On Battery, off). On battery the
+  built-in screen switches, through Mutter's DisplayConfig, to the mode of the
+  same size closest to 60 Hz, refreshing the same way (variable refresh stays
+  on), as a temporary configuration that is never written to monitors.xml;
+  plugged in, the mode it replaced comes back. Only for the built-in screen on
+  its own; a mode someone else sets on battery is left alone until the power
+  is next plugged in, and a lock and unlock change nothing. Measured on framy
+  (2880×1920, VRR 30–120) in a container: nothing at rest, about 1.3 W of
+  package power less while a small spinner animates (2.9 W → 1.6 W above
+  rest). Two other battery options were measured and left out: the dock's
+  swell without its ease costs about ten frames and 25 ms of shell time per
+  pass over the dock, and Pear Up's window animations and the desktop spring
+  measured no different from GNOME's own, both under a hundredth of a watt
+  even in heavy use. `PEAR_UP_ENERGY=battery tests/integration/run.sh`
+  repeats that measurement.
 - **Mac Scroll Engine (Experimental)** (Keyboard ▸ Trackpad, off). The scroll
   plugin makes the whole scroll stream itself, as macOS does, below every app:
   while two fingers scroll, libinput is told where they are on a fixed 480 Hz

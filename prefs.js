@@ -4015,6 +4015,8 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
 
         this._buildDesktopGroup(page, settings);
 
+        this._buildBatteryGroup(page, settings);
+
         this._buildSearchGroup(page, settings);
 
         const logoGroup = new Adw.PreferencesGroup({
@@ -4158,6 +4160,24 @@ export default class GlobalMenuPreferences extends ExtensionPreferences {
             group.add(row);
             settings.bind('smooth-auto-brightness', row, 'active', Gio.SettingsBindFlags.DEFAULT);
         }
+    }
+
+    // What Pear Up gives up on battery. Each is off by default, as each changes
+    // how things look or feel, and does nothing while the power is plugged in.
+    _buildBatteryGroup(page, settings) {
+        const group = new Adw.PreferencesGroup({
+            title: 'On Battery',
+            description: 'Only while the laptop runs on its battery',
+        });
+        page.add(group);
+
+        const row = new Adw.SwitchRow({
+            title: 'Low Power Mode: 60 Hz',
+            subtitle: 'The built-in screen runs at 60 Hz until the power is plugged in; motion looks ' +
+                'less smooth. Not while a monitor is connected',
+        });
+        group.add(row);
+        settings.bind('battery-60hz', row, 'active', Gio.SettingsBindFlags.DEFAULT);
     }
 
     // How banners come and go only means something while they are in the

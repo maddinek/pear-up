@@ -24,6 +24,7 @@ from gi.repository import Gio, GLib
 from dock_bounce import BounceChecks
 from dock_magnification import DockChecks
 from energy import IdleChecks
+from battery_refresh import BatteryRefreshChecks
 
 UUID = sys.argv[1]
 ARTIFACTS = sys.argv[2] if len(sys.argv) > 2 else "/artifacts"
@@ -2830,6 +2831,15 @@ if state:
             wait_thumbnail_gone(1.5)
     except GLib.Error as exc:
         check("the screenshot thumbnail could be exercised", False, exc.message.splitlines()[0])
+
+# ------------------------------------------------- 60 Hz on battery
+# After the power icon's checks: UPower is stood in for while these run.
+print()
+print("  60 Hz on battery:")
+try:
+    BatteryRefreshChecks(hook, check, pear_up_setting, UUID).run()
+except GLib.Error as exc:
+    check("Low Power Mode's 60 Hz could be exercised", False, exc.message.splitlines()[0])
 
 # ------------------------------------------------------- dock magnification
 # Last, because it switches Dash to Dock on: everything above runs against the
